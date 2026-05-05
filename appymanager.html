@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>APPYmanager</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;0,9..144,700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="stylesheet" href="styles.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+</head>
+<body>
+
+<div id="app">
+  <header>
+    <div class="logo"><div class="icon">▦</div>APPYmanager <span id="system-name-header" style="font-weight:400;opacity:0.6;margin-left:4px"></span></div>
+    <div class="actions">
+      <div class="saves-dropdown" id="saves-dropdown">
+        <button class="btn btn-sm" onclick="toggleSavesDropdown(event)">💾 <span id="saves-dropdown-label" data-t="btn.saves">Saves</span> <span style="font-size:10px;opacity:0.5">▾</span></button>
+        <div class="saves-dropdown-menu" id="saves-dropdown-menu"></div>
+      </div>
+    </div>
+  </header>
+  <main>
+    <nav id="sidebar">
+      <div class="nav-section" data-t="nav_section.geography">Geography</div>
+      <div class="nav-item active" data-tab="dashboard" onclick="switchTab('dashboard')"><span class="nav-icon">◫</span> <span data-t="nav.dashboard">Dashboard</span></div>
+      <div class="nav-item" data-tab="map" onclick="switchTab('map')"><span class="nav-icon">🗺</span> <span data-t="nav.map">Map</span></div>
+      <div class="nav-section" data-t="nav_section.system">System</div>
+      <div class="nav-item" data-tab="settings" onclick="switchTab('settings')"><span class="nav-icon">⚙</span> <span data-t="nav.settings">Settings</span></div>
+      <div class="nav-item" data-tab="import-export" onclick="switchTab('import-export')"><span class="nav-icon">⇅</span> <span data-t="nav.import_export">Import / Export</span></div>
+      <div class="spacer"></div>
+      <div style="padding:8px 16px;font-size:10px;color:var(--text-muted);font-family:var(--font-mono);opacity:0.6">v0.0.1</div>
+    </nav>
+    <div class="content">
+
+      <!-- DASHBOARD -->
+      <div class="tab-panel active" id="panel-dashboard">
+        <div class="page-header"><div><h1 data-t="page.dashboard">Dashboard</h1><div class="subtitle" data-t="subtitle.dashboard">Project overview at a glance</div></div></div>
+        <div class="stats-row" id="dashboard-stats"></div>
+        <div id="dashboard-content"></div>
+      </div>
+
+      <!-- MAP -->
+      <div class="tab-panel" id="panel-map">
+        <div class="page-header"><div><h1 data-t="page.map">Map</h1><div class="subtitle" data-t="subtitle.map">Geographic view of plots and boundaries</div></div></div>
+        <div id="map" style="width:100%;height:calc(100vh - 200px);min-height:400px;border-radius:var(--radius);overflow:hidden;border:1px solid var(--border)"></div>
+      </div>
+
+      <!-- SETTINGS -->
+      <div class="tab-panel" id="panel-settings">
+        <div class="page-header"><div><h1 data-t="page.settings">Settings</h1><div class="subtitle" data-t="subtitle.settings">Project configuration</div></div></div>
+        <div id="settings-content"></div>
+      </div>
+
+      <!-- IMPORT / EXPORT -->
+      <div class="tab-panel" id="panel-import-export">
+        <div class="page-header"><div><h1 data-t="page.import_export">Import / Export</h1><div class="subtitle" data-t="subtitle.import_export">Move project data in and out</div></div></div>
+        <div id="import-export-content"></div>
+      </div>
+
+    </div>
+  </main>
+</div>
+
+<div class="modal-overlay" id="modal-overlay" onmousedown="_modalMouseDownTarget=event.target" onclick="closeModalOnOverlay(event)">
+  <div class="modal" id="modal">
+    <div class="modal-header"><h2 id="modal-title">Modal</h2><button class="close-btn" onclick="closeModal()">✕</button></div>
+    <div class="modal-body" id="modal-body"></div>
+    <div class="modal-footer" id="modal-footer"></div>
+  </div>
+</div>
+
+<div class="toast-container" id="toast-container"></div>
+<input type="file" id="file-input" accept=".json" style="display:none" onchange="handleImport(event)">
+
+<script src="js/l10n.js"></script>
+<script src="lang/en.js"></script>
+<script src="js/core.js"></script>
+<script src="js/persistence.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/map.js"></script>
+<script src="js/views.js"></script>
+<script>
+(async () => {
+  await load();
+  _lang = data.settings?.language || 'en';
+  l10nHydrate();
+  refreshAll();
+  renderDashboard();
+  updateSystemName();
+})();
+</script>
+</body>
+</html>
