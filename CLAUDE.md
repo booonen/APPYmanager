@@ -139,14 +139,78 @@ Demographic / categorical data attached to plots or boundaries.
 - `VERSION_HISTORY.md` at the repo root, BRIXY style: each entry has a
   semver-ish tag and a short bullet list. Start at `0.0.1`.
 
+## Long-term plan (demographics MVP)
+
+This is the agreed brick-by-brick plan for the demographics app. Roads
+stay deferred (separate brick stream). Each brick is a sign-off-able
+increment; each phase is a coherent capability. Mark bricks complete in
+the log below as they ship. Note: not every brick will be a one-shot —
+e.g. Brick 5 (auto-subdivision) may split into sub-steps.
+
+### Phase 1 — Geographic foundation
+- **Brick 1** — Project shell, save manager, OGF map.
+- **Brick 2** — Plot data model + Overpass import for top-level
+  boundaries (paste relation ID / pick preset → one plot per relation →
+  polygon rendered on map → persisted).
+- **Brick 3** — Plot interaction: click-to-inspect, plot list view,
+  basic edit (name, notes), delete.
+
+### Phase 2 — Boundary hierarchy
+- **Brick 4** — Boundary-type schema editor: define the hierarchy for
+  this project (e.g. Country > Province > Municipality > Plot).
+  Validation: types can only contain types strictly below.
+- **Brick 5** — Smaller-boundary Overpass import + **auto-subdivision**
+  (overlay borders on existing plot map, merge with snap tolerance).
+  Geometrically hardest brick — likely needs internal sub-steps.
+- **Brick 6** — Boundary entities (collections of plots OR
+  sub-boundaries), with map layer toggles per boundary level.
+
+### Phase 3 — Properties
+- **Brick 7** — Property schema editor: numeric / categorical /
+  percentage, with bootstrapped demographic defaults (population, area,
+  language, etc.) and per-property aggregation rule (sum vs.
+  weighted-avg, denominator declaration for percentages).
+- **Brick 8** — Property values on plots: enter numeric / categorical /
+  percentage values, with the % ↔ raw-number dual input.
+- **Brick 9** — Property aggregation on boundaries: user-set value
+  precedence, computed value alongside, mismatch flagging (under-sum =
+  critical, over-sum = acceptable).
+
+### Phase 4 — Plot operations
+- **Brick 10** — Manual plot split editor (draw a cut line → two plots,
+  with property redistribution UI).
+- **Brick 11** — Land/water split: fetch coastlines / water relations
+  from OGF, apply split on load when enabled, allow setting properties
+  separately on land vs. water portions.
+
+### Phase 5 — Visualisation & UX
+- **Brick 12** — Choropleth: color plots/boundaries by any selected
+  property.
+- **Brick 13** — Issues panel (mismatch warnings + data-quality checks)
+  + filter / search.
+
+### Phase 6 — OGF round-trip
+- **Brick 14** — `.osc` export of current plot polygons for upload to OGF.
+- **Brick 15** — Re-sync flow: re-query OGF after upload, match plots
+  back to their newly-assigned OGF IDs.
+
+### Phase 7 — Population integration
+- **Brick 16** — Fold `ogf-population-estimator(8).html` in: bootstrap
+  plot population values from density presets, and ratio-split
+  residential way population when plots are manually split.
+
+### Deferred (post-MVP)
+- **Historic** — properties varying over time. Likely 2–3 bricks once
+  we get there.
+- **Roads** — separate program, separate brick stream.
+- **i18n expansion** — additional languages, translation tooling.
+
+Things will inevitably surface that aren't on this list. Add them as
+they come up; the plan is a living document.
+
 ## Brick log
 
-- **Brick 1** (this commit) — the shell. HTML/CSS chrome mirroring BRIXY,
-  IndexedDB save manager, JSON import/export, l10n scaffolding, Leaflet
-  map with OGF tiles. **No** plot/boundary/property logic yet.
-- **Brick 2** (next, not started) — plot data model + first Overpass
-  import flow (top-level boundary → one plot per relation), rendered on
-  the map. Save round-trips through IndexedDB.
-- **Brick 3+** — boundary hierarchy schema, smaller-scale boundary
-  imports + auto-subdivision, property schema editor, property values,
-  override flagging.
+- **Brick 1** ✓ (committed) — the shell. HTML/CSS chrome mirroring
+  BRIXY, IndexedDB save manager, JSON import/export, l10n scaffolding,
+  Leaflet map with OGF tiles. No plot/boundary/property logic yet.
+- **Brick 2** (next, not started) — see Phase 1 above.
