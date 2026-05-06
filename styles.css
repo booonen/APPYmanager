@@ -4,13 +4,13 @@
   --bg-input: #1e2130;
   --bg-hover: #242738;
   --border: #2a2d3e;
-  --border-focus: #5b8af5;
+  --border-focus: #c1272d;
   --text: #e2e4ed;
   --text-dim: #8b8fa4;
   --text-muted: #5c5f73;
-  --accent: #5b8af5;
-  --accent-dim: #3d6ad8;
-  --accent-glow: rgba(91, 138, 245, 0.15);
+  --accent: #c1272d;
+  --accent-dim: #9e1f25;
+  --accent-glow: rgba(193, 39, 45, 0.15);
   --danger: #e05555;
   --danger-dim: rgba(224, 85, 85, 0.15);
   --warn: #e0a855;

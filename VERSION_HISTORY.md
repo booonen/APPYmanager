@@ -1,3 +1,13 @@
+## 0.0.2 — Pompeian red accent
+- Switched the accent color from BRIXY blue (`#5b8af5`) to a Pompeian
+  red (`#c1272d`) so APPYmanager is visually distinct from its sister
+  projects BRIXYmanager (blue) and CRUFYmanager (green). The Via Appia
+  framing makes the red thematic.
+- Updated `--accent`, `--accent-dim`, `--accent-glow`, and
+  `--border-focus` tokens in `styles.css`. The `--danger` token is
+  unchanged; the two reds are far enough apart in saturation/depth to
+  read as distinct.
+
 ## 0.0.1 — Brick 1: project shell
 - Initial APPYmanager shell, mirroring BRIXYmanager's look-and-feel.
 - IndexedDB multi-slot save manager (database `appymanager`, stores

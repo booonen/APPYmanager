@@ -43,8 +43,10 @@ been explicitly agreed.
   - `map.js` — Leaflet wrapper, OGF tile layer
   - (later) `plots.js`, `boundaries.js`, `properties.js`, `overpass.js`
 - `lang/en.js` — registers English strings via `registerLanguage('en', ...)`.
-- `styles.css` — dark theme, BRIXY tokens (`--bg #0f1117`,
-  `--accent #5b8af5`, DM Sans / Fraunces / JetBrains Mono).
+- `styles.css` — dark theme based on BRIXY tokens (`--bg #0f1117`),
+  with a Pompeian red accent (`--accent #c1272d`) to differentiate
+  APPY from its sister projects (BRIXY blue, CRUFY green). DM Sans /
+  Fraunces / JetBrains Mono.
 
 ## Persistence (mirrors BRIXY)
 
