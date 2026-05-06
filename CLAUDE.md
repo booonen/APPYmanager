@@ -17,12 +17,14 @@ are deferred.
 ## Reference repos
 
 - `booonen/BRIXYmanager` — primary visual + architectural reference. Mirror
-  its look/feel and save-file implementation. (Cloned to
-  `/home/user/_reference/BRIXYmanager` for inspection.)
+  its look/feel and save-file implementation. If a local clone isn't
+  available on the current host, read via
+  `gh api repos/booonen/BRIXYmanager/contents/<path>?ref=main`.
 - `booonen/CRUFYmanager` — secondary reference (less directly relevant).
 
-GitHub MCP tools are scoped to `booonen/appymanager` only; the other repos
-must be cloned via shell for reference.
+**Cross-app data flow:** BRIXY will eventually import APPY data (boundaries
+and settlements act as anchors for rail networks); APPY does **not**
+import from BRIXY. Design the export side accordingly when it lands.
 
 ## Build philosophy
 
@@ -34,6 +36,8 @@ been explicitly agreed.
 
 - **Single-page, in-browser, no build step.** Vanilla JS, plain `<script>`
   tags, no bundler.
+- **Geomap only.** No schematic / Beckmap view. APPY visualises actual
+  OGF geometry; abstract / topological views are out of scope.
 - `index.html` redirects to `appymanager.html` (the actual shell).
 - Module split under `js/`:
   - `core.js` — global `data` object, `uid()`, `esc()`, color palette
@@ -41,7 +45,8 @@ been explicitly agreed.
   - `ui.js` — modal, toast, `appConfirm`, `appPrompt`
   - `l10n.js` — `t()`, `registerLanguage()`, `l10nHydrate()`
   - `map.js` — Leaflet wrapper, OGF tile layer
-  - (later) `plots.js`, `boundaries.js`, `properties.js`, `overpass.js`
+  - (later) `plots.js`, `boundaries.js`, `settlements.js`,
+    `properties.js`, `overpass.js`
 - `lang/en.js` — registers English strings via `registerLanguage('en', ...)`.
 - `styles.css` — dark theme based on BRIXY tokens (`--bg #0f1117`),
   with a Pompeian red accent (`--accent #c1272d`) to differentiate
@@ -123,8 +128,22 @@ Demographic / categorical data attached to plots or boundaries.
     aggregation (40% A / 60% B).
   - Percentage: weighted by the declared denominator property.
 
+### Settlement
+A lightweight point-of-interest reference, *not* load-bearing for the
+demographics aggregation engine.
+- A settlement is a single OGF `place=*` node (point, lat/lng) imported
+  from Overpass. Stored fields: id, lat/lng, name, OGF node id, parent
+  reference (plot OR boundary), notes.
+- Each settlement is linked to **one parent** — a plot or a boundary —
+  for hierarchy and `.osc` round-tripping.
+- Settlements participate in `.osc` export so users can edit OGF's
+  `place=*` nodes through APPY, but they do not drive aggregation,
+  override semantics, or choropleth.
+
 ### Future / deferred
 - Historic component: properties varying over time. Deferred entirely.
+  Default cadence between data points is **irregular** (user-defined
+  dates per property type) — not every property updates yearly.
 - Roads: deferred.
 - Population estimator integration: the existing
   `ogf-population-estimator(8).html` will eventually be folded into the
@@ -148,10 +167,10 @@ stay deferred (separate brick stream). Each brick is a sign-off-able
 increment; each phase is a coherent capability. Mark bricks complete in
 the log below as they ship.
 
-The data-model rules above (Plot, Boundary, Property) are the canonical
-source for nuance; each brick description below names which rules it
-implements but does not re-state them in full. Read the §Data model
-section before starting any brick.
+The data-model rules above (Plot, Boundary, Property, Settlement) are
+the canonical source for nuance; each brick description below names
+which rules it implements but does not re-state them in full. Read the
+§Data model section before starting any brick.
 
 ### Decisions & rationale
 
@@ -217,38 +236,49 @@ section before starting any brick.
   boundary level (show/hide each level independently). Boundary list
   view per type.
 
+### Phase 2.5 — Settlements
+
+- **Brick 7** — Settlements. Import OGF `place=*` nodes via Overpass
+  using the same three entry modes as Brick 2 (paste node ID, pick a
+  preset by `place=*` value, paste a custom query). Each settlement is
+  a point linked to **one parent** — either a plot or a boundary —
+  selectable in the inspector. Render markers on the map (clickable),
+  list view (sortable by parent / name), edit name / parent / notes,
+  delete. Settlements aren't load-bearing for aggregation; they're
+  worldbuilding labels that need to round-trip via `.osc` later.
+
 ### Phase 3 — Properties
 
-- **Brick 7** — Property schema editor. Three kinds: numeric (declare
+- **Brick 8** — Property schema editor. Three kinds: numeric (declare
   sum vs. weighted-average; if weighted, declare weight property),
   categorical (roll-up disabled by default, opt-in distribution
   aggregation), percentage (declare denominator property).
   Bootstrap each new project with a default demographic set
   (population, area, language, etc.). User can add/remove custom
   properties.
-- **Brick 8** — Property values on plots. Enter numeric / categorical /
+- **Brick 9** — Property values on plots. Enter numeric / categorical /
   percentage values per plot. For percentages, dual input: user can
   type either the % or the raw number, and switching one updates the
   other given the denominator's current value (and vice versa when
   the denominator changes).
-- **Brick 9** — Property aggregation on boundaries. For each property
+- **Brick 10** — Property aggregation on boundaries. For each property
   on each boundary, store both the user-set value (if any) and the
   computed-from-children value. User-set takes precedence for
   display/use; computed is kept for comparison. Detect mismatches:
   **under-sum** (boundary < sum of children) = critical error;
   **over-sum** (boundary > sum of children) = acceptable warning
   because OGF mapping is often incomplete. Inline flagging in the
-  inspector; central listing arrives in Brick 13.
+  inspector; central listing arrives in Brick 14.
 
 ### Phase 4 — Plot operations
 
-- **Brick 10** — Manual plot split editor. User draws a cut line on a
+- **Brick 11** — Manual plot split editor. User draws a cut line on a
   plot → two plots. UI for property redistribution: numeric properties
   default to area-proportional split with manual override; categorical
   inherits to both; percentage recomputes from its denominator. Show
-  the two new plots' areas (and population once Brick 16 lands) to help
+  the two new plots' areas (and population once Brick 17 lands) to help
   electorate-style splitting decisions.
-- **Brick 11** — Land/water split. Fetch coastlines (`way` with
+- **Brick 12** — Land/water split. Fetch coastlines (`way` with
   `natural=coastline`) and water relations from OGF. Internal plot
   storage stays mixed (one polygon per plot). When the split is
   enabled, plots are split into land/water portions on load.
@@ -258,34 +288,36 @@ section before starting any brick.
 
 ### Phase 5 — Visualisation & UX
 
-- **Brick 12** — Choropleth. Pick a property, color all
+- **Brick 13** — Choropleth. Pick a property, color all
   plots/boundaries by its value. Continuous colour scales for
   numeric/percentage properties; distinct colours per category for
   categorical. Legend display. Per-property colour-scheme
   customisation can wait.
-- **Brick 13** — Issues panel + filter/search. Central list of all
-  detected mismatches and data-quality issues (from Brick 9 onwards).
+- **Brick 14** — Issues panel + filter/search. Central list of all
+  detected mismatches and data-quality issues (from Brick 10 onwards).
   Click an issue → highlight on map + open inspector. Filter
   plots/boundaries by property values, name, type. Plain-text search
   by name.
 
 ### Phase 6 — OGF round-trip
 
-- **Brick 14** — `.osc` export. Generate OsmChange XML for the current
-  plot polygons (one OSM way / multipolygon relation per plot). User
-  downloads the file and uploads it to OGF via JOSM or similar.
-- **Brick 15** — Re-sync from OGF. After upload, query OGF for the
-  newly-created objects and match plots back to their assigned OGF IDs.
-  Matching strategy is non-trivial (geometry-based, with user
-  confirmation for ambiguous cases). Together with Brick 14 this is
+- **Brick 15** — `.osc` export. Generate OsmChange XML for the current
+  plot polygons (one OSM way / multipolygon relation per plot) plus
+  any new/edited settlement nodes. User downloads the file and uploads
+  it to OGF via JOSM or similar.
+- **Brick 16** — Re-sync from OGF. After upload, query OGF for the
+  newly-created objects and match plots and settlements back to their
+  assigned OGF IDs. Matching strategy is non-trivial (geometry-based
+  for plots, position-based for settlement nodes, with user
+  confirmation for ambiguous cases). Together with Brick 15 this is
   the OGF round-trip.
 
 ### Phase 7 — Population integration
 
-- **Brick 16** — Fold `ogf-population-estimator(8).html` in. (1) When a
+- **Brick 17** — Fold `ogf-population-estimator(8).html` in. (1) When a
   new plot is created, run the estimator's density-preset logic to
   bootstrap a population value. (2) During a manual plot split (Brick
-  10), look up residential ways/relations inside the plot and
+  11), look up residential ways/relations inside the plot and
   ratio-split their estimated population between the two new plots
   by area.
 
@@ -293,7 +325,9 @@ section before starting any brick.
 
 - **Historic** — properties varying over time. Likely 2–3 bricks once
   we get there. Will need a time-axis dimension on every property
-  value, plus UI to scrub through years.
+  value, plus UI to scrub through years. Default cadence between data
+  points is **irregular** (user-defined dates per property type) — not
+  every property updates yearly.
 - **Roads** — separate program, separate brick stream. Sister to
   demographics under the same shell, but no shared data model.
 - **i18n expansion** — additional languages beyond English, translation
@@ -307,4 +341,7 @@ they come up; the plan is a living document.
 - **Brick 1** ✓ (committed) — the shell. HTML/CSS chrome mirroring
   BRIXY, IndexedDB save manager, JSON import/export, l10n scaffolding,
   Leaflet map with OGF tiles. No plot/boundary/property logic yet.
+- **v0.0.2** ✓ (committed, cosmetic) — Pompeian red accent (`#c1272d`)
+  replaces BRIXY blue, distinguishing APPY from BRIXY (blue) and CRUFY
+  (green). Token-only change; no behavioural difference.
 - **Brick 2** (next, not started) — see Phase 1 above.
