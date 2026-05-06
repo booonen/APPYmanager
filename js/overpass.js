@@ -66,11 +66,47 @@ async function overpassFetch(query) {
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: 'data=' + encodeURIComponent(query),
   });
-  if (!resp.ok) {
-    const body = await resp.text().catch(() => '');
-    throw new Error(`HTTP ${resp.status}${body ? ': ' + body.slice(0, 200) : ''}`);
+
+  if (resp.status === 429) {
+    // Rate-limited. Probe /api/status so we can tell the user how long
+    // to wait, instead of dumping the rate-limit HTML body into a toast.
+    let retryAfter = null;
+    try {
+      const status = await getOverpassStatus();
+      retryAfter = status.nextSlotInSeconds;
+    } catch (_) { /* status probe failed — leave retryAfter null */ }
+    const e = new Error(retryAfter != null
+      ? `rate-limited (next slot in ~${retryAfter}s)`
+      : 'rate-limited');
+    e.is429 = true;
+    e.retryAfter = retryAfter;
+    throw e;
   }
+
+  if (!resp.ok) {
+    // For non-429 errors keep a small (and stripped) preview of the body
+    // so we don't paste rate-limit HTML into a toast.
+    const raw = await resp.text().catch(() => '');
+    const body = raw.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+    throw new Error(`HTTP ${resp.status}${body ? ': ' + body.slice(0, 160) : ''}`);
+  }
+
   return resp.json();
+}
+
+async function getOverpassStatus() {
+  const url = OGF_OVERPASS_URL.replace(/\/interpreter$/, '/status');
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`status HTTP ${resp.status}`);
+  const text = await resp.text();
+  // The text body lists "Slot available after: <timestamp>, in <N> seconds."
+  // when slots are exhausted. Lowest N wins.
+  const matches = [...text.matchAll(/in\s+(\d+)\s+seconds?\b/g)];
+  const nexts = matches.map(m => parseInt(m[1], 10)).filter(n => !isNaN(n));
+  return {
+    raw: text,
+    nextSlotInSeconds: nexts.length > 0 ? Math.min(...nexts) : null,
+  };
 }
 
 // ============================================================

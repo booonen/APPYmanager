@@ -256,7 +256,14 @@ async function runImportPreview() {
   } catch (e) {
     setImportPreviewHTML('');
     setImportActionBusy(false);
-    toast(t('import.error_fetch', { msg: e.message }), 'error');
+    if (e.is429) {
+      const msg = e.retryAfter != null
+        ? t('import.error_rate_limited', { seconds: e.retryAfter })
+        : t('import.error_rate_limited_no_eta');
+      toast(msg, 'error');
+    } else {
+      toast(t('import.error_fetch', { msg: e.message }), 'error');
+    }
     return;
   }
   setImportActionBusy(false);

@@ -1,3 +1,12 @@
+## 0.0.5 — Friendlier Overpass error handling
+- HTTP 429 (rate-limited) now probes `/api/status` to find the next
+  available slot and surfaces "Try again in ~Ns" instead of pasting
+  the rate-limit HTML body into a toast.
+- Other non-2xx responses get HTML-stripped and length-capped before
+  going into the error message.
+- New `getOverpassStatus()` helper in `js/overpass.js` parses the
+  status endpoint's "in N seconds" lines.
+
 ## 0.0.4 — Brick 2 polish (review feedback)
 - **Custom Overpass + bbox** — `buildCustomQuery` now merges `[out:json]`
   into the user's leading settings block instead of prepending a

@@ -129,6 +129,8 @@ registerLanguage('en', 'English', {
     "error_custom_empty": "Enter a custom Overpass query.",
     "error_query_build": "Could not build query: {msg}",
     "error_fetch": "Overpass request failed: {msg}",
-    "error_parse": "Could not parse response: {msg}"
+    "error_parse": "Could not parse response: {msg}",
+    "error_rate_limited": "Overpass is rate-limiting you — try again in ~{seconds}s.",
+    "error_rate_limited_no_eta": "Overpass is rate-limiting you — wait a bit and try again."
   }
 });
