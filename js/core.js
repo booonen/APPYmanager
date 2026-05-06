@@ -6,12 +6,14 @@
 // array (or object map) that can be serialised to JSON without loss.
 //
 // Shape (will grow brick-by-brick):
-//   plots          — atomic geographic units (Brick 2+)
-//   boundaries     — higher-level regions, each = set of plots OR sub-boundaries (Brick 3+)
-//   boundaryTypes  — strict hierarchy of boundary type definitions (Brick 3+)
-//   propertySchemas — declarations for numeric / categoric / percentage properties (Brick 4+)
+//   osm            — local mini-OSM store: { nodes, ways, _nextLocalId } (Brick 2+)
+//   plots          — atomic geographic units, reference osm.ways for geometry (Brick 2+)
+//   boundaries     — higher-level regions, each = set of plots OR sub-boundaries (Brick 6+)
+//   boundaryTypes  — strict hierarchy of boundary type definitions (Brick 4+)
+//   propertySchemas — declarations for numeric / categoric / percentage properties (Brick 8+)
 //   settings       — project-level config (name, language, ...)
 let data = {
+  osm: { nodes: {}, ways: {}, _nextLocalId: 0 },
   plots: [],
   boundaries: [],
   boundaryTypes: [],

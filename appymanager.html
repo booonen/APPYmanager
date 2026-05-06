@@ -25,12 +25,13 @@
     <nav id="sidebar">
       <div class="nav-section" data-t="nav_section.geography">Geography</div>
       <div class="nav-item active" data-tab="dashboard" onclick="switchTab('dashboard')"><span class="nav-icon">◫</span> <span data-t="nav.dashboard">Dashboard</span></div>
+      <div class="nav-item" data-tab="plots" onclick="switchTab('plots')"><span class="nav-icon">▱</span> <span data-t="nav.plots">Plots</span></div>
       <div class="nav-item" data-tab="map" onclick="switchTab('map')"><span class="nav-icon">🗺</span> <span data-t="nav.map">Map</span></div>
       <div class="nav-section" data-t="nav_section.system">System</div>
       <div class="nav-item" data-tab="settings" onclick="switchTab('settings')"><span class="nav-icon">⚙</span> <span data-t="nav.settings">Settings</span></div>
       <div class="nav-item" data-tab="import-export" onclick="switchTab('import-export')"><span class="nav-icon">⇅</span> <span data-t="nav.import_export">Import / Export</span></div>
       <div class="spacer"></div>
-      <div style="padding:8px 16px;font-size:10px;color:var(--text-muted);font-family:var(--font-mono);opacity:0.6">v0.0.2</div>
+      <div style="padding:8px 16px;font-size:10px;color:var(--text-muted);font-family:var(--font-mono);opacity:0.6">v0.0.6</div>
     </nav>
     <div class="content">
 
@@ -39,6 +40,12 @@
         <div class="page-header"><div><h1 data-t="page.dashboard">Dashboard</h1><div class="subtitle" data-t="subtitle.dashboard">Project overview at a glance</div></div></div>
         <div class="stats-row" id="dashboard-stats"></div>
         <div id="dashboard-content"></div>
+      </div>
+
+      <!-- PLOTS -->
+      <div class="tab-panel" id="panel-plots">
+        <div class="page-header"><div><h1 data-t="page.plots">Plots</h1><div class="subtitle" data-t="subtitle.plots">All plots in the project</div></div></div>
+        <div id="plots-content"></div>
       </div>
 
       <!-- MAP -->
@@ -77,6 +84,9 @@
 <script src="js/l10n.js"></script>
 <script src="lang/en.js"></script>
 <script src="js/core.js"></script>
+<script src="js/osm.js"></script>
+<script src="js/plots.js"></script>
+<script src="js/overpass.js"></script>
 <script src="js/persistence.js"></script>
 <script src="js/ui.js"></script>
 <script src="js/map.js"></script>
