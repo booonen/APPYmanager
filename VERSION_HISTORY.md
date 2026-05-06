@@ -1,3 +1,24 @@
+## 0.0.4 — Brick 2 polish (review feedback)
+- **Custom Overpass + bbox** — `buildCustomQuery` now merges `[out:json]`
+  into the user's leading settings block instead of prepending a
+  separate one. A query starting with `[bbox:s,w,n,e];` is honoured.
+- **Search / By ID query idiom** — switched both from `out body; >; out
+  skel qt;` to the canonical `(._;>;); out body;` pattern so all
+  member nodes/ways come back reliably (fixes "incomplete rings"
+  reported on multi-result searches).
+- **Flow** — dropped the separate Preview button. The footer now has
+  one primary action ("Import") that runs the query and shows the
+  preview; a "Commit (N)" button appears inline in the result area
+  once accepted candidates are in hand.
+- **Map polygons go neutral** — accent red replaced by slate
+  (`#475569` / `#1f2937` for selected) so the accent stays reserved
+  for UI affordances. Preview overlay matches.
+- **Disabled-button styling** — `.btn:disabled` now visibly dims and
+  switches to `not-allowed`; eliminates the "click does nothing"
+  feedback gap.
+- **Toast on no results** — `parseImport` returning zero candidates
+  now also fires a warning toast (in addition to the inline message).
+
 ## 0.0.3 — Brick 2: plots + Overpass import
 - Local mini-OSM data store (`data.osm.nodes` / `data.osm.ways`) so
   plots own their geometry via shared way/node references rather than

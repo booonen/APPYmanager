@@ -350,7 +350,10 @@ they come up; the plan is a living document.
   By ID / Custom Overpass) plus inset preview map, overlap-reject
   policy, Map-tab plot rendering with click-to-select. OGF treated
   strictly as a sync target — saves work offline; the OGF relation id
-  is metadata, not the source of geometry.
+  is metadata, not the source of geometry. Polish round in v0.0.4
+  (canonical `(._;>;);out body;` query idiom; bbox-aware custom
+  query; single-button Import → inline Commit flow; neutral map
+  colors; disabled-button styling; no-results toast).
 - **Brick 3** (next, not started) — Plot interaction. Click row in
   table → plot-detail view (Brick-2 table is read-only). Sortable /
   searchable list. Edit name + notes, delete with confirmation.

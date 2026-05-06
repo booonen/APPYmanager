@@ -15,25 +15,39 @@ function buildSearchQuery(areaTags, importTags) {
   const importFilter = importTags.map(([k, v]) => tagFilter(k, v)).join('');
   return `[out:json][timeout:60];
 area${areaFilter}->.searchArea;
-(
-  relation(area.searchArea)${importFilter};
-);
-out body;
->;
-out skel qt;`;
+relation(area.searchArea)${importFilter};
+(._;>;);
+out body;`;
 }
 
 function buildByIdQuery(relationId) {
   return `[out:json][timeout:60];
 relation(${Number(relationId)});
-out body;
->;
-out skel qt;`;
+(._;>;);
+out body;`;
 }
 
 function buildCustomQuery(text) {
-  // Trust the user's query, but ensure JSON output so our parser works.
-  return /\[out:json\]/.test(text) ? text : `[out:json][timeout:60];\n${text}`;
+  // Trust the user's query but ensure JSON output. If they already have a
+  // settings block (e.g. [bbox:...];), merge [out:json] into it rather
+  // than prepending a second block — Overpass only allows one.
+  text = text.trim();
+  if (!text) return text;
+
+  const leading = text.match(/^((?:\[[^\]]+\]\s*)+);/);
+  if (leading) {
+    let settings = leading[1].trim();
+    const rest = text.slice(leading[0].length);
+    if (/\[out:[^\]]+\]/.test(settings)) {
+      // User specified an output format — force json so our parser works.
+      settings = settings.replace(/\[out:[^\]]+\]/, '[out:json]');
+    } else {
+      settings = `[out:json]${settings}`;
+    }
+    return `${settings};\n${rest.replace(/^\s+/, '')}`;
+  }
+
+  return `[out:json][timeout:60];\n${text}`;
 }
 
 function tagFilter(key, value) {

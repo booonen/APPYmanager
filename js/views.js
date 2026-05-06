@@ -112,14 +112,16 @@ function renderImportExport() {
 // ============================================================
 // IMPORT MODAL — Overpass-driven plot creation
 // ============================================================
-// Three modes share a Preview → Import flow:
+// Three modes share an Import → Commit flow:
 //   Search: two-step area + to-import filters, AND'd key-value rows.
 //   By ID:  paste a relation ID directly.
 //   Custom: power-user passthrough.
-// Preview runs the query and, if successful, renders candidates into
-// the inset map and a list. Each candidate is partitioned accept vs.
-// reject by overlap test against existing plots. Import commits only
-// the accepted candidates into data.osm + data.plots.
+// The footer's primary "Import" button runs the query, parses the
+// response, partitions candidates accept vs. reject by overlap test,
+// and renders a list + an inset preview map inside the modal. A
+// "Commit" button then appears inline in the result area when there
+// are accepted candidates — clicking it persists them to data.osm /
+// data.plots.
 
 let _importPreview = null;
 
@@ -161,15 +163,14 @@ function openImportModal() {
       <div class="form-group">
         <label>${t('import.custom_label')}</label>
         <p class="text-dim" style="font-size:12px;margin-bottom:8px">${t('import.custom_help')}</p>
-        <textarea id="import-custom-input" rows="8" placeholder="relation(12345);&#10;out body;&#10;>;&#10;out skel qt;" style="font-family:var(--font-mono);font-size:12px"></textarea>
+        <textarea id="import-custom-input" rows="8" placeholder="[bbox:s,w,n,e];&#10;relation[&quot;name&quot;=&quot;Foo&quot;];&#10;(._;>;);&#10;out body;" style="font-family:var(--font-mono);font-size:12px"></textarea>
       </div>
     </div>
 
     <div id="import-preview-result" style="margin-top:16px"></div>
   `, `
     <button class="btn" onclick="closeImportModal()">${t('btn.cancel')}</button>
-    <button class="btn" id="import-preview-btn" onclick="runImportPreview()">${t('import.preview_btn')}</button>
-    <button class="btn btn-primary" id="import-commit-btn" onclick="runImportCommit()" disabled>${t('import.import_btn')}</button>
+    <button class="btn btn-primary" id="import-action-btn" onclick="runImportPreview()">${t('import.import_btn')}</button>
   `);
 
   addImportRow('area', { key: 'admin_level', value: '2' });
@@ -184,7 +185,6 @@ function switchImportMode(mode) {
   document.querySelectorAll('.import-tab').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
   document.querySelectorAll('.import-pane').forEach(p => p.style.display = (p.dataset.mode === mode) ? 'block' : 'none');
   setImportPreviewHTML('');
-  setImportCommitEnabled(false);
   destroyPreviewMap();
   _importPreview = null;
 }
@@ -246,21 +246,20 @@ async function runImportPreview() {
   }
 
   setImportPreviewHTML(`<div class="text-dim" style="font-size:13px">${t('import.fetching')}</div>`);
-  setImportCommitEnabled(false);
   destroyPreviewMap();
   _importPreview = null;
 
-  setImportPreviewBusy(true);
+  setImportActionBusy(true);
   let json;
   try {
     json = await overpassFetch(query);
   } catch (e) {
     setImportPreviewHTML('');
-    setImportPreviewBusy(false);
+    setImportActionBusy(false);
     toast(t('import.error_fetch', { msg: e.message }), 'error');
     return;
   }
-  setImportPreviewBusy(false);
+  setImportActionBusy(false);
 
   let parsed;
   try {
@@ -275,6 +274,7 @@ async function runImportPreview() {
     let msg = t('import.no_results');
     if (parsed.skipped > 0) msg += ' ' + t('import.skipped', { n: parsed.skipped });
     setImportPreviewHTML(`<div class="text-dim" style="font-size:13px">${msg}</div>`);
+    toast(msg, 'warning');
     return;
   }
 
@@ -307,16 +307,22 @@ async function runImportPreview() {
     footer = `<div style="font-size:12px;color:var(--warn);margin-top:6px">${t('import.rejected_summary', { n: rejected.length })}</div>`;
   }
 
+  const commitBtn = accepted.length > 0
+    ? `<div class="flex" style="justify-content:flex-end;margin-top:12px">
+         <button class="btn btn-primary" onclick="runImportCommit()">${t('import.commit_btn', { n: accepted.length })}</button>
+       </div>`
+    : '';
+
   setImportPreviewHTML(`
     ${header}
     ${listHtml}
     ${footer}
     <div id="import-preview-map" style="height:240px;margin-top:10px;border-radius:var(--radius);border:1px solid var(--border);overflow:hidden"></div>
+    ${commitBtn}
   `);
 
   ensurePreviewMap('import-preview-map');
   drawPreviewCandidates(parsed.candidates);
-  setImportCommitEnabled(accepted.length > 0);
 }
 
 function runImportCommit() {
@@ -358,12 +364,7 @@ function setImportPreviewHTML(html) {
   if (el) el.innerHTML = html;
 }
 
-function setImportPreviewBusy(busy) {
-  const btn = document.getElementById('import-preview-btn');
+function setImportActionBusy(busy) {
+  const btn = document.getElementById('import-action-btn');
   if (btn) btn.disabled = !!busy;
-}
-
-function setImportCommitEnabled(enabled) {
-  const btn = document.getElementById('import-commit-btn');
-  if (btn) btn.disabled = !enabled;
 }

@@ -102,6 +102,15 @@ nav .spacer { flex: 1; }
 .btn-danger { background: var(--danger-dim); border-color: var(--danger); color: var(--danger); }
 .btn-danger:hover { background: var(--danger); color: #fff; }
 .btn-sm { padding: 5px 10px; font-size: 12px; }
+.btn:disabled, .btn[disabled] {
+  opacity: 0.5; cursor: not-allowed;
+}
+.btn:disabled:hover, .btn[disabled]:hover {
+  background: var(--bg-input); border-color: var(--border);
+}
+.btn-primary:disabled:hover, .btn-primary[disabled]:hover {
+  background: var(--accent); border-color: var(--accent);
+}
 
 .form-group { margin-bottom: 16px; }
 .form-group label {

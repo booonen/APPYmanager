@@ -82,10 +82,12 @@ function redrawMapPlots() {
 }
 
 function plotPolygonStyle(selected) {
+  // Neutral slate so plots read as data on the map without competing
+  // with the accent (which is reserved for UI affordances).
   return {
-    color: selected ? '#9e1f25' : '#c1272d',
+    color: selected ? '#1f2937' : '#475569',
     weight: selected ? 3 : 2,
-    fillColor: '#c1272d',
+    fillColor: '#475569',
     fillOpacity: selected ? 0.28 : 0.12,
   };
 }
@@ -140,10 +142,10 @@ function drawPreviewCandidates(candidates) {
     if (!polys || !polys.length) continue;
     const rejected = !!c._rejected;
     const poly = L.polygon(polys, {
-      color: rejected ? '#e0a855' : '#c1272d',
+      color: rejected ? '#e0a855' : '#475569',
       weight: 2,
       dashArray: rejected ? '4,4' : null,
-      fillColor: rejected ? '#e0a855' : '#c1272d',
+      fillColor: rejected ? '#e0a855' : '#475569',
       fillOpacity: 0.18,
     });
     poly.bindTooltip(c.name || `#${c.ogfRelationId}`);
