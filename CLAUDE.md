@@ -344,4 +344,14 @@ they come up; the plan is a living document.
 - **v0.0.2** ✓ (committed, cosmetic) — Pompeian red accent (`#c1272d`)
   replaces BRIXY blue, distinguishing APPY from BRIXY (blue) and CRUFY
   (green). Token-only change; no behavioural difference.
-- **Brick 2** (next, not started) — see Phase 1 above.
+- **Brick 2** ✓ (PR open on `feature/brick-2-plots`) — local mini-OSM
+  store (`data.osm`), Plot record with outer/inner ring refs, Plots
+  tab with a read-only table, Import modal with three modes (Search /
+  By ID / Custom Overpass) plus inset preview map, overlap-reject
+  policy, Map-tab plot rendering with click-to-select. OGF treated
+  strictly as a sync target — saves work offline; the OGF relation id
+  is metadata, not the source of geometry.
+- **Brick 3** (next, not started) — Plot interaction. Click row in
+  table → plot-detail view (Brick-2 table is read-only). Sortable /
+  searchable list. Edit name + notes, delete with confirmation.
+  Compute and display plot area. See Phase 1 above.

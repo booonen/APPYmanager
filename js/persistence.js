@@ -11,6 +11,7 @@ let _activeSaveId = '';
 let _saveDebounce = null;
 
 const EMPTY_DATA = () => ({
+  osm: { nodes: {}, ways: {}, _nextLocalId: 0 },
   plots: [],
   boundaries: [],
   boundaryTypes: [],

@@ -1,3 +1,30 @@
+## 0.0.3 — Brick 2: plots + Overpass import
+- Local mini-OSM data store (`data.osm.nodes` / `data.osm.ways`) so
+  plots own their geometry via shared way/node references rather than
+  inline coordinate copies. OGF is treated as a sync target, not a
+  source of truth; saves work fully offline.
+- Plot record `{ id, name, notes, ogfRelationId, outers, inners }` with
+  way-list rings; geometry resolved on render via outer/inner ring
+  assembly (handles way direction and multipolygons).
+- Plots tab — read-only table of imported plots (Name / OGF Relation
+  ID / Plot ID), Import button, empty-state hero. No row-click action
+  yet (detail view is Brick 3).
+- Import modal with three modes:
+  - **Search** — two-step area + to-import filters as AND'd key-value
+    rows. Builds an Overpass `area->.searchArea; relation(area...)`
+    query.
+  - **By ID** — paste an OGF relation id.
+  - **Custom Overpass** — power-user passthrough; query sent verbatim.
+- Always-on preview: query result is parsed into candidate plots,
+  partitioned accept/reject by overlap test against existing plots,
+  and rendered in a list + an inset preview map inside the modal.
+  Import commits only the accepted candidates.
+- Map tab renders all imported plots with the accent stroke and a
+  click-to-select highlight (visual only; click-elsewhere deselects).
+- ID convention adopted: positive ints = OGF-known (auto-deduped on
+  reimport), negative ints = local-only (reserved for split midpoints
+  and synthesized ways in later bricks).
+
 ## 0.0.2 — Pompeian red accent
 - Switched the accent color from BRIXY blue (`#5b8af5`) to a Pompeian
   red (`#c1272d`) so APPYmanager is visually distinct from its sister

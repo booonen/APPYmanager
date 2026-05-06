@@ -12,18 +12,21 @@ registerLanguage('en', 'English', {
   },
   "nav": {
     "dashboard": "Dashboard",
+    "plots": "Plots",
     "map": "Map",
     "settings": "Settings",
     "import_export": "Import / Export"
   },
   "page": {
     "dashboard": "Dashboard",
+    "plots": "Plots",
     "map": "Map",
     "settings": "Settings",
     "import_export": "Import / Export"
   },
   "subtitle": {
     "dashboard": "Project overview at a glance",
+    "plots": "All plots in the project",
     "map": "Geographic view of plots and boundaries",
     "settings": "Project configuration",
     "import_export": "Move project data in and out"
@@ -83,6 +86,49 @@ registerLanguage('en', 'English', {
   },
   "dashboard": {
     "welcome_title": "Welcome to APPYmanager",
-    "welcome_body": "Manage demographics for your OpenGeofiction country. Start by importing a top-level boundary on the Map tab — that comes in the next brick. For now, this shell handles save management, JSON import/export, and shows the OGF map."
+    "welcome_body": "Manage demographics for your OpenGeofiction country. Head to the Plots tab to import your first boundary from OGF; the Map tab will visualise what you bring in."
+  },
+  "plots": {
+    "import_btn": "Import boundary",
+    "count": "{n} plot(s)",
+    "col_name": "Name",
+    "col_ogf_id": "OGF Relation ID",
+    "col_plot_id": "Plot ID",
+    "unnamed": "(unnamed)",
+    "empty_title": "No plots yet",
+    "empty_body": "Import a boundary from OpenGeofiction to get started. Each imported relation becomes a plot."
+  },
+  "import": {
+    "title": "Import boundary",
+    "tab_search": "Search",
+    "tab_byid": "By ID",
+    "tab_custom": "Custom Overpass",
+    "search_area_label": "Search area (where to look)",
+    "search_area_help": "Filters that define the spatial scope of the search. Multiple rows are AND'd. Example: name=Antwerpen, admin_level=6.",
+    "import_label": "To import (which shapes)",
+    "import_help": "Filters for shapes inside the search area to import as plots. Each matching relation becomes one plot.",
+    "byid_label": "OGF Relation ID",
+    "byid_help": "The numeric id of an OGF relation. Found in the URL on opengeofiction.net.",
+    "custom_label": "Custom Overpass query",
+    "custom_help": "Power-user override. The query is sent verbatim; output must be JSON. Use 'out body; >; out skel qt;' so members and nodes come back too.",
+    "add_row": "Add row",
+    "remove_row": "Remove row",
+    "key_placeholder": "key (e.g. admin_level)",
+    "value_placeholder": "value (e.g. 2)",
+    "preview_btn": "Preview",
+    "import_btn": "Import",
+    "fetching": "Querying Overpass…",
+    "found": "Found {n} shape(s)",
+    "skipped": "{n} skipped (unclosed or empty rings)",
+    "no_results": "No shapes matched.",
+    "rejected_overlap": "overlaps an existing plot",
+    "rejected_summary": "{n} shape(s) will be skipped because they overlap existing plots.",
+    "imported_toast": "Imported {n} plot(s)",
+    "error_empty_filters": "Both search-area and to-import need at least one filter row.",
+    "error_byid_invalid": "Enter a numeric relation ID.",
+    "error_custom_empty": "Enter a custom Overpass query.",
+    "error_query_build": "Could not build query: {msg}",
+    "error_fetch": "Overpass request failed: {msg}",
+    "error_parse": "Could not parse response: {msg}"
   }
 });

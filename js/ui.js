@@ -83,7 +83,8 @@ function switchTab(tab) {
   document.querySelector(`.nav-item[data-tab="${tab}"]`)?.classList.add('active');
   const renders = {
     dashboard: renderDashboard,
-    map: () => { if (!_map) initMap(); else { _map.invalidateSize(); } },
+    plots: renderPlots,
+    map: () => { if (!_map) initMap(); else { _map.invalidateSize(); redrawMapPlots(); } },
     settings: renderSettings,
     'import-export': renderImportExport
   };
