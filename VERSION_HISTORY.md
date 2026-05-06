@@ -1,3 +1,23 @@
+## 0.0.7 — Brick 3: plot interaction
+- Plots tab now has a name-search input (case-insensitive substring)
+  and sortable column headers (Name / Area / OGF Relation ID),
+  defaulting to Name asc. Body re-renders on search input only,
+  preserving focus across keystrokes.
+- New **Area** column. Computed via spherical excess (≈ Leaflet
+  geometryutil's `geodesicArea`); displayed as `m²` for tiny plots
+  and `km²` with two decimals otherwise. Holes are subtracted.
+- **Plot-detail modal** opens on row click. Editable name + notes
+  with auto-save on blur, read-only metadata block (OGF Relation ID,
+  Plot ID, Area), and an inset Leaflet map showing the plot. Map
+  tab remains the visualiser; this modal is the data-stewardship
+  surface, per the agreed split.
+- **Delete** with `appConfirm` confirmation. Removes the plot record
+  only — orphaned `osm.nodes` / `osm.ways` remain in place because
+  re-imports of adjacent plots may still reference them, and they're
+  cheap to keep.
+- Sortable header + clickable-row styles added; meta-block grid
+  for the detail modal's metadata trio.
+
 ## 0.0.6 — Default seeds + custom-query polish
 - Empty seed rows in the import modal's Search tab. The previous
   `admin_level=2` defaults made a one-click "Preview" fire a

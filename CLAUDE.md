@@ -354,7 +354,11 @@ they come up; the plan is a living document.
   (canonical `(._;>;);out body;` query idiom; bbox-aware custom
   query; single-button Import → inline Commit flow; neutral map
   colors; disabled-button styling; no-results toast).
-- **Brick 3** (next, not started) — Plot interaction. Click row in
-  table → plot-detail view (Brick-2 table is read-only). Sortable /
-  searchable list. Edit name + notes, delete with confirmation.
-  Compute and display plot area. See Phase 1 above.
+- **Brick 3** ✓ (PR open on `feature/brick-3-plot-detail`) — plot
+  interaction. Plots tab gained name-search + sortable headers
+  (Name / Area / OGF Relation ID) + Area column (spherical excess,
+  holes subtracted). Row click opens a detail modal with editable
+  name + notes (auto-save on blur), read-only metadata, an inset
+  Leaflet map, and a Delete button (appConfirm; orphan osm stays).
+- **Brick 4** (next, not started) — boundary-type schema editor.
+  See Phase 2 above.

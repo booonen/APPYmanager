@@ -92,11 +92,27 @@ registerLanguage('en', 'English', {
     "import_btn": "Import boundary",
     "count": "{n} plot(s)",
     "col_name": "Name",
+    "col_area": "Area",
     "col_ogf_id": "OGF Relation ID",
     "col_plot_id": "Plot ID",
     "unnamed": "(unnamed)",
     "empty_title": "No plots yet",
-    "empty_body": "Import a boundary from OpenGeofiction to get started. Each imported relation becomes a plot."
+    "empty_body": "Import a boundary from OpenGeofiction to get started. Each imported relation becomes a plot.",
+    "search_placeholder": "Search by name…",
+    "no_search_results": "No plots match \"{q}\"."
+  },
+  "plot_detail": {
+    "title": "Plot",
+    "name_label": "Name",
+    "name_placeholder": "Plot name",
+    "notes_label": "Notes",
+    "notes_placeholder": "Free-form notes about this plot.",
+    "ogf_id": "OGF Relation ID",
+    "plot_id": "Plot ID",
+    "area": "Area",
+    "delete_btn": "Delete plot",
+    "confirm_delete": "Delete plot \"{name}\"?\nThis cannot be undone.",
+    "deleted_toast": "Deleted \"{name}\""
   },
   "import": {
     "title": "Import boundary",
