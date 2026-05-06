@@ -1,0 +1,308 @@
+# APPYmanager — Scope & Architecture Notes
+
+This file locks in the design decisions agreed across the planning sessions
+so future Claude Code sessions stay aligned. Update it as decisions evolve.
+
+## Project identity
+
+APPYmanager is a sister tool to **BRIXYmanager** (rail networks) and
+**CRUFYmanager** for the OpenGeofiction (OGF) worldbuilding community. It
+helps OGF mappers manage **demographics** and (later) **roads** for the
+fictional countries they map.
+
+Demographics and roads do not interact much — they are effectively two
+separate apps under one roof. **Demographics is being built first.** Roads
+are deferred.
+
+## Reference repos
+
+- `booonen/BRIXYmanager` — primary visual + architectural reference. Mirror
+  its look/feel and save-file implementation. (Cloned to
+  `/home/user/_reference/BRIXYmanager` for inspection.)
+- `booonen/CRUFYmanager` — secondary reference (less directly relevant).
+
+GitHub MCP tools are scoped to `booonen/appymanager` only; the other repos
+must be cloned via shell for reference.
+
+## Build philosophy
+
+**Brick by brick.** The user wants to sign off on each increment before the
+next is started. Do not steam ahead. Do not implement features that haven't
+been explicitly agreed.
+
+## Architecture (mirrors BRIXY)
+
+- **Single-page, in-browser, no build step.** Vanilla JS, plain `<script>`
+  tags, no bundler.
+- `index.html` redirects to `appymanager.html` (the actual shell).
+- Module split under `js/`:
+  - `core.js` — global `data` object, `uid()`, `esc()`, color palette
+  - `persistence.js` — IndexedDB multi-slot save manager + JSON import/export
+  - `ui.js` — modal, toast, `appConfirm`, `appPrompt`
+  - `l10n.js` — `t()`, `registerLanguage()`, `l10nHydrate()`
+  - `map.js` — Leaflet wrapper, OGF tile layer
+  - (later) `plots.js`, `boundaries.js`, `properties.js`, `overpass.js`
+- `lang/en.js` — registers English strings via `registerLanguage('en', ...)`.
+- `styles.css` — dark theme, BRIXY tokens (`--bg #0f1117`,
+  `--accent #5b8af5`, DM Sans / Fraunces / JetBrains Mono).
+
+## Persistence (mirrors BRIXY)
+
+- IndexedDB database name: `appymanager`.
+- Two object stores: `registry` (id, name, modified, stats) + `saves` (id, data).
+- Active save id stored in `localStorage` under key `appymanager:active`.
+- 300 ms debounced auto-save via `save()` → `flushSave()`.
+- JSON export: timestamped filename, `showSaveFilePicker` if available.
+- JSON import: creates new save slot, switches to it.
+- Multi-slot manager UI mirrors BRIXY exactly (rename / duplicate / delete /
+  import / export, storage estimate at the bottom).
+
+## OGF integration
+
+- Tile server: `https://tile.opengeofiction.net/ogf-carto/{z}/{x}/{y}.png`
+  (maxZoom 19).
+- Overpass endpoint: `https://overpass.opengeofiction.net/api/interpreter`.
+
+## Data model — agreed primitives
+
+### Plot
+The atomic geographic unit. Properties:
+- Strictly tiled, non-overlapping.
+- Covers exactly the area the user has imported. If the input has gaps,
+  the gaps remain.
+- Can be non-contiguous, but the user must be able to split a non-contiguous
+  plot into contiguous parts.
+- Initially formed by importing a top-level boundary via Overpass (one plot
+  per imported relation).
+- When a smaller-scale boundary set is imported, plots are auto-subdivided
+  by overlaying the new borders on the existing plot map and merging — new
+  plots are created wherever borders create a new demarked area. After this,
+  plots may no longer correspond to a single OGF object.
+- A manual split editor lets the user split a plot into two pieces.
+- The user can export current plots to a `.osc` file; after upload to OGF,
+  the program needs to **re-sync** to assign the correct OGF IDs back to
+  each plot.
+- A plot can optionally be split between **land** and **water** (outside
+  coastline / inside water relations). Internally, plots are stored
+  **mixed**; the land/water split is applied on load when enabled.
+  Properties can be set independently on land vs. water portions when the
+  split is on.
+
+### Boundary
+A higher-level region built from primitives.
+- A boundary can be a collection of **plots** OR a collection of **other
+  boundaries** of a strictly lower hierarchy level.
+- Each project has a strict **boundary-type hierarchy** (e.g.
+  Country > Province > Municipality > Plot). A boundary type can only
+  contain types strictly below it.
+- (Schema for boundary-type hierarchy is TBD — to be designed in a later
+  brick.)
+
+### Property
+Demographic / categorical data attached to plots or boundaries.
+- Three property kinds:
+  - **Numeric** (e.g. population, area)
+  - **Text / categorical** (e.g. predominant language)
+  - **Percentage of another property** (e.g. "% Spanish-speakers" =
+    percentage of population). The denominator property is declared
+    per-property. The user can enter either a percentage or a raw number;
+    when the denominator changes, the other form updates.
+- A default set of demographic properties is bootstrapped per project;
+  user-defined custom properties are supported.
+- **Override semantics**: a value set by the user on a higher-level
+  boundary takes precedence over the value computed from constituent
+  plots. Both values are stored. Mismatches are flagged. An *under-sum*
+  mismatch (boundary set lower than computed) is treated as a critical
+  error; an *over-sum* mismatch (computed lower than set) is acceptable
+  (incomplete OGF mapping is a normal case).
+- **Aggregation rules**:
+  - Numeric: per-property declaration of sum vs. weighted-average.
+  - Categorical: roll-up disabled by default; opt-in distribution
+    aggregation (40% A / 60% B).
+  - Percentage: weighted by the declared denominator property.
+
+### Future / deferred
+- Historic component: properties varying over time. Deferred entirely.
+- Roads: deferred.
+- Population estimator integration: the existing
+  `ogf-population-estimator(8).html` will eventually be folded into the
+  app to bootstrap plot population values and to ratio-split residential
+  way population during plot splits. Not part of early bricks.
+
+## Geometry
+
+- Snap distance for boundary-merge auto-subdivision: small enough that
+  small urban plots remain createable. (Exact value TBD.)
+
+## Versioning
+
+- `VERSION_HISTORY.md` at the repo root, BRIXY style: each entry has a
+  semver-ish tag and a short bullet list. Start at `0.0.1`.
+
+## Long-term plan (demographics MVP)
+
+This is the agreed brick-by-brick plan for the demographics app. Roads
+stay deferred (separate brick stream). Each brick is a sign-off-able
+increment; each phase is a coherent capability. Mark bricks complete in
+the log below as they ship.
+
+The data-model rules above (Plot, Boundary, Property) are the canonical
+source for nuance; each brick description below names which rules it
+implements but does not re-state them in full. Read the §Data model
+section before starting any brick.
+
+### Decisions & rationale
+
+- **Phase 4 (plot ops) comes after Phase 3 (properties).** Hard to test
+  property-redistribution-on-split without properties existing first.
+  The user might split plots before assigning many properties, but
+  building the engine in this order keeps testing clean.
+- **Brick 5 (auto-subdivision) is the geometrically hardest** and may
+  split into sub-steps (e.g. 5a basic overlay + manual reconciliation,
+  5b full auto-merge with snap). Not every brick will be a one-shot.
+- **Property aggregation override semantics**: user-set on a higher
+  boundary always wins, but the computed value is also stored so the
+  mismatch can be flagged. Under-sum is critical; over-sum is OK
+  because OGF mapping is often incomplete.
+- **Land/water split is data-bearing, not visual.** Internal storage
+  stays mixed; the split is applied on load when enabled. Properties
+  can then be set separately on land vs. water portions.
+- **Default property set + custom is a hard requirement.** A new
+  project bootstraps with population, area, etc.; users add custom
+  properties. Property kind (numeric / categorical / percentage) is
+  declared per-property along with aggregation rule.
+
+### Phase 1 — Geographic foundation
+
+- **Brick 1** — Project shell. HTML/CSS chrome mirroring BRIXY,
+  IndexedDB save manager (debounced 300 ms auto-save, multi-slot
+  rename/duplicate/delete, JSON import/export with timestamped
+  filenames), Leaflet map with OGF tiles, l10n scaffolding. No
+  plot/boundary/property logic.
+- **Brick 2** — Plot data model + Overpass import for top-level
+  boundaries. Define the Plot record (id, geometry, name, OGF relation
+  id, notes). Three Overpass entry-point modes (the user wants both
+  presets and custom queries):
+  (a) paste a relation ID;
+  (b) pick from a preset (e.g. country admin boundary by `admin_level`);
+  (c) paste a custom Overpass query.
+  Each imported relation becomes one plot. Plots are non-overlapping;
+  the imported area defines the canvas including any gaps the user
+  provided. Render polygons on the map; click-highlight; persist.
+- **Brick 3** — Plot interaction. Click-on-map → inspector panel, plot
+  list view (sortable / searchable), edit name and notes, delete plot
+  with confirmation. Compute and display plot area.
+
+### Phase 2 — Boundary hierarchy
+
+- **Brick 4** — Boundary-type schema editor. Per-project list of
+  boundary types, each with name and level. The hierarchy is strict:
+  a type can only contain types strictly below it. Plots are the
+  implicit lowest level. UI to add/edit/delete types and visualise the
+  tree. Bootstrapped defaults: TBD (probably Country / Province /
+  Municipality / Plot, but user-editable).
+- **Brick 5** — Smaller-boundary Overpass import + **auto-subdivision**.
+  When a smaller-scale boundary set is imported, overlay its borders
+  onto the existing plot map and merge — wherever new borders create a
+  newly demarked area, a new plot is created. Snap distance is
+  configurable but small (must preserve plots in dense urban areas).
+  After this, plots may no longer correspond to single OGF objects.
+  Likely needs sub-bricks (5a / 5b) for manual reconciliation vs. full
+  auto-merge.
+- **Brick 6** — Boundary entities. A boundary is either a collection of
+  plots OR a collection of sub-boundaries of a strictly lower level.
+  UI: assign plots/sub-boundaries to a parent. Map layer toggle per
+  boundary level (show/hide each level independently). Boundary list
+  view per type.
+
+### Phase 3 — Properties
+
+- **Brick 7** — Property schema editor. Three kinds: numeric (declare
+  sum vs. weighted-average; if weighted, declare weight property),
+  categorical (roll-up disabled by default, opt-in distribution
+  aggregation), percentage (declare denominator property).
+  Bootstrap each new project with a default demographic set
+  (population, area, language, etc.). User can add/remove custom
+  properties.
+- **Brick 8** — Property values on plots. Enter numeric / categorical /
+  percentage values per plot. For percentages, dual input: user can
+  type either the % or the raw number, and switching one updates the
+  other given the denominator's current value (and vice versa when
+  the denominator changes).
+- **Brick 9** — Property aggregation on boundaries. For each property
+  on each boundary, store both the user-set value (if any) and the
+  computed-from-children value. User-set takes precedence for
+  display/use; computed is kept for comparison. Detect mismatches:
+  **under-sum** (boundary < sum of children) = critical error;
+  **over-sum** (boundary > sum of children) = acceptable warning
+  because OGF mapping is often incomplete. Inline flagging in the
+  inspector; central listing arrives in Brick 13.
+
+### Phase 4 — Plot operations
+
+- **Brick 10** — Manual plot split editor. User draws a cut line on a
+  plot → two plots. UI for property redistribution: numeric properties
+  default to area-proportional split with manual override; categorical
+  inherits to both; percentage recomputes from its denominator. Show
+  the two new plots' areas (and population once Brick 16 lands) to help
+  electorate-style splitting decisions.
+- **Brick 11** — Land/water split. Fetch coastlines (`way` with
+  `natural=coastline`) and water relations from OGF. Internal plot
+  storage stays mixed (one polygon per plot). When the split is
+  enabled, plots are split into land/water portions on load.
+  Properties can be set separately on land vs. water portions.
+  Toggling off does **not** destroy data — kept separately and re-applied
+  if the split is toggled on again.
+
+### Phase 5 — Visualisation & UX
+
+- **Brick 12** — Choropleth. Pick a property, color all
+  plots/boundaries by its value. Continuous colour scales for
+  numeric/percentage properties; distinct colours per category for
+  categorical. Legend display. Per-property colour-scheme
+  customisation can wait.
+- **Brick 13** — Issues panel + filter/search. Central list of all
+  detected mismatches and data-quality issues (from Brick 9 onwards).
+  Click an issue → highlight on map + open inspector. Filter
+  plots/boundaries by property values, name, type. Plain-text search
+  by name.
+
+### Phase 6 — OGF round-trip
+
+- **Brick 14** — `.osc` export. Generate OsmChange XML for the current
+  plot polygons (one OSM way / multipolygon relation per plot). User
+  downloads the file and uploads it to OGF via JOSM or similar.
+- **Brick 15** — Re-sync from OGF. After upload, query OGF for the
+  newly-created objects and match plots back to their assigned OGF IDs.
+  Matching strategy is non-trivial (geometry-based, with user
+  confirmation for ambiguous cases). Together with Brick 14 this is
+  the OGF round-trip.
+
+### Phase 7 — Population integration
+
+- **Brick 16** — Fold `ogf-population-estimator(8).html` in. (1) When a
+  new plot is created, run the estimator's density-preset logic to
+  bootstrap a population value. (2) During a manual plot split (Brick
+  10), look up residential ways/relations inside the plot and
+  ratio-split their estimated population between the two new plots
+  by area.
+
+### Deferred (post-MVP)
+
+- **Historic** — properties varying over time. Likely 2–3 bricks once
+  we get there. Will need a time-axis dimension on every property
+  value, plus UI to scrub through years.
+- **Roads** — separate program, separate brick stream. Sister to
+  demographics under the same shell, but no shared data model.
+- **i18n expansion** — additional languages beyond English, translation
+  completeness reporting (BRIXY has tooling we can port).
+
+Things will inevitably surface that aren't on this list. Add them as
+they come up; the plan is a living document.
+
+## Brick log
+
+- **Brick 1** ✓ (committed) — the shell. HTML/CSS chrome mirroring
+  BRIXY, IndexedDB save manager, JSON import/export, l10n scaffolding,
+  Leaflet map with OGF tiles. No plot/boundary/property logic yet.
+- **Brick 2** (next, not started) — see Phase 1 above.
