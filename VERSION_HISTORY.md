@@ -1,3 +1,19 @@
+## 0.0.6 — Default seeds + custom-query polish
+- Empty seed rows in the import modal's Search tab. The previous
+  `admin_level=2` defaults made a one-click "Preview" fire a
+  world-spanning query against OGF, which rate-limited the user.
+- `buildCustomQuery` now early-returns if `[out:json]` appears
+  anywhere in the text — fixes 400s when the query starts with a
+  `/* … */` comment block (overpass-turbo's wizard prefix), where
+  the previous "leading settings block" detection couldn't reach
+  the existing `[out:json]` and we'd prepend a second one.
+- `parseImport` synthesises the way/node layer from inline `out geom;`
+  member geometry. Wizard-generated queries that end in `out geom;`
+  now produce candidate plots with resolvable shapes, instead of
+  silently parsing to zero candidates. Synthetic ids live in a deep
+  negative range (`-1e9` and below) so they can't collide with
+  locally-allocated ids reserved for split-midpoints in later bricks.
+
 ## 0.0.5 — Friendlier Overpass error handling
 - HTTP 429 (rate-limited) now probes `/api/status` to find the next
   available slot and surfaces "Try again in ~Ns" instead of pasting

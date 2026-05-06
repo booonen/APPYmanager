@@ -34,6 +34,11 @@ function buildCustomQuery(text) {
   text = text.trim();
   if (!text) return text;
 
+  // If [out:json] appears anywhere — even after a leading comment block —
+  // trust the user's query verbatim. Otherwise we'd prepend a second
+  // settings block and Overpass would 400.
+  if (/\[out:json\b/.test(text)) return text;
+
   const leading = text.match(/^((?:\[[^\]]+\]\s*)+);/);
   if (leading) {
     let settings = leading[1].trim();
@@ -125,11 +130,33 @@ function parseImport(json) {
   const ways = {};
   const relations = [];
 
+  // Synthetic id allocator for nodes that arrive without explicit ids
+  // (the `out geom;` case — overpass-turbo's wizard uses this). Synthetic
+  // ids sit far below the local-id zone (data.osm._nextLocalId starts at
+  // 0 and decrements by 1) so they can't collide with split-midpoint or
+  // hand-drawn objects in later bricks.
+  const SYNTH_BASE = -1000000000;
+  let _synth = 0;
+  const synthId = () => SYNTH_BASE + (--_synth);
+
   for (const el of (json && json.elements) || []) {
     if (el.type === 'node') {
       nodes[el.id] = { lat: el.lat, lon: el.lon };
     } else if (el.type === 'way') {
-      ways[el.id] = { nodes: (el.nodes || []).slice() };
+      const refs = (el.nodes || []).slice();
+      ways[el.id] = { nodes: refs };
+      // `out geom` on a way includes inline lat/lon parallel to .nodes.
+      // Populate the nodes pool from it when no separate node element
+      // arrived for that id.
+      if (Array.isArray(el.geometry) && el.geometry.length === refs.length) {
+        for (let i = 0; i < refs.length; i++) {
+          const nid = refs[i];
+          const g = el.geometry[i];
+          if (g && nodes[nid] === undefined) {
+            nodes[nid] = { lat: g.lat, lon: g.lon };
+          }
+        }
+      }
     } else if (el.type === 'relation') {
       relations.push(el);
     }
@@ -142,7 +169,24 @@ function parseImport(json) {
     const innerWays = [];
     for (const m of (rel.members || [])) {
       if (m.type !== 'way') continue;
-      const w = ways[m.ref];
+      let w = ways[m.ref];
+      // `out geom` on a relation embeds way geometry inline on the
+      // member without emitting a separate way element. Synthesise a
+      // way (and its nodes) so the rest of the pipeline behaves
+      // uniformly. We allocate synthetic ids in a deep negative range
+      // so they don't conflict with OGF ids or with locally-allocated
+      // ids in later bricks.
+      if (!w && Array.isArray(m.geometry) && m.geometry.length > 0) {
+        const nodeIds = [];
+        for (const g of m.geometry) {
+          if (!g) continue;
+          const nid = synthId();
+          nodes[nid] = { lat: g.lat, lon: g.lon };
+          nodeIds.push(nid);
+        }
+        ways[m.ref] = { nodes: nodeIds };
+        w = ways[m.ref];
+      }
       if (!w) continue;
       const bucket = (m.role === 'inner') ? innerWays : outerWays;
       bucket.push({ id: m.ref, nodes: w.nodes });

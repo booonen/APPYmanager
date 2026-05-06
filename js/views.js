@@ -173,8 +173,10 @@ function openImportModal() {
     <button class="btn btn-primary" id="import-action-btn" onclick="runImportPreview()">${t('import.import_btn')}</button>
   `);
 
-  addImportRow('area', { key: 'admin_level', value: '2' });
-  addImportRow('import', { key: 'admin_level', value: '2' });
+  // Empty seed rows so the user sees the structure but doesn't
+  // accidentally fire a world-spanning admin_level=2 search on first click.
+  addImportRow('area');
+  addImportRow('import');
 
   // Make the modal a bit taller so the inset preview map gets room.
   const modalEl = document.getElementById('modal');

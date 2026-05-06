@@ -110,7 +110,7 @@ registerLanguage('en', 'English', {
     "byid_label": "OGF Relation ID",
     "byid_help": "The numeric id of an OGF relation. Found in the URL on opengeofiction.net.",
     "custom_label": "Custom Overpass query",
-    "custom_help": "Power-user override. Sent verbatim. A leading [bbox:s,w,n,e]; settings block is honoured (we merge [out:json] into it). Use '(._;>;);out body;' so members and nodes come back too.",
+    "custom_help": "Power-user override. Sent verbatim. A leading [bbox:s,w,n,e]; settings block is honoured (we merge [out:json] into it). 'out body;' with '(._;>;);' is the canonical recursion idiom; 'out geom;' (overpass-turbo's wizard default) also works — we synthesise the missing way/node layer.",
     "add_row": "Add row",
     "remove_row": "Remove row",
     "key_placeholder": "key (e.g. admin_level)",
