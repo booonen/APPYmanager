@@ -981,6 +981,9 @@ function onImportTargetChange() {
   const target = document.querySelector('input[name="import-target"]:checked')?.value || 'plot';
   const sel = document.getElementById('import-target-typeid');
   if (sel) sel.disabled = (target !== 'boundary');
+  // A target switch can flip whether anything is committable (e.g. wrap-only
+  // re-imports become committable as boundaries). Refresh the commit area.
+  _refreshImportCommitContainer();
 }
 
 function getImportTarget() {
@@ -990,6 +993,36 @@ function getImportTarget() {
     if (typeId) return { kind: 'boundary', typeId };
   }
   return { kind: 'plot' };
+}
+
+// Decide whether the current plan + selected target can produce any commit-time action.
+// Returns { canCommit, label } where canCommit=false ⇒ show "nothing new" message instead.
+function _evaluateImportCommit(plan, target) {
+  const candidatesTouched = plan.free.length + plan.wraps.length
+    + new Set(plan.splits.flatMap(s => s.pieces.map(p => p.candidate))).size;
+  if (plan.newPlotCount > 0) {
+    return { canCommit: true, label: t('import.commit_btn', { n: plan.newPlotCount }) };
+  }
+  // newPlotCount === 0 — only meaningful if we're wrapping into boundaries.
+  if (target.kind === 'boundary' && candidatesTouched > 0) {
+    return { canCommit: true, label: t('import.commit_boundary_only', { n: candidatesTouched }) };
+  }
+  return { canCommit: false, label: '' };
+}
+
+function _refreshImportCommitContainer() {
+  const el = document.getElementById('import-commit-container');
+  if (!el) return;
+  if (!_importPreview || !_importPreview._plan) { el.innerHTML = ''; return; }
+  const target = getImportTarget();
+  const { canCommit, label } = _evaluateImportCommit(_importPreview._plan, target);
+  if (canCommit) {
+    el.innerHTML = `<div class="flex" style="justify-content:flex-end">
+      <button class="btn btn-primary" onclick="runImportCommit()">${esc(label)}</button>
+    </div>`;
+  } else {
+    el.innerHTML = `<div class="text-dim" style="font-size:12px;text-align:center;padding:8px 0">${t('import.nothing_new')}</div>`;
+  }
 }
 
 function switchImportMode(mode) {
@@ -1160,29 +1193,27 @@ async function runImportPreview() {
     listHtml += `</ul>`;
   }
 
-  const commitBtn = plan.newPlotCount > 0
-    ? `<div class="flex" style="justify-content:flex-end;margin-top:12px">
-         <button class="btn btn-primary" onclick="runImportCommit()">${t('import.commit_btn', { n: plan.newPlotCount })}</button>
-       </div>`
-    : '';
-
   setImportPreviewHTML(`
     ${header}
     ${listHtml}
     <div id="import-preview-map" style="height:240px;margin-top:10px;border-radius:var(--radius);border:1px solid var(--border);overflow:hidden"></div>
-    ${commitBtn}
+    <div id="import-commit-container" style="margin-top:12px"></div>
   `);
 
   ensurePreviewMap('import-preview-map');
   drawPreviewCandidates(parsed.candidates);
+  _refreshImportCommitContainer();
 }
 
 function runImportCommit() {
   if (!_importPreview || !_importPreview._plan) return;
   const { _plan, nodes, ways } = _importPreview;
-  if (_plan.newPlotCount === 0) return;
-
   const target = getImportTarget();
+  // The button is hidden when there's nothing to commit (see _evaluateImportCommit),
+  // so reaching here implies either new plots OR a wrap into a new boundary.
+  const { canCommit } = _evaluateImportCommit(_plan, target);
+  if (!canCommit) return;
+
   executeSubdivisionPlan(_plan, nodes, ways, target);
 
   const splitCount = _plan.splits.length;

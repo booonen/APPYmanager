@@ -227,6 +227,8 @@ registerLanguage('en', 'English', {
     "value_placeholder": "value (e.g. 2)",
     "import_btn": "Import",
     "commit_btn": "Commit ({n})",
+    "commit_boundary_only": "Commit ({n} boundary)",
+    "nothing_new": "Nothing new to import — every shape is already covered by an existing plot.",
     "fetching": "Querying Overpass…",
     "found": "Found {n} shape(s)",
     "skipped": "{n} skipped (unclosed or empty rings)",

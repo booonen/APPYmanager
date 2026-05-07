@@ -1,3 +1,17 @@
+## 0.1.5 — Import commit button: never silently disappear
+- Re-importing a relation that's already a plot would classify it as a
+  pure wrap with no gap. `newPlotCount` then evaluated to 0 and the
+  Commit button vanished without explanation. Two fixes:
+  - The button is now rendered inside its own `import-commit-container`
+    that re-renders when the import target radio (Plot / Boundary) flips.
+  - When `newPlotCount === 0` AND target is Boundary, the button stays
+    visible with a "Commit ({n} boundary)" label — wrapping existing
+    plots into a new boundary record is a valid commit-time action even
+    when no new plots are created.
+  - When neither is true (target = Plot, only wraps with no gap), an
+    explicit "Nothing new to import" message replaces the missing button
+    so the user knows why nothing's actionable.
+
 ## 0.1.4 — Fix membership rewriting on cross-parent splits
 - When a single imported relation is split across two existing plots
   (e.g. a city straddling two provinces), each parent plot's owning
