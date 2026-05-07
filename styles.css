@@ -333,3 +333,31 @@ input[type="checkbox"]:checked::after {
 }
 .import-result-mark.ok { color: var(--success); }
 .import-result-mark.warn { color: var(--warn); }
+
+/* ============================================================
+   BOUNDARY TYPE TREE (Brick 4)
+   ============================================================ */
+.btype-tree { display: flex; flex-direction: column; gap: 1px; }
+.btype-tree-row {
+  display: flex; align-items: center; gap: 6px;
+  padding: 3px 0; min-width: 0;
+}
+.btype-tree-branch {
+  font-family: var(--font-mono); font-size: 12px; color: var(--text-muted);
+  flex-shrink: 0; user-select: none;
+}
+.btype-toggle {
+  background: none; border: none; color: var(--text-muted); cursor: pointer;
+  font-size: 9px; padding: 0; width: 16px; text-align: center; flex-shrink: 0;
+  line-height: 1;
+}
+.btype-toggle:hover { color: var(--text); }
+.btype-chip {
+  font-size: 13px; background: var(--bg-input); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 3px 10px; color: var(--text); flex-shrink: 0;
+}
+.btype-count {
+  font-family: var(--font-mono); font-size: 11px; color: var(--text-muted);
+  background: var(--bg-input); border: 1px solid var(--border);
+  border-radius: 10px; padding: 1px 7px; flex-shrink: 0;
+}

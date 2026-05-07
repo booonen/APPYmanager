@@ -143,6 +143,211 @@ function onPlotsSort(col) {
   renderPlots();
 }
 
+// ============================================================
+// BOUNDARY TYPES — schema editor (Brick 4)
+// ============================================================
+// Each boundary type declares a primitiveId: the type it *contains*,
+// or null meaning it directly contains Plots. This forms a directed
+// tree (or forest for multi-pronged hierarchies). Cycle detection is
+// enforced at save time; delete is blocked if any boundary uses the type.
+
+function renderBoundaryTypes() {
+  const el = document.getElementById('boundary-types-content');
+  if (!el) return;
+
+  bootstrapBoundaryTypes();
+
+  const types = data.boundaryTypes.slice().sort((a, b) => a.name.localeCompare(b.name));
+
+  el.innerHTML = `
+    <div class="ie-card">
+      <div class="flex" style="justify-content:space-between;align-items:center;margin-bottom:14px">
+        <h3>${t('boundary_types.hierarchy_title')}</h3>
+        <button class="btn btn-primary btn-sm" onclick="openAddBoundaryTypeModal()">+ ${t('boundary_types.add_btn')}</button>
+      </div>
+      ${_buildBtypeTree(types)}
+    </div>`;
+}
+
+let _btypeCollapsed = new Set();
+
+function toggleBtype(id) {
+  if (_btypeCollapsed.has(id)) _btypeCollapsed.delete(id);
+  else _btypeCollapsed.add(id);
+  renderBoundaryTypes();
+}
+
+function _buildBtypeTree(types) {
+  function renderChildren(parentId, depth, visited) {
+    return types
+      .filter(t => t.primitiveId === parentId)
+      .map(child => {
+        if (visited.has(child.id)) return '';
+        const next = new Set(visited);
+        next.add(child.id);
+
+        const hasChildren = types.some(t => t.primitiveId === child.id);
+        const collapsed   = _btypeCollapsed.has(child.id);
+        const count       = data.boundaries.filter(b => b.typeId === child.id).length;
+        const indent      = depth * 24;
+
+        const toggle = hasChildren
+          ? `<button class="btype-toggle" onclick="toggleBtype('${esc(child.id)}')">${collapsed ? '▶' : '▼'}</button>`
+          : `<span class="btype-toggle"></span>`;
+
+        const row = `<div class="btype-tree-row" style="padding-left:${indent}px">
+          ${toggle}<span class="btype-tree-branch">└─</span>
+          <span class="btype-chip">${esc(child.name)}</span>
+          <span class="btype-count">${count}</span>
+          <div style="margin-left:auto;display:flex;gap:4px;flex-shrink:0">
+            <button class="btn btn-sm" onclick="openEditBoundaryTypeModal('${esc(child.id)}')">${t('boundary_types.edit_btn')}</button>
+            <button class="btn btn-sm btn-danger" onclick="deleteBoundaryType('${esc(child.id)}')">${t('boundary_types.delete_btn')}</button>
+          </div>
+        </div>`;
+
+        return row + (collapsed ? '' : renderChildren(child.id, depth + 1, next));
+      }).join('');
+  }
+
+  const plotsHasChildren = types.some(t => t.primitiveId === null);
+  const plotsCollapsed   = _btypeCollapsed.has('plots');
+  const plotsCount       = data.plots.length;
+
+  const plotsToggle = plotsHasChildren
+    ? `<button class="btype-toggle" onclick="toggleBtype('plots')">${plotsCollapsed ? '▶' : '▼'}</button>`
+    : `<span class="btype-toggle"></span>`;
+
+  const plotsRow = `<div class="btype-tree-row">
+    ${plotsToggle}<span class="btype-chip">Plots</span>
+    <span class="btype-count">${plotsCount}</span>
+  </div>`;
+
+  return `<div class="btype-tree">
+    ${plotsRow}
+    ${plotsCollapsed ? '' : renderChildren(null, 1, new Set())}
+  </div>`;
+}
+
+let _btypeEditId = null;
+
+function openAddBoundaryTypeModal() {
+  _btypeEditId = null;
+  _openBtypeModal(t('boundary_types.modal_add_title'), '', null);
+}
+
+function openEditBoundaryTypeModal(id) {
+  const type = data.boundaryTypes.find(t => t.id === id);
+  if (!type) return;
+  _btypeEditId = id;
+  _openBtypeModal(t('boundary_types.modal_edit_title'), type.name, type.primitiveId);
+}
+
+function _openBtypeModal(title, name, primitiveId) {
+  // Build primitive options: all types except the one being edited
+  const options = data.boundaryTypes
+    .filter(t => t.id !== _btypeEditId)
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map(t => `<option value="${esc(t.id)}"${t.id === primitiveId ? ' selected' : ''}>${esc(t.name)}</option>`)
+    .join('');
+
+  openModal(title, `
+    <div class="form-group">
+      <label>${t('boundary_types.name_label')}</label>
+      <input type="text" id="btype-name" value="${esc(name)}"
+             placeholder="${t('boundary_types.name_placeholder')}" autocomplete="off">
+    </div>
+    <div class="form-group">
+      <label>${t('boundary_types.primitive_label')}</label>
+      <p class="text-dim" style="font-size:12px;margin-bottom:6px">${t('boundary_types.primitive_help')}</p>
+      <select id="btype-primitive">
+        <option value=""${!primitiveId ? ' selected' : ''}>${t('boundary_types.plots_implicit')}</option>
+        ${options}
+      </select>
+    </div>
+  `, `
+    <button class="btn" onclick="closeModal()">${t('btn.cancel')}</button>
+    <button class="btn btn-primary" onclick="saveBoundaryType()">${t('btn.save')}</button>
+  `);
+  setTimeout(() => document.getElementById('btype-name')?.focus(), 50);
+}
+
+function saveBoundaryType() {
+  const nameEl = document.getElementById('btype-name');
+  const primEl = document.getElementById('btype-primitive');
+  if (!nameEl || !primEl) return;
+
+  const name        = nameEl.value.trim();
+  const primitiveId = primEl.value || null;
+
+  if (!name) {
+    toast(t('boundary_types.error_name_empty'), 'error'); return;
+  }
+  const duplicate = data.boundaryTypes.find(
+    t => t.name.toLowerCase() === name.toLowerCase() && t.id !== _btypeEditId
+  );
+  if (duplicate) {
+    toast(t('boundary_types.error_name_duplicate', { name }), 'error'); return;
+  }
+  if (_hasBtypeCycle(_btypeEditId, primitiveId)) {
+    toast(t('boundary_types.error_cycle'), 'error'); return;
+  }
+
+  if (_btypeEditId) {
+    const type = data.boundaryTypes.find(t => t.id === _btypeEditId);
+    if (type) { type.name = name; type.primitiveId = primitiveId; }
+  } else {
+    data.boundaryTypes.push({ id: uid(), name, primitiveId });
+  }
+
+  save();
+  closeModal();
+  renderBoundaryTypes();
+}
+
+function _hasBtypeCycle(editId, proposedPrimitiveId) {
+  // Returns true if setting editId.primitiveId = proposedPrimitiveId creates a cycle.
+  // For new types (editId = null) no cycle is possible yet.
+  if (!editId || !proposedPrimitiveId) return false;
+  let cur = proposedPrimitiveId;
+  const seen = new Set();
+  while (cur) {
+    if (cur === editId) return true;
+    if (seen.has(cur)) break;
+    seen.add(cur);
+    cur = data.boundaryTypes.find(t => t.id === cur)?.primitiveId ?? null;
+  }
+  return false;
+}
+
+function deleteBoundaryType(id) {
+  const type = data.boundaryTypes.find(t => t.id === id);
+  if (!type) return;
+
+  const inUse = data.boundaries.filter(b => b.typeId === id).length;
+  if (inUse > 0) {
+    toast(t('boundary_types.error_has_boundaries', { name: type.name, n: inUse }), 'error');
+    return;
+  }
+
+  // Warn if other types use this as their primitive
+  const dependents = data.boundaryTypes.filter(t => t.primitiveId === id);
+  const msg = dependents.length > 0
+    ? t('boundary_types.confirm_delete_with_deps', {
+        name: type.name,
+        deps: dependents.map(t => t.name).join(', ')
+      })
+    : t('boundary_types.confirm_delete', { name: type.name });
+
+  appConfirm(msg, () => {
+    // Detach dependents: set their primitiveId to what the deleted type pointed at
+    dependents.forEach(dep => { dep.primitiveId = type.primitiveId; });
+    data.boundaryTypes = data.boundaryTypes.filter(t => t.id !== id);
+    save();
+    toast(t('boundary_types.deleted_toast', { name: type.name }), 'success');
+    renderBoundaryTypes();
+  });
+}
+
 function renderSettings() {
   const el = document.getElementById('settings-content');
   if (!el) return;
