@@ -8,6 +8,7 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <link rel="stylesheet" href="styles.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
 </head>
 <body>
 
@@ -27,12 +28,13 @@
       <div class="nav-item active" data-tab="dashboard" onclick="switchTab('dashboard')"><span class="nav-icon">◫</span> <span data-t="nav.dashboard">Dashboard</span></div>
       <div class="nav-item" data-tab="plots" onclick="switchTab('plots')"><span class="nav-icon">▱</span> <span data-t="nav.plots">Plots</span></div>
       <div class="nav-item" data-tab="boundary-types" onclick="switchTab('boundary-types')"><span class="nav-icon">≡</span> <span data-t="nav.boundary_types">Boundary Types</span></div>
+      <div class="nav-item" data-tab="boundaries" onclick="switchTab('boundaries')"><span class="nav-icon">⬢</span> <span data-t="nav.boundaries">Boundaries</span></div>
       <div class="nav-item" data-tab="map" onclick="switchTab('map')"><span class="nav-icon">🗺</span> <span data-t="nav.map">Map</span></div>
       <div class="nav-section" data-t="nav_section.system">System</div>
       <div class="nav-item" data-tab="settings" onclick="switchTab('settings')"><span class="nav-icon">⚙</span> <span data-t="nav.settings">Settings</span></div>
       <div class="nav-item" data-tab="import-export" onclick="switchTab('import-export')"><span class="nav-icon">⇅</span> <span data-t="nav.import_export">Import / Export</span></div>
       <div class="spacer"></div>
-      <div style="padding:8px 16px;font-size:10px;color:var(--text-muted);font-family:var(--font-mono);opacity:0.6">v0.0.8</div>
+      <div style="padding:8px 16px;font-size:10px;color:var(--text-muted);font-family:var(--font-mono);opacity:0.6">v0.1.1</div>
     </nav>
     <div class="content">
 
@@ -53,6 +55,12 @@
       <div class="tab-panel" id="panel-boundary-types">
         <div class="page-header"><div><h1 data-t="page.boundary_types">Boundary Types</h1><div class="subtitle" data-t="subtitle.boundary_types">Define the region hierarchy for this project</div></div></div>
         <div id="boundary-types-content"></div>
+      </div>
+
+      <!-- BOUNDARIES -->
+      <div class="tab-panel" id="panel-boundaries">
+        <div class="page-header"><div><h1 data-t="page.boundaries">Boundaries</h1><div class="subtitle" data-t="subtitle.boundaries">Group plots and sub-boundaries into regions</div></div></div>
+        <div id="boundaries-content"></div>
       </div>
 
       <!-- MAP -->
@@ -93,7 +101,9 @@
 <script src="js/core.js"></script>
 <script src="js/osm.js"></script>
 <script src="js/plots.js"></script>
+<script src="js/boundaries.js"></script>
 <script src="js/overpass.js"></script>
+<script src="js/subdivide.js"></script>
 <script src="js/persistence.js"></script>
 <script src="js/ui.js"></script>
 <script src="js/map.js"></script>

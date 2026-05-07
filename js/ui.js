@@ -85,6 +85,7 @@ function switchTab(tab) {
     dashboard: renderDashboard,
     plots: renderPlots,
     'boundary-types': renderBoundaryTypes,
+    boundaries: renderBoundaries,
     map: () => { if (!_map) initMap(); else { _map.invalidateSize(); redrawMapPlots(); } },
     settings: renderSettings,
     'import-export': renderImportExport

@@ -13,9 +13,11 @@
 //   ogfRelationId,      // optional, nullable
 //   outers: [[wayId, ...], ...],  // list of outer rings
 //   inners: [[wayId, ...], ...],  // list of inner rings (holes)
+//   flags: [string, ...],         // issue flags; surfaced in Brick 14
+//                                 // known values: 'subdivision_remainder'
 // }
 
-function createPlot({ name, notes, ogfRelationId, outers, inners }) {
+function createPlot({ name, notes, ogfRelationId, outers, inners, flags }) {
   const plot = {
     id: uid(),
     name: name || '',
@@ -23,6 +25,7 @@ function createPlot({ name, notes, ogfRelationId, outers, inners }) {
     ogfRelationId: ogfRelationId || null,
     outers: outers || [],
     inners: inners || [],
+    flags: flags || [],
   };
   data.plots.push(plot);
   return plot;

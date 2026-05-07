@@ -301,6 +301,7 @@ input[type="checkbox"]:checked::after {
   font-family: var(--font-body); font-size: 12px; box-shadow: var(--shadow);
 }
 .leaflet-tooltip::before { display: none; }
+.leaflet-interactive { outline: none; }
 
 /* ============================================================
    IMPORT MODAL
@@ -323,7 +324,7 @@ input[type="checkbox"]:checked::after {
 .import-tag-row input[type="text"] { font-family: var(--font-mono); font-size: 12px; }
 
 .import-result-list {
-  list-style: none; padding: 0; margin: 8px 0 0; max-height: 160px; overflow-y: auto;
+  list-style: none; padding: 0; margin: 8px 0 0; max-height: 220px; overflow-y: auto;
   font-size: 12px;
 }
 .import-result-list li { padding: 3px 0; }
@@ -333,6 +334,61 @@ input[type="checkbox"]:checked::after {
 }
 .import-result-mark.ok { color: var(--success); }
 .import-result-mark.warn { color: var(--warn); }
+.import-result-mark.muted { color: var(--text-muted); }
+.subdivide-section-label {
+  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--text-muted); margin: 10px 0 2px;
+}
+.subdivide-children {
+  list-style: none; padding: 0; margin: 2px 0 2px 20px;
+}
+.plot-flag-badge {
+  font-size: 11px; color: var(--warn); margin-left: 5px; vertical-align: middle; cursor: default;
+}
+.plot-flags-block {
+  margin: 10px 0 0; padding: 8px 10px; background: var(--warn-dim); border: 1px solid var(--warn);
+  border-radius: var(--radius-sm); display: flex; flex-direction: column; gap: 4px;
+}
+.plot-flag-row { font-size: 12px; color: var(--warn); display: flex; align-items: flex-start; gap: 6px; }
+.plot-flag-icon { flex-shrink: 0; }
+
+/* ============================================================
+   BOUNDARIES (Brick 6a)
+   ============================================================ */
+.boundary-members-section {
+  margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border);
+}
+.boundary-member-list {
+  display: flex; flex-direction: column; gap: 4px; max-height: 220px; overflow-y: auto;
+  border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 6px;
+}
+.boundary-member-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 6px 8px; background: var(--bg-input); border-radius: var(--radius-sm);
+}
+.boundary-member-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.boundary-member-name { font-size: 13px; }
+.boundary-member-type { font-size: 11px; }
+.boundary-picker-section-label {
+  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--text-muted); margin: 12px 0 4px;
+}
+.boundary-picker-row {
+  display: flex; align-items: center; gap: 8px; padding: 6px 8px;
+  border-radius: var(--radius-sm); cursor: pointer; user-select: none;
+}
+.boundary-picker-row:hover { background: var(--bg-hover); }
+.boundary-picker-row.disabled { opacity: 0.45; cursor: not-allowed; }
+.boundary-picker-row.disabled:hover { background: transparent; }
+.boundary-picker-row.current { background: var(--success-dim); }
+.boundary-picker-row.current:hover { background: var(--success-dim); }
+.boundary-picker-row input[type="checkbox"] { flex-shrink: 0; cursor: pointer; }
+.boundary-picker-row.disabled input[type="checkbox"] { cursor: not-allowed; }
+.boundary-picker-claimed {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--warn); margin-left: 4px;
+}
+#boundary-picker-list { max-height: 360px; overflow-y: auto; padding-right: 4px; }
 
 /* ============================================================
    BOUNDARY TYPE TREE (Brick 4)

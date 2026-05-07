@@ -197,10 +197,12 @@ function parseImport(json) {
     const inners = innerWays.length > 0 ? groupWaysIntoRings(innerWays) : [];
     if (!outers || !inners) { skipped++; continue; }
 
+    const tags = rel.tags || {};
+    const localName = tags[`name:${_lang}`] || tags.name || '';
     const candidate = {
       ogfRelationId: rel.id,
-      name: (rel.tags && rel.tags.name) || '',
-      tags: rel.tags || {},
+      name: localName,
+      tags,
       outers,
       inners,
     };

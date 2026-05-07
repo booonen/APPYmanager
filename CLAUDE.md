@@ -384,13 +384,36 @@ they come up; the plan is a living document.
   modal with editable name + notes (auto-save on blur), read-only
   metadata, an inset Leaflet map, and a Delete button (appConfirm;
   orphan osm nodes/ways kept for adjacent-plot safety).
-- **Brick 4** ✓ (PR open on `feature/brick-4-boundary-types`) —
-  boundary-type schema editor. Boundary Types tab added to nav.
-  Hierarchy card shows level ladder (highest → implicit plots at 0)
-  with chips per level and ▾ connectors. Types table with Add / Edit /
-  Delete (delete blocked if any boundary uses the type). Add/Edit modal
-  validates name (non-empty, no duplicates), level (integer ≥ 1).
-  Bootstrap: Country (3) / Province (2) / Municipality (1) seeded on
-  first visit of the tab.
-- **Brick 5** (next) — smaller-boundary Overpass import + auto-subdivision.
-  See Phase 2 above.
+- **Brick 4** ✓ (merged to main) — boundary-type schema editor. Boundary
+  Types tab added to nav. Hierarchy card shows bottom-up collapsible tree
+  (Plots → Municipality → Province → Country) with `primitiveId` model
+  (each type declares what it *contains*). Types table rolled into the tree
+  with count badges. Add/Edit/Delete with cycle detection and dep-relinking
+  on delete. Bootstrap: Country / Province / Municipality seeded on first
+  visit. Transitive containment + exclusivity rules for Brick 6 documented
+  in CLAUDE.md.
+- **Brick 5a** ✓ (PR open on `feature/brick-5a-subdivide`) — smaller-boundary
+  import + auto-subdivision. Turf.js v6 added via CDN. `js/subdivide.js`
+  new geometry engine: classifies candidates as free vs. subdividers, computes
+  `turf.intersect` / `turf.difference` per parent plot, stores results as local
+  negative-id OSM nodes+ways, creates sub-plots and remainder plots (≥ 1 ha).
+  Import preview shows split tree (parent → children + remainder). Commit
+  replaces parent plots with sub-plots in place. Snap tolerance deferred to 5b.
+- **Brick 5b** ✓ (PR open on `feature/brick-5a-subdivide`) — snap tolerance:
+  configurable metres-to-degrees threshold stored in `data.settings.snapToleranceM`
+  (default 10 m). Before Turf intersection, candidate vertices within tolerance
+  of parent-plot vertices are snapped onto them, eliminating hairline slivers
+  from independently-drawn OGF borders. Also: `parseImport` now prefers
+  `name:<lang>` tags over `name=*` when a localised tag is present, using
+  the current `_lang` value.
+- **Brick 6a** ✓ (PR open on `feature/brick-6a-boundaries`) — boundary entities,
+  table-driven. New `js/boundaries.js` data layer + Boundaries sidebar tab.
+  Searchable/sortable list (Name / Type / Members / Area). Detail modal with
+  editable name+notes, members list with Remove, type-locked-after-creation.
+  Member picker modal: search-filtered, grouped by section (Plots first, then
+  each boundary type in the type-chain below the parent). Enforces transitive
+  containment (entire primitiveId chain is eligible, not just immediate primitive)
+  and exclusivity (already-claimed items render disabled with a `claimed` tag).
+  No map rendering yet — that's Brick 6b.
+- **Brick 6b** (next) — map layer toggle per boundary type, dissolved geometry
+  via Turf union, single-click popup, double-click drill-through to sub-boundaries.

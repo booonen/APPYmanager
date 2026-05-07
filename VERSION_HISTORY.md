@@ -1,3 +1,71 @@
+## 0.1.1 — Brick 6a: boundary entities (table-driven core)
+- New **`js/boundaries.js`** data layer: `createBoundary`, type-chain
+  walkers (`_typeChainBelow`, `_typeChainReachesPlots`),
+  `buildClaimedSet`, `getEligibleMembers`, `flattenBoundaryToPlotIds`,
+  `boundaryArea` (sum of transitively-contained plot areas).
+- New **Boundaries** sidebar tab between Boundary Types and Map.
+  Searchable + sortable table (Name / Type / Members / Area).
+  Empty states for "no types defined yet" (redirects to Boundary Types)
+  and "no boundaries yet" (with create button).
+- **Create modal** — name + type selector. Type cannot be changed after
+  creation (changing it would invalidate already-assigned members);
+  delete + recreate to switch.
+- **Detail modal** — editable name + notes (auto-save on blur), type /
+  ID / total-area metadata trio, members list with per-row Remove,
+  "+ Add members" button, Delete at the footer with `appConfirm`.
+- **Member picker modal** — search-filtered list grouped by section
+  (Plots first, then each eligible boundary type). Items already in
+  the boundary render as checked + disabled (current); items claimed
+  by another boundary render greyed out with a `claimed` tag.
+  Footer shows live count + an `Add N` primary button. Replaces the
+  detail modal in the single modal slot; on Cancel/Add we reopen the
+  detail modal so state stays continuous.
+- **Rule enforcement** in `getEligibleMembers`:
+  - **Transitive containment** — eligible types are the entire
+    primitiveId chain below the parent, not just the immediate primitive.
+    Plots are eligible whenever the chain bottoms out at null.
+  - **Exclusivity** — `buildClaimedSet` indexes every plot/boundary
+    already a direct member of any boundary; the picker hides those
+    behind a `disabled + claimed` row, except for the boundary's own
+    current members.
+- Brick 6b (next) — map layer per type, dissolved geometry rendering,
+  click-to-select on map, double-click drill-through.
+
+## 0.1.0 — Brick 5b: snap tolerance + name:lang tag fix
+- **Snap tolerance** — configurable project setting (Settings page, default 10 m,
+  0 = off). Before passing geometries to Turf, candidate boundary vertices
+  within this distance of an existing parent-plot vertex are snapped onto
+  it. Eliminates hairline slivers that arise when two OGF relations describe
+  the same border from different sources with slightly different node positions.
+  Conversion: `toleranceDeg = metres / 111320` (equatorial approximation).
+- **Localised name tags** — `parseImport` now prefers `name:<lang>` (e.g.
+  `name:en`) over the generic `name=*` when the current project language
+  has a matching tag. Falls back to `name=*` if no localised tag is present.
+  Language code comes from `_lang`, so it tracks the Settings language
+  automatically without any hardcoding.
+
+## 0.0.9 — Brick 5a: smaller-boundary import + auto-subdivision (preview)
+- **Turf.js v6** added via CDN — provides polygon intersection, difference,
+  and area for the subdivision engine.
+- **`js/subdivide.js`** — new geometry engine. Classifies imported candidates
+  as "free" (don't overlap any existing plot) or "subdividers" (overlap ≥ 1
+  existing plot). For each overlapping pair it computes
+  `turf.intersect(plot, candidate)` → new sub-plot, and
+  `turf.difference(plot, allCandidates)` → remainder plot.
+  Results are stored as local negative-id nodes + ways via `nextLocalOsmId()`.
+- **Subdivision preview** in the import modal — the result list now shows
+  two sections: "Will subdivide N existing plot(s)" (with an indented
+  child list per parent) and "Will add as new plots" (free candidates).
+  Remainder plots are tagged `(remainder)`.
+- **Commit** replaces each subdivided parent with its pieces + any non-trivial
+  remainder (≥ 1 ha). Parent is removed from `data.plots` after all
+  sub-plots are created. Free candidates are added normally alongside.
+- **Name fallback**: sub-plots take the incoming OGF boundary name if it
+  exists; unnamed remainder plots get `"<parent> (remainder)"`.
+- The old overlap-reject policy is fully replaced — overlapping shapes
+  now trigger subdivision instead of being silently skipped.
+- Brick 5b (snap tolerance) is the next step.
+
 ## 0.0.8 — Brick 4: boundary-type schema editor
 - **Boundary Types tab** added to the nav (between Plots and Map).
 - **Hierarchy card** — visual top-to-bottom ladder showing each level
