@@ -354,11 +354,19 @@ they come up; the plan is a living document.
   (canonical `(._;>;);out body;` query idiom; bbox-aware custom
   query; single-button Import → inline Commit flow; neutral map
   colors; disabled-button styling; no-results toast).
-- **Brick 3** ✓ (PR open on `feature/brick-3-plot-detail`) — plot
-  interaction. Plots tab gained name-search + sortable headers
-  (Name / Area / OGF Relation ID) + Area column (spherical excess,
-  holes subtracted). Row click opens a detail modal with editable
-  name + notes (auto-save on blur), read-only metadata, an inset
-  Leaflet map, and a Delete button (appConfirm; orphan osm stays).
-- **Brick 4** (next, not started) — boundary-type schema editor.
+- **Brick 3** ✓ (merged to main) — plot interaction. Plots tab gained
+  name-search + sortable headers (Name / Area / OGF Relation ID) + Area
+  column (spherical excess, holes subtracted). Row click opens a detail
+  modal with editable name + notes (auto-save on blur), read-only
+  metadata, an inset Leaflet map, and a Delete button (appConfirm;
+  orphan osm nodes/ways kept for adjacent-plot safety).
+- **Brick 4** ✓ (PR open on `feature/brick-4-boundary-types`) —
+  boundary-type schema editor. Boundary Types tab added to nav.
+  Hierarchy card shows level ladder (highest → implicit plots at 0)
+  with chips per level and ▾ connectors. Types table with Add / Edit /
+  Delete (delete blocked if any boundary uses the type). Add/Edit modal
+  validates name (non-empty, no duplicates), level (integer ≥ 1).
+  Bootstrap: Country (3) / Province (2) / Municipality (1) seeded on
+  first visit of the tab.
+- **Brick 5** (next) — smaller-boundary Overpass import + auto-subdivision.
   See Phase 2 above.

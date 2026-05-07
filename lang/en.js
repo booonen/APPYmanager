@@ -13,6 +13,7 @@ registerLanguage('en', 'English', {
   "nav": {
     "dashboard": "Dashboard",
     "plots": "Plots",
+    "boundary_types": "Boundary Types",
     "map": "Map",
     "settings": "Settings",
     "import_export": "Import / Export"
@@ -20,6 +21,7 @@ registerLanguage('en', 'English', {
   "page": {
     "dashboard": "Dashboard",
     "plots": "Plots",
+    "boundary_types": "Boundary Types",
     "map": "Map",
     "settings": "Settings",
     "import_export": "Import / Export"
@@ -27,6 +29,7 @@ registerLanguage('en', 'English', {
   "subtitle": {
     "dashboard": "Project overview at a glance",
     "plots": "All plots in the project",
+    "boundary_types": "Define the region hierarchy for this project",
     "map": "Geographic view of plots and boundaries",
     "settings": "Project configuration",
     "import_export": "Move project data in and out"
@@ -39,6 +42,7 @@ registerLanguage('en', 'English', {
     "close": "Close",
     "cancel": "Cancel",
     "confirm": "Confirm",
+    "save": "Save",
     "new_project": "+ New Project",
     "import_json": "Import JSON",
     "export_json": "Export JSON"
@@ -113,6 +117,30 @@ registerLanguage('en', 'English', {
     "delete_btn": "Delete plot",
     "confirm_delete": "Delete plot \"{name}\"?\nThis cannot be undone.",
     "deleted_toast": "Deleted \"{name}\""
+  },
+  "boundary_types": {
+    "hierarchy_title": "Hierarchy",
+    "types_title": "Types",
+    "add_btn": "Add type",
+    "col_name": "Name",
+    "col_primitive": "Contains",
+    "plots_implicit": "Plots (implicit)",
+    "no_types": "No boundary types defined yet.",
+    "edit_btn": "Edit",
+    "delete_btn": "Delete",
+    "modal_add_title": "Add boundary type",
+    "modal_edit_title": "Edit boundary type",
+    "name_label": "Name",
+    "name_placeholder": "e.g. Province",
+    "primitive_label": "Contains",
+    "primitive_help": "The type this boundary type is made up of. Selecting \"Plots (implicit)\" means this type directly groups plots.",
+    "confirm_delete": "Delete \"{name}\"?\nThis cannot be undone.",
+    "confirm_delete_with_deps": "Delete \"{name}\"?\n\"{deps}\" currently use it as their primitive and will be re-linked to its parent.",
+    "deleted_toast": "Deleted \"{name}\"",
+    "error_name_empty": "Name cannot be empty.",
+    "error_name_duplicate": "\"{name}\" already exists.",
+    "error_cycle": "That would create a cycle in the hierarchy.",
+    "error_has_boundaries": "Cannot delete: {n} boundary(ies) of type \"{name}\" still exist."
   },
   "import": {
     "title": "Import boundary",

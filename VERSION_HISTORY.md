@@ -1,3 +1,21 @@
+## 0.0.8 — Brick 4: boundary-type schema editor
+- **Boundary Types tab** added to the nav (between Plots and Map).
+- **Hierarchy card** — visual top-to-bottom ladder showing each level
+  as a row of chips, with a ▾ connector between levels and an implicit
+  dimmed "Plots" row at level 0.
+- **Types table** — all defined types, sorted by level descending then
+  name, with Edit and Delete actions per row.
+- **Add / Edit modal** — name input + level number input (≥ 1). Saves
+  on "Save", validates: non-empty name, integer level ≥ 1, no duplicate
+  names (case-insensitive). Default level for new types is one above the
+  current highest.
+- **Delete** via `appConfirm`. Blocked if any boundary already uses the
+  type (future-proof guard for Brick 6; no boundaries exist yet).
+- **Bootstrap defaults** — Country (3) / Province (2) / Municipality (1)
+  seeded automatically the first time the tab is visited on a new or
+  pre-Brick-4 save. The user can rename, delete, or extend freely.
+- `btn.save` string added.
+
 ## 0.0.7 — Brick 3: plot interaction
 - Plots tab now has a name-search input (case-insensitive substring)
   and sortable column headers (Name / Area / OGF Relation ID),

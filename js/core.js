@@ -33,6 +33,23 @@ function stripDiacritics(s) { return (s || '').normalize('NFD').replace(/[̀-ͯ]
 function getSetting(key, fallback) { return data.settings?.[key] ?? fallback; }
 function getProjectName() { return data.settings?.projectName || ''; }
 
+// ============================================================
+// BOUNDARY TYPE BOOTSTRAP
+// ============================================================
+// boundaryType = { id, name, primitiveId }
+// primitiveId: id of the type this type *contains*, or null meaning
+// it directly contains Plots. Each type declares exactly one primitive,
+// forming a directed tree (or forest for multi-pronged hierarchies).
+// Cycle detection is enforced at save time.
+function bootstrapBoundaryTypes() {
+  if (data.boundaryTypes.length > 0) return;
+  const muni    = { id: uid(), name: 'Municipality', primitiveId: null };
+  const prov    = { id: uid(), name: 'Province',     primitiveId: muni.id };
+  const country = { id: uid(), name: 'Country',      primitiveId: prov.id };
+  data.boundaryTypes.push(country, prov, muni);
+  save();
+}
+
 function updateSystemName() {
   const el = document.getElementById('system-name-header');
   if (el) el.textContent = getProjectName();
