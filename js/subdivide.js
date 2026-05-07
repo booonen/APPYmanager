@@ -211,10 +211,20 @@ function computeSubdivisionPlan(candidates, nodes, ways) {
       if (!plotsOverlap(c.geometry, resolvePlotGeometry(plot))) continue;
       const pFeature = plotToGeoJSONFeature(plot);
       if (!pFeature) { partial.push({ plot, pFeature: null }); continue; }
-      // Plot is fully inside candidate iff (plot - candidate) is empty / noise.
+
+      // plotsOverlap is a vertex-in-polygon prefilter; bordering plots that
+      // share a vertex on the parent's edge can register as "overlapping"
+      // even though the actual area overlap is zero. Verify with Turf and
+      // skip when the real overlap is below the noise floor.
       let outsideC = null;
       try { outsideC = turf.difference(pFeature, cFeature); } catch (_) {}
-      const fullyInside = !outsideC || turf.area(outsideC) < REMAINDER_NOISE_FLOOR_M2;
+      const pArea       = turf.area(pFeature);
+      const outsideArea = outsideC ? turf.area(outsideC) : 0;
+      const realOverlap = Math.max(0, pArea - outsideArea);
+      if (realOverlap < REMAINDER_NOISE_FLOOR_M2) continue;
+
+      // Plot is fully inside candidate iff (plot - candidate) is empty / noise.
+      const fullyInside = outsideArea < REMAINDER_NOISE_FLOOR_M2;
       if (fullyInside) wrapped.push({ plot, pFeature });
       else             partial.push({ plot, pFeature });
     }

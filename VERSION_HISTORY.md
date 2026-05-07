@@ -1,3 +1,19 @@
+## 0.1.6 — Fix bordering imports treated as overlapping
+- Plots that just *border* an existing plot (share an edge but have no
+  actual area overlap) were being misclassified as overlapping by the
+  vertex-in-polygon prefilter `plotsOverlap` — a vertex sitting exactly
+  on the parent's edge can classify as "inside" depending on
+  floating-point details. The candidate then went through the wrap /
+  partial classification, where `turf.difference` correctly reported no
+  real overlap, so the candidate was lost (no free, no split, no wrap)
+  and the user saw "Nothing new to import".
+- Fix: in the per-plot classification loop, also check the real
+  overlap area via `turf.area(parent) − turf.area(parent − candidate)`.
+  When the real overlap is below the noise floor (1 m²), skip that
+  plot — it lets the candidate fall through to `free` if no other
+  plots actually overlap it. Bordering imports now create new plots
+  as expected.
+
 ## 0.1.5 — Import commit button: never silently disappear
 - Re-importing a relation that's already a plot would classify it as a
   pure wrap with no gap. `newPlotCount` then evaluated to 0 and the
