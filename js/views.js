@@ -1130,6 +1130,27 @@ async function runImportPreview() {
     listHtml += `</ul>`;
   }
 
+  if (plan.wraps && plan.wraps.length > 0) {
+    listHtml += `<div class="subdivide-section-label">${t('import.wrap_section', { n: plan.wraps.length })}</div>`;
+    listHtml += `<ul class="import-result-list">`;
+    for (const w of plan.wraps) {
+      const wrapName = w.candidate.name
+        ? esc(w.candidate.name)
+        : `<span class="text-muted">${t('plots.unnamed')}</span>`;
+      listHtml += `<li><span class="import-result-mark ok">⊕</span> ${wrapName}${w.candidate.ogfRelationId ? ` <span class="text-muted mono">#${w.candidate.ogfRelationId}</span>` : ''} ${t('import.wraps_existing')}`;
+      listHtml += `<ul class="subdivide-children">`;
+      for (const wp of w.wrappedPlots) {
+        const wpName = wp.name ? esc(wp.name) : `<span class="text-muted">${t('plots.unnamed')}</span>`;
+        listHtml += `<li><span class="import-result-mark muted">↳</span> ${wpName} <span class="text-dim" style="font-size:11px">${t('import.kept_as_is')}</span></li>`;
+      }
+      if (w.gapFeature) {
+        listHtml += `<li><span class="import-result-mark muted">⌁</span> <em>${esc(w.candidate.name || '')} ${t('import.remainder')}</em></li>`;
+      }
+      listHtml += `</ul></li>`;
+    }
+    listHtml += `</ul>`;
+  }
+
   if (plan.free.length > 0) {
     listHtml += `<div class="subdivide-section-label">${t('import.subdivide_free_section')}</div>`;
     listHtml += `<ul class="import-result-list">`;
@@ -1165,18 +1186,19 @@ function runImportCommit() {
   executeSubdivisionPlan(_plan, nodes, ways, target);
 
   const splitCount = _plan.splits.length;
+  const wrapCount  = (_plan.wraps || []).length;
   const freeCount  = _plan.free.length;
+  const splitCreated = _plan.splits.reduce((s, sp) => s + sp.pieces.length + (sp.remainder ? 1 : 0), 0);
 
-  if (splitCount > 0) {
-    toast(t('import.subdivided_toast', { split: splitCount, created: _plan.newPlotCount - freeCount }), 'success');
-    if (freeCount > 0) toast(t('import.imported_toast', { n: freeCount }), 'success');
-  } else {
-    toast(t('import.imported_toast', { n: freeCount }), 'success');
-  }
+  if (splitCount > 0) toast(t('import.subdivided_toast', { split: splitCount, created: splitCreated }), 'success');
+  if (wrapCount  > 0) toast(t('import.wrapped_toast',    { n: wrapCount }), 'success');
+  if (freeCount  > 0) toast(t('import.imported_toast',   { n: freeCount }), 'success');
 
   if (target.kind === 'boundary') {
     const typeName = getBoundaryTypeName(target.typeId);
-    const candCount = _plan.free.length + new Set(_plan.splits.flatMap(s => s.pieces.map(p => p.candidate))).size;
+    const candCount = _plan.free.length
+      + (_plan.wraps || []).length
+      + new Set(_plan.splits.flatMap(s => s.pieces.map(p => p.candidate))).size;
     toast(t('import.wrapped_as_boundary_toast', { n: candCount, type: typeName }), 'success');
   }
 

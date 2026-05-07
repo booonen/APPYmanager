@@ -1,3 +1,24 @@
+## 0.1.3 — Bottom-up import (wrap mode)
+- Subdivision now detects when an incoming candidate fully **contains**
+  an existing plot, instead of being contained by one. Previously this
+  case was handled as a regular subdivision, which resulted in the
+  existing plot being "subdivided" by a shape larger than itself —
+  producing a duplicate plot with the candidate's name and silently
+  destroying the original. The frequent symptom: importing a Country
+  after Provinces would rename every Province to "Country".
+- New **wrap** classification in `computeSubdivisionPlan`. For each
+  candidate, overlapping plots are split into `wrapped` (fully inside)
+  and `partial` (still subdivides). Wrapped plots are kept as-is; the
+  candidate's gap (area not covered by any overlapping plot) becomes a
+  flagged remainder plot when ≥ 1 m². Mixed candidates (some wrapped,
+  some partial) get both treatments simultaneously.
+- New plan field `plan.wraps`. The import preview gets a "Will wrap N
+  existing plot(s)" section listing the candidate, its wrapped plots
+  ("kept"), and any gap remainder.
+- Importing **as boundary** automatically picks up wrapped plots as
+  members — so importing provinces first then a Country boundary now
+  builds the right hierarchy in one step.
+
 ## 0.1.2 — Brick 6a polish: import-as-boundary + member promotion
 - **Import as boundary** — the import modal now has a "Create as: Plot |
   Boundary [Type]" selector at the top. Plot is the default (existing

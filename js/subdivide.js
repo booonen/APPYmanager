@@ -193,21 +193,59 @@ function snapCandidateToParent(cFeature, pFeature) {
 function computeSubdivisionPlan(candidates, nodes, ways) {
   const free = [];
 
-  // Map: plotId → [{candidate, candidateFeature}]
+  // Per-candidate classification:
+  //   wrapped[]  — existing plots fully inside the candidate (kept as-is, candidate becomes a wrapper)
+  //   partial[]  — existing plots that partially overlap (subdivider case, parent gets replaced)
+  // A candidate may produce both (mixed): wrap the wrapped plots + subdivide the partials.
+  // Pure-partial cases stay on the legacy subdivider path so behaviour is unchanged for top-down imports.
   const subdividersByPlot = new Map();
+  const wraps = [];
 
   for (const c of candidates) {
     const cFeature = candidateToGeoJSONFeature(c, nodes, ways);
     if (!cFeature) { free.push(c); continue; }
 
-    let overlapsAny = false;
+    const wrapped = [];
+    const partial = [];
     for (const plot of data.plots) {
       if (!plotsOverlap(c.geometry, resolvePlotGeometry(plot))) continue;
-      overlapsAny = true;
+      const pFeature = plotToGeoJSONFeature(plot);
+      if (!pFeature) { partial.push({ plot, pFeature: null }); continue; }
+      // Plot is fully inside candidate iff (plot - candidate) is empty / noise.
+      let outsideC = null;
+      try { outsideC = turf.difference(pFeature, cFeature); } catch (_) {}
+      const fullyInside = !outsideC || turf.area(outsideC) < REMAINDER_NOISE_FLOOR_M2;
+      if (fullyInside) wrapped.push({ plot, pFeature });
+      else             partial.push({ plot, pFeature });
+    }
+
+    if (wrapped.length === 0 && partial.length === 0) {
+      free.push(c);
+      continue;
+    }
+
+    // Wrap branch: any fully-contained plots go here. Compute the gap (area
+    // of `c` not covered by ANY overlapping plot, wrapped or partial).
+    if (wrapped.length > 0) {
+      let gap = cFeature;
+      for (const { pFeature } of [...wrapped, ...partial]) {
+        if (!gap) break;
+        if (!pFeature) continue;
+        try { gap = turf.difference(gap, pFeature); } catch (_) { gap = null; break; }
+      }
+      const gapFeature = (gap && turf.area(gap) >= REMAINDER_NOISE_FLOOR_M2) ? gap : null;
+      wraps.push({
+        candidate: c,
+        wrappedPlots: wrapped.map(w => w.plot),
+        gapFeature,
+      });
+    }
+
+    // Subdivider branch: partial overlaps go through the legacy split flow.
+    for (const { plot } of partial) {
       if (!subdividersByPlot.has(plot.id)) subdividersByPlot.set(plot.id, []);
       subdividersByPlot.get(plot.id).push({ candidate: c, cFeature });
     }
-    if (!overlapsAny) free.push(c);
   }
 
   const splits = [];
@@ -256,10 +294,12 @@ function computeSubdivisionPlan(candidates, nodes, ways) {
     }
   }
 
+  const wrapGapCount = wraps.reduce((s, w) => s + (w.gapFeature ? 1 : 0), 0);
   const newPlotCount = free.length
-    + splits.reduce((s, sp) => s + sp.pieces.length + (sp.remainder ? 1 : 0), 0);
+    + splits.reduce((s, sp) => s + sp.pieces.length + (sp.remainder ? 1 : 0), 0)
+    + wrapGapCount;
 
-  return { free, splits, newPlotCount };
+  return { free, splits, wraps, newPlotCount };
 }
 
 // ============================================================
@@ -309,6 +349,24 @@ function executeSubdivisionPlan(plan, nodes, ways, target) {
       const { outers, inners } = storeSubdivisionGeometry(polys);
       createPlot({ name: remainder.name, ogfRelationId: null, outers, inners, flags: ['subdivision_remainder'] });
       // Remainders aren't tied to any incoming candidate, so they don't get wrapped.
+    }
+  }
+
+  // 3b. Wraps: each wrapped existing plot is kept as-is and tracked under
+  // the wrapping candidate so the boundary step picks it up. If the
+  // candidate has a non-trivial gap (area not covered by any wrapped or
+  // partial plot), create a gap plot and track that too.
+  for (const w of (plan.wraps || [])) {
+    for (const wp of w.wrappedPlots) {
+      trackPlot(w.candidate, wp.id);
+    }
+    if (w.gapFeature) {
+      const polys = _normalizeFeature(w.gapFeature);
+      const { outers, inners } = storeSubdivisionGeometry(polys);
+      const baseName = w.candidate.name || '';
+      const gapName  = baseName ? baseName + ' ' + t('import.remainder') : t('import.remainder');
+      const p = createPlot({ name: gapName, ogfRelationId: null, outers, inners, flags: ['subdivision_remainder'] });
+      trackPlot(w.candidate, p.id);
     }
   }
 
