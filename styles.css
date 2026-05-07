@@ -301,6 +301,7 @@ input[type="checkbox"]:checked::after {
   font-family: var(--font-body); font-size: 12px; box-shadow: var(--shadow);
 }
 .leaflet-tooltip::before { display: none; }
+.leaflet-interactive { outline: none; }
 
 /* ============================================================
    IMPORT MODAL
