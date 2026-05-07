@@ -114,6 +114,8 @@ registerLanguage('en', 'English', {
     "ogf_id": "OGF Relation ID",
     "plot_id": "Plot ID",
     "area": "Area",
+    "flags": "Flags",
+    "flag_subdivision_remainder": "Subdivision remainder — review recommended (merge, accept, or re-split).",
     "delete_btn": "Delete plot",
     "confirm_delete": "Delete plot \"{name}\"?\nThis cannot be undone.",
     "deleted_toast": "Deleted \"{name}\""

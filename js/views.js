@@ -114,12 +114,16 @@ function renderPlotsBody() {
     return 0;
   });
 
-  tbody.innerHTML = list.map(p => `
-    <tr class="row-click" onclick="openPlotDetail('${esc(p.id)}')">
-      <td>${p.name ? esc(p.name) : `<span class="text-muted">${t('plots.unnamed')}</span>`}</td>
+  tbody.innerHTML = list.map(p => {
+    const hasFlags = p.flags && p.flags.length > 0;
+    const flagBadge = hasFlags ? ` <span class="plot-flag-badge" title="${p.flags.map(f => t('plot_detail.flag_' + f)).join('; ')}">⚠</span>` : '';
+    const nameCell = (p.name ? esc(p.name) : `<span class="text-muted">${t('plots.unnamed')}</span>`) + flagBadge;
+    return `<tr class="row-click" onclick="openPlotDetail('${esc(p.id)}')">
+      <td>${nameCell}</td>
       <td class="mono">${formatArea(plotArea(p))}</td>
       <td class="mono">${p.ogfRelationId != null ? p.ogfRelationId : '<span class="text-muted">—</span>'}</td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
 
   if (emptyEl) {
     emptyEl.innerHTML = (q && list.length === 0)
@@ -704,6 +708,10 @@ function openPlotDetail(plotId) {
         <div class="plot-detail-meta-value mono">${formatArea(plotArea(plot))}</div>
       </div>
     </div>
+    ${plot.flags && plot.flags.length > 0 ? `
+    <div class="plot-flags-block">
+      ${plot.flags.map(f => `<div class="plot-flag-row"><span class="plot-flag-icon">⚠</span>${t('plot_detail.flag_' + f)}</div>`).join('')}
+    </div>` : ''}
     <div id="plot-detail-map" style="height:240px;margin-top:12px;border-radius:var(--radius);border:1px solid var(--border);overflow:hidden"></div>
   `, `
     <button class="btn btn-danger" style="margin-right:auto" onclick="onPlotDetailDelete()">${t('plot_detail.delete_btn')}</button>

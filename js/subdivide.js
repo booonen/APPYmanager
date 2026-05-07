@@ -13,7 +13,10 @@
 // Local OSM ids: `nextLocalOsmId()` returns decrementing negative
 // integers. One node per vertex, one self-closing way per ring.
 
-const REMAINDER_MIN_AREA_M2 = 10000; // 1 ha — slivers below this are silently dropped
+// Remainders smaller than this are pure floating-point noise from Turf and are
+// dropped silently. Anything above it is kept and flagged 'subdivision_remainder'
+// so Brick 14's issues panel can surface it for user review.
+const REMAINDER_NOISE_FLOOR_M2 = 1;
 
 // ============================================================
 // COORDINATE HELPERS
@@ -187,15 +190,12 @@ function computeSubdivisionPlan(candidates, nodes, ways) {
     }
 
     let remainder = null;
-    if (remainderFeature) {
-      const remArea = turf.area(remainderFeature);
-      if (remArea >= REMAINDER_MIN_AREA_M2) {
-        const base = parentPlot.name || '';
-        remainder = {
-          name: base ? base + ' ' + t('import.remainder') : t('import.remainder'),
-          feature: remainderFeature,
-        };
-      }
+    if (remainderFeature && turf.area(remainderFeature) >= REMAINDER_NOISE_FLOOR_M2) {
+      const base = parentPlot.name || '';
+      remainder = {
+        name: base ? base + ' ' + t('import.remainder') : t('import.remainder'),
+        feature: remainderFeature,
+      };
     }
 
     if (pieces.length > 0) {
@@ -238,7 +238,7 @@ function executeSubdivisionPlan(plan, nodes, ways) {
     if (remainder) {
       const polys = _normalizeFeature(remainder.feature);
       const { outers, inners } = storeSubdivisionGeometry(polys);
-      createPlot({ name: remainder.name, ogfRelationId: null, outers, inners });
+      createPlot({ name: remainder.name, ogfRelationId: null, outers, inners, flags: ['subdivision_remainder'] });
     }
   }
 

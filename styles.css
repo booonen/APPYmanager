@@ -341,6 +341,15 @@ input[type="checkbox"]:checked::after {
 .subdivide-children {
   list-style: none; padding: 0; margin: 2px 0 2px 20px;
 }
+.plot-flag-badge {
+  font-size: 11px; color: var(--warn); margin-left: 5px; vertical-align: middle; cursor: default;
+}
+.plot-flags-block {
+  margin: 10px 0 0; padding: 8px 10px; background: var(--warn-dim); border: 1px solid var(--warn);
+  border-radius: var(--radius-sm); display: flex; flex-direction: column; gap: 4px;
+}
+.plot-flag-row { font-size: 12px; color: var(--warn); display: flex; align-items: flex-start; gap: 6px; }
+.plot-flag-icon { flex-shrink: 0; }
 
 /* ============================================================
    BOUNDARY TYPE TREE (Brick 4)
