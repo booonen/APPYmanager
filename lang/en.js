@@ -80,7 +80,10 @@ registerLanguage('en', 'English', {
   },
   "settings": {
     "language": "Language",
-    "language_desc": "Interface language."
+    "language_desc": "Interface language.",
+    "snap_tolerance": "Snap tolerance",
+    "snap_tolerance_desc": "When subdividing plots, candidate boundary vertices within this distance of an existing plot vertex are snapped onto it. Eliminates hairline gaps from OGF relations that share a border but were drawn from different sources. Set to 0 to disable.",
+    "snap_tolerance_unit": "m"
   },
   "stat": {
     "plots": "Plots",

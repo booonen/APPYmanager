@@ -399,5 +399,10 @@ they come up; the plan is a living document.
   negative-id OSM nodes+ways, creates sub-plots and remainder plots (≥ 1 ha).
   Import preview shows split tree (parent → children + remainder). Commit
   replaces parent plots with sub-plots in place. Snap tolerance deferred to 5b.
-- **Brick 5b** (next) — snap tolerance: merge nearly-coincident vertices across
-  boundaries imported from different OGF sources.
+- **Brick 5b** ✓ (PR open on `feature/brick-5a-subdivide`) — snap tolerance:
+  configurable metres-to-degrees threshold stored in `data.settings.snapToleranceM`
+  (default 10 m). Before Turf intersection, candidate vertices within tolerance
+  of parent-plot vertices are snapped onto them, eliminating hairline slivers
+  from independently-drawn OGF borders. Also: `parseImport` now prefers
+  `name:<lang>` tags over `name=*` when a localised tag is present, using
+  the current `_lang` value.

@@ -1,3 +1,16 @@
+## 0.1.0 — Brick 5b: snap tolerance + name:lang tag fix
+- **Snap tolerance** — configurable project setting (Settings page, default 10 m,
+  0 = off). Before passing geometries to Turf, candidate boundary vertices
+  within this distance of an existing parent-plot vertex are snapped onto
+  it. Eliminates hairline slivers that arise when two OGF relations describe
+  the same border from different sources with slightly different node positions.
+  Conversion: `toleranceDeg = metres / 111320` (equatorial approximation).
+- **Localised name tags** — `parseImport` now prefers `name:<lang>` (e.g.
+  `name:en`) over the generic `name=*` when the current project language
+  has a matching tag. Falls back to `name=*` if no localised tag is present.
+  Language code comes from `_lang`, so it tracks the Settings language
+  automatically without any hardcoding.
+
 ## 0.0.9 — Brick 5a: smaller-boundary import + auto-subdivision (preview)
 - **Turf.js v6** added via CDN — provides polygon intersection, difference,
   and area for the subdivision engine.

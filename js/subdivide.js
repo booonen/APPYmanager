@@ -122,6 +122,56 @@ function _storeRingAsWay(ring) {
 }
 
 // ============================================================
+// SNAP
+// ============================================================
+// Before handing geometries to Turf, snap the candidate's vertices
+// toward the nearest vertex of the parent plot within the tolerance.
+// One-directional: only the candidate is modified (returned as a new
+// feature); the parent stays canonical. This eliminates the tiny slivers
+// that arise when two OGF sources describe the same border with slightly
+// different node positions.
+//
+// toleranceDeg: max snap distance in degrees. Convert from metres using
+//   toleranceDeg = snapToleranceM / 111320
+// Pass 0 to disable (no-op returns the original feature).
+
+function _collectGeoJSONVerts(feature) {
+  const geom = feature.geometry;
+  const groups = geom.type === 'Polygon' ? geom.coordinates : geom.coordinates.flat(1);
+  const out = [];
+  for (const ring of groups) for (const pt of ring) out.push(pt);
+  return out;
+}
+
+function _snapFeatureToVerts(feature, targetVerts, toleranceDeg) {
+  // Returns a deep-cloned copy of feature with vertices snapped.
+  const clone = JSON.parse(JSON.stringify(feature));
+  const geom = clone.geometry;
+  const groups = geom.type === 'Polygon' ? geom.coordinates : geom.coordinates.flat(1);
+  for (const ring of groups) {
+    for (let i = 0; i < ring.length; i++) {
+      const v = ring[i]; // [lon, lat]
+      let bestDist = toleranceDeg;
+      let snap = null;
+      for (const t of targetVerts) {
+        const d = Math.sqrt((v[0] - t[0]) ** 2 + (v[1] - t[1]) ** 2);
+        if (d < bestDist) { bestDist = d; snap = t; }
+      }
+      if (snap) ring[i] = [snap[0], snap[1]];
+    }
+  }
+  return clone;
+}
+
+function snapCandidateToParent(cFeature, pFeature) {
+  const toleranceM  = getSetting('snapToleranceM', 10);
+  const toleranceDeg = Number(toleranceM) / 111320;
+  if (!(toleranceDeg > 0)) return cFeature;
+  const parentVerts = _collectGeoJSONVerts(pFeature);
+  return _snapFeatureToVerts(cFeature, parentVerts, toleranceDeg);
+}
+
+// ============================================================
 // SUBDIVISION PLAN
 // ============================================================
 // A "plan" is pure data — no side effects on data.osm / data.plots.
@@ -172,8 +222,10 @@ function computeSubdivisionPlan(candidates, nodes, ways) {
     let remainderFeature = pFeature;
 
     for (const { candidate: c, cFeature } of entries) {
+      const cSnapped = snapCandidateToParent(cFeature, pFeature);
+
       let intersection = null;
-      try { intersection = turf.intersect(pFeature, cFeature); } catch (_) {}
+      try { intersection = turf.intersect(pFeature, cSnapped); } catch (_) {}
       if (!intersection || turf.area(intersection) < 1) continue;
 
       pieces.push({
@@ -183,7 +235,7 @@ function computeSubdivisionPlan(candidates, nodes, ways) {
       });
 
       if (remainderFeature) {
-        try { remainderFeature = turf.difference(remainderFeature, cFeature); } catch (_) {
+        try { remainderFeature = turf.difference(remainderFeature, cSnapped); } catch (_) {
           remainderFeature = null;
         }
       }

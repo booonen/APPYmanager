@@ -358,13 +358,32 @@ function renderSettings() {
   const langOpts = _availableLanguages.map(l =>
     `<option value="${l.code}"${l.code === _lang ? ' selected' : ''}>${esc(l.name)}</option>`
   ).join('');
+  const snapVal = getSetting('snapToleranceM', 10);
   el.innerHTML = `
     <div class="ie-card">
       <h3>${t('settings.language')}</h3>
       <p>${t('settings.language_desc')}</p>
       <select onchange="setLanguage(this.value)" style="max-width:240px">${langOpts}</select>
     </div>
+    <div class="ie-card">
+      <h3>${t('settings.snap_tolerance')}</h3>
+      <p>${t('settings.snap_tolerance_desc')}</p>
+      <div class="flex" style="align-items:center;gap:8px;margin-top:8px">
+        <input type="number" min="0" max="1000" step="1"
+          value="${esc(snapVal)}"
+          onchange="onSnapToleranceChange(this.value)"
+          style="max-width:100px">
+        <span class="text-dim">${t('settings.snap_tolerance_unit')}</span>
+      </div>
+    </div>
   `;
+}
+
+function onSnapToleranceChange(val) {
+  const n = Math.max(0, Math.round(Number(val) || 0));
+  data.settings = data.settings || {};
+  data.settings.snapToleranceM = n;
+  save();
 }
 
 function renderImportExport() {
