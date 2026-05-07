@@ -352,6 +352,456 @@ function deleteBoundaryType(id) {
   });
 }
 
+// ============================================================
+// BOUNDARIES — list view (Brick 6a)
+// ============================================================
+// Boundaries group plots and sub-boundaries. Hierarchy is enforced via
+// the type's primitiveId chain (transitive containment) and global
+// exclusivity (every plot/boundary has ≤ 1 direct parent). Map rendering
+// + drill-through arrives in Brick 6b.
+
+let _boundariesSort = { column: 'name', direction: 'asc' };
+let _boundariesSearch = '';
+
+function renderBoundaries() {
+  const el = document.getElementById('boundaries-content');
+  if (!el) return;
+  bootstrapBoundaryTypes();
+
+  // Without any boundary types we can't create boundaries; show a redirect.
+  if (data.boundaryTypes.length === 0) {
+    el.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-icon">≡</div>
+        <h3>${t('boundaries.no_types_title')}</h3>
+        <p>${t('boundaries.no_types_body')}</p>
+        <button class="btn btn-primary" onclick="switchTab('boundary-types')">${t('nav.boundary_types')}</button>
+      </div>`;
+    return;
+  }
+
+  const all = data.boundaries;
+  const top = `
+    <div class="flex" style="justify-content:space-between;align-items:center;margin-bottom:12px">
+      <button class="btn btn-primary" onclick="openCreateBoundaryModal()">${t('boundaries.add_btn')}</button>
+      <span class="text-dim" style="font-size:12px">${t('boundaries.count', { n: all.length })}</span>
+    </div>`;
+
+  if (all.length === 0) {
+    el.innerHTML = top + `
+      <div class="empty-state">
+        <div class="empty-icon">⬢</div>
+        <h3>${t('boundaries.empty_title')}</h3>
+        <p>${t('boundaries.empty_body')}</p>
+        <button class="btn btn-primary" onclick="openCreateBoundaryModal()">${t('boundaries.add_btn')}</button>
+      </div>`;
+    return;
+  }
+
+  el.innerHTML = top + `
+    <div style="margin-bottom:12px">
+      <input type="text" id="boundaries-search-input"
+        placeholder="${t('boundaries.search_placeholder')}"
+        oninput="onBoundariesSearch(this.value)"
+        value="${esc(_boundariesSearch)}"
+        autocomplete="off"
+        style="max-width:320px">
+    </div>
+    <table class="data-table">
+      <thead>
+        <tr>
+          ${boundariesSortHeader('name', t('boundaries.col_name'))}
+          ${boundariesSortHeader('type', t('boundaries.col_type'))}
+          ${boundariesSortHeader('members', t('boundaries.col_members'))}
+          ${boundariesSortHeader('area', t('boundaries.col_area'))}
+        </tr>
+      </thead>
+      <tbody id="boundaries-tbody"></tbody>
+    </table>
+    <div id="boundaries-empty-result"></div>`;
+  _renderBoundariesBody();
+}
+
+function boundariesSortHeader(col, label) {
+  const active = _boundariesSort.column === col;
+  const arrow = active ? (_boundariesSort.direction === 'asc' ? ' ▲' : ' ▼') : '';
+  return `<th class="sortable${active ? ' active' : ''}" onclick="onBoundariesSort('${col}')">${label}${arrow}</th>`;
+}
+
+function _renderBoundariesBody() {
+  const tbody = document.getElementById('boundaries-tbody');
+  const emptyEl = document.getElementById('boundaries-empty-result');
+  if (!tbody) return;
+
+  const q = _boundariesSearch.trim().toLowerCase();
+  let list = data.boundaries;
+  if (q) list = list.filter(b => (b.name || '').toLowerCase().includes(q));
+
+  list = list.slice().sort((a, b) => {
+    const dir = _boundariesSort.direction === 'asc' ? 1 : -1;
+    if (_boundariesSort.column === 'name')    return dir * (a.name || '').localeCompare(b.name || '');
+    if (_boundariesSort.column === 'type')    return dir * getBoundaryTypeName(a.typeId).localeCompare(getBoundaryTypeName(b.typeId));
+    if (_boundariesSort.column === 'members') return dir * (getBoundaryMemberCount(a) - getBoundaryMemberCount(b));
+    if (_boundariesSort.column === 'area')    return dir * (boundaryArea(a) - boundaryArea(b));
+    return 0;
+  });
+
+  tbody.innerHTML = list.map(b => {
+    const hasFlags = b.flags && b.flags.length > 0;
+    const flagBadge = hasFlags ? ` <span class="plot-flag-badge">⚠</span>` : '';
+    const nameCell = (b.name ? esc(b.name) : `<span class="text-muted">${t('boundaries.unnamed')}</span>`) + flagBadge;
+    return `<tr class="row-click" onclick="openBoundaryDetail('${esc(b.id)}')">
+      <td>${nameCell}</td>
+      <td>${esc(getBoundaryTypeName(b.typeId)) || '<span class="text-muted">—</span>'}</td>
+      <td class="mono">${getBoundaryMemberCount(b)}</td>
+      <td class="mono">${formatArea(boundaryArea(b))}</td>
+    </tr>`;
+  }).join('');
+
+  if (emptyEl) {
+    emptyEl.innerHTML = (q && list.length === 0)
+      ? `<div class="text-dim" style="font-size:13px;padding:16px 0">${t('boundaries.no_search_results', { q: esc(_boundariesSearch) })}</div>`
+      : '';
+  }
+}
+
+function onBoundariesSearch(val) {
+  _boundariesSearch = val;
+  _renderBoundariesBody();
+}
+
+function onBoundariesSort(col) {
+  if (_boundariesSort.column === col) {
+    _boundariesSort.direction = _boundariesSort.direction === 'asc' ? 'desc' : 'asc';
+  } else {
+    _boundariesSort.column = col;
+    _boundariesSort.direction = 'asc';
+  }
+  renderBoundaries();
+}
+
+// ============================================================
+// CREATE BOUNDARY MODAL
+// ============================================================
+
+function openCreateBoundaryModal() {
+  const types = data.boundaryTypes.slice().sort((a, b) => a.name.localeCompare(b.name));
+  const typeOpts = types.map(ty =>
+    `<option value="${esc(ty.id)}">${esc(ty.name)}</option>`
+  ).join('');
+
+  openModal(t('boundaries.modal_add_title'), `
+    <div class="form-group">
+      <label>${t('boundaries.name_label')}</label>
+      <input type="text" id="boundary-create-name"
+        placeholder="${t('boundaries.name_placeholder')}" autocomplete="off">
+    </div>
+    <div class="form-group">
+      <label>${t('boundaries.type_label')}</label>
+      <p class="text-dim" style="font-size:12px;margin-bottom:6px">${t('boundaries.type_help')}</p>
+      <select id="boundary-create-type"><option value="">—</option>${typeOpts}</select>
+    </div>
+  `, `
+    <button class="btn" onclick="closeModal()">${t('btn.cancel')}</button>
+    <button class="btn btn-primary" onclick="saveCreateBoundary()">${t('btn.save')}</button>
+  `);
+  setTimeout(() => document.getElementById('boundary-create-name')?.focus(), 50);
+}
+
+function saveCreateBoundary() {
+  const name   = document.getElementById('boundary-create-name')?.value.trim() || '';
+  const typeId = document.getElementById('boundary-create-type')?.value || '';
+  if (!name)   { toast(t('boundaries.error_name_empty'), 'error');   return; }
+  if (!typeId) { toast(t('boundaries.error_type_required'), 'error'); return; }
+
+  const b = createBoundary({ name, typeId });
+  save();
+  closeModal();
+  toast(t('boundaries.created_toast', { name }), 'success');
+  refreshAll();
+  openBoundaryDetail(b.id);
+}
+
+// ============================================================
+// BOUNDARY DETAIL MODAL
+// ============================================================
+
+let _boundaryDetailId = null;
+
+function openBoundaryDetail(boundaryId) {
+  const b = data.boundaries.find(x => x.id === boundaryId);
+  if (!b) return;
+  _boundaryDetailId = boundaryId;
+  const typeName = getBoundaryTypeName(b.typeId);
+
+  const memberRows = (b.members || []).map(m => {
+    const ref = resolveMember(m);
+    const name = ref?.name || (m.kind === 'plot' ? t('plots.unnamed') : t('boundaries.unnamed'));
+    const subType = (m.kind === 'boundary' && ref) ? getBoundaryTypeName(ref.typeId) : t('boundary_detail.kind_plot');
+    const orphan = !ref ? ` <span class="text-muted">(missing)</span>` : '';
+    return `<div class="boundary-member-row">
+      <div class="boundary-member-info">
+        <span class="boundary-member-name">${esc(name)}${orphan}</span>
+        <span class="boundary-member-type text-dim">${esc(subType)}</span>
+      </div>
+      <button class="btn btn-sm btn-danger" onclick="removeBoundaryMember('${esc(m.kind)}','${esc(m.id)}')">${t('boundary_detail.remove_member_btn')}</button>
+    </div>`;
+  }).join('');
+
+  const memberSection = b.members && b.members.length > 0
+    ? `<div class="boundary-member-list">${memberRows}</div>`
+    : `<div class="text-dim" style="font-size:13px;padding:8px 0">${t('boundary_detail.members_empty')}</div>`;
+
+  const flagsBlock = b.flags && b.flags.length > 0 ? `
+    <div class="plot-flags-block">
+      ${b.flags.map(f => `<div class="plot-flag-row"><span class="plot-flag-icon">⚠</span>${t('plot_detail.flag_' + f) || f}</div>`).join('')}
+    </div>` : '';
+
+  openModal(t('boundary_detail.title'), `
+    <div class="form-group">
+      <label>${t('boundary_detail.name_label')}</label>
+      <input type="text" id="boundary-detail-name"
+        value="${esc(b.name || '')}"
+        placeholder="${t('boundary_detail.name_placeholder')}"
+        onblur="onBoundaryDetailSave()">
+    </div>
+    <div class="form-group">
+      <label>${t('boundary_detail.notes_label')}</label>
+      <textarea id="boundary-detail-notes" rows="3"
+        placeholder="${t('boundary_detail.notes_placeholder')}"
+        onblur="onBoundaryDetailSave()">${esc(b.notes || '')}</textarea>
+    </div>
+    <div class="plot-detail-meta">
+      <div>
+        <div class="plot-detail-meta-label">${t('boundary_detail.type')}</div>
+        <div class="plot-detail-meta-value">${esc(typeName) || '—'}</div>
+      </div>
+      <div>
+        <div class="plot-detail-meta-label">${t('boundary_detail.boundary_id')}</div>
+        <div class="plot-detail-meta-value mono">${esc(b.id)}</div>
+      </div>
+      <div>
+        <div class="plot-detail-meta-label">${t('boundary_detail.area')}</div>
+        <div class="plot-detail-meta-value mono">${formatArea(boundaryArea(b))}</div>
+      </div>
+    </div>
+    ${flagsBlock}
+    <div class="boundary-members-section">
+      <div class="flex" style="justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div>
+          <strong>${t('boundary_detail.members_title')}</strong>
+          <span class="text-dim" style="font-size:12px;margin-left:6px">${t('boundary_detail.members_count', { n: b.members?.length || 0 })}</span>
+        </div>
+        <button class="btn btn-sm btn-primary" onclick="openMembersPicker()">${t('boundary_detail.add_members_btn')}</button>
+      </div>
+      ${memberSection}
+    </div>
+  `, `
+    <button class="btn btn-danger" style="margin-right:auto" onclick="onBoundaryDetailDelete()">${t('boundary_detail.delete_btn')}</button>
+    <button class="btn" onclick="closeBoundaryDetail()">${t('btn.close')}</button>
+  `);
+
+  const modalEl = document.getElementById('modal');
+  if (modalEl) modalEl.style.width = '640px';
+}
+
+function onBoundaryDetailSave() {
+  if (!_boundaryDetailId) return;
+  const b = data.boundaries.find(x => x.id === _boundaryDetailId);
+  if (!b) return;
+  const nameEl  = document.getElementById('boundary-detail-name');
+  const notesEl = document.getElementById('boundary-detail-notes');
+  const newName  = nameEl  ? nameEl.value  : b.name;
+  const newNotes = notesEl ? notesEl.value : b.notes;
+  if (b.name === newName && b.notes === newNotes) return;
+  b.name  = newName;
+  b.notes = newNotes;
+  save();
+  _renderBoundariesBody();
+}
+
+function removeBoundaryMember(kind, memberId) {
+  if (!_boundaryDetailId) return;
+  const b = data.boundaries.find(x => x.id === _boundaryDetailId);
+  if (!b) return;
+  b.members = (b.members || []).filter(m => !(m.kind === kind && m.id === memberId));
+  save();
+  openBoundaryDetail(_boundaryDetailId); // re-render in place
+  _renderBoundariesBody();
+}
+
+function onBoundaryDetailDelete() {
+  if (!_boundaryDetailId) return;
+  const b = data.boundaries.find(x => x.id === _boundaryDetailId);
+  if (!b) return;
+  const displayName = b.name || t('boundaries.unnamed');
+  appConfirm(t('boundaries.confirm_delete', { name: displayName }), () => {
+    data.boundaries = data.boundaries.filter(x => x.id !== _boundaryDetailId);
+    save();
+    closeBoundaryDetail();
+    refreshAll();
+    toast(t('boundaries.deleted_toast', { name: displayName }), 'success');
+  });
+}
+
+function closeBoundaryDetail() {
+  onBoundaryDetailSave();
+  _boundaryDetailId = null;
+  closeModal();
+}
+
+// ============================================================
+// MEMBERS PICKER MODAL
+// ============================================================
+// Replaces the detail modal in the single modal slot. On commit/cancel
+// we re-open the detail modal. Selected items live in a Set keyed by
+// "kind:id"; items already in the boundary or claimed elsewhere render
+// as disabled rows.
+
+let _pickerSelected = new Set();
+let _pickerSearch   = '';
+
+function openMembersPicker() {
+  if (!_boundaryDetailId) return;
+  // Capture pending name/notes edits before swapping modal contents.
+  onBoundaryDetailSave();
+  _pickerSelected = new Set();
+  _pickerSearch   = '';
+  const b = data.boundaries.find(x => x.id === _boundaryDetailId);
+  if (!b) return;
+  const typeName = getBoundaryTypeName(b.typeId);
+
+  openModal(t('boundary_picker.title'), `
+    <p class="text-dim" style="font-size:12px;margin-bottom:8px">${t('boundary_picker.intro')}</p>
+    <div style="margin-bottom:10px">
+      <input type="text" id="boundary-picker-search"
+        placeholder="${t('boundary_picker.search_placeholder')}"
+        oninput="onPickerSearch(this.value)"
+        value=""
+        autocomplete="off">
+    </div>
+    <div id="boundary-picker-list" data-type-name="${esc(typeName)}"></div>
+  `, `
+    <span id="boundary-picker-counter" class="text-dim" style="margin-right:auto;font-size:12px">${t('boundary_picker.selected_count', { n: 0 })}</span>
+    <button class="btn" onclick="cancelMembersPicker()">${t('btn.cancel')}</button>
+    <button class="btn btn-primary" id="boundary-picker-add-btn" onclick="commitMembersPicker()" disabled>${t('boundary_picker.add_btn', { n: 0 })}</button>
+  `);
+
+  const modalEl = document.getElementById('modal');
+  if (modalEl) modalEl.style.width = '560px';
+
+  _renderPickerList();
+  setTimeout(() => document.getElementById('boundary-picker-search')?.focus(), 50);
+}
+
+function _renderPickerList() {
+  const listEl = document.getElementById('boundary-picker-list');
+  if (!listEl || !_boundaryDetailId) return;
+  const b = data.boundaries.find(x => x.id === _boundaryDetailId);
+  if (!b) return;
+
+  const eligible = getEligibleMembers(b.typeId, b.id);
+  const q = _pickerSearch.trim().toLowerCase();
+  const filtered = q
+    ? eligible.filter(e => (e.name || '').toLowerCase().includes(q))
+    : eligible;
+
+  if (filtered.length === 0) {
+    const typeName = getBoundaryTypeName(b.typeId);
+    listEl.innerHTML = `<div class="text-dim" style="font-size:13px;padding:12px 0">
+      ${t('boundary_picker.no_eligible', { type: esc(typeName) })}
+    </div>`;
+    return;
+  }
+
+  // Group: plots first, then boundaries grouped by typeName.
+  const plots = filtered.filter(e => e.kind === 'plot');
+  const bys = new Map();
+  for (const e of filtered) {
+    if (e.kind !== 'boundary') continue;
+    const key = e.typeName || '—';
+    if (!bys.has(key)) bys.set(key, []);
+    bys.get(key).push(e);
+  }
+
+  let html = '';
+  if (plots.length > 0) {
+    html += `<div class="boundary-picker-section-label">${t('boundary_picker.section_plots')}</div>`;
+    html += plots.map(_pickerRow).join('');
+  }
+  for (const [typeName, items] of bys) {
+    html += `<div class="boundary-picker-section-label">${t('boundary_picker.section_boundary_type', { type: esc(typeName) })}</div>`;
+    html += items.map(_pickerRow).join('');
+  }
+  listEl.innerHTML = html;
+}
+
+function _pickerRow(e) {
+  const key = e.kind + ':' + e.id;
+  const disabled = e.claimedElsewhere && !e.currentMember;
+  const checked  = e.currentMember || _pickerSelected.has(key);
+  const claimedTag = disabled
+    ? ` <span class="boundary-picker-claimed">${t('boundary_picker.claimed_label')}</span>`
+    : '';
+  const nameDisplay = e.name
+    ? esc(e.name)
+    : `<span class="text-muted">${e.kind === 'plot' ? t('plots.unnamed') : t('boundaries.unnamed')}</span>`;
+  return `<label class="boundary-picker-row${disabled ? ' disabled' : ''}${e.currentMember ? ' current' : ''}">
+    <input type="checkbox"
+      data-key="${esc(key)}"
+      ${checked ? 'checked' : ''}
+      ${disabled || e.currentMember ? 'disabled' : ''}
+      onchange="onPickerToggle('${esc(key)}', this.checked)">
+    <span>${nameDisplay}${claimedTag}</span>
+  </label>`;
+}
+
+function onPickerSearch(val) {
+  _pickerSearch = val;
+  _renderPickerList();
+}
+
+function onPickerToggle(key, checked) {
+  if (checked) _pickerSelected.add(key);
+  else         _pickerSelected.delete(key);
+  const count = _pickerSelected.size;
+  const counter = document.getElementById('boundary-picker-counter');
+  const addBtn  = document.getElementById('boundary-picker-add-btn');
+  if (counter) counter.textContent = t('boundary_picker.selected_count', { n: count });
+  if (addBtn) {
+    addBtn.textContent = t('boundary_picker.add_btn', { n: count });
+    addBtn.disabled = count === 0;
+  }
+}
+
+function commitMembersPicker() {
+  if (!_boundaryDetailId) return;
+  const b = data.boundaries.find(x => x.id === _boundaryDetailId);
+  if (!b) { closeModal(); return; }
+  let added = 0;
+  for (const key of _pickerSelected) {
+    const [kind, id] = key.split(':');
+    if (!(b.members || []).some(m => m.kind === kind && m.id === id)) {
+      b.members = b.members || [];
+      b.members.push({ kind, id });
+      added++;
+    }
+  }
+  if (added > 0) {
+    save();
+    toast(t('boundary_picker.added_toast', { n: added }), 'success');
+  }
+  _pickerSelected.clear();
+  openBoundaryDetail(_boundaryDetailId);
+  _renderBoundariesBody();
+}
+
+function cancelMembersPicker() {
+  _pickerSelected.clear();
+  if (_boundaryDetailId) openBoundaryDetail(_boundaryDetailId);
+  else                   closeModal();
+}
+
 function renderSettings() {
   const el = document.getElementById('settings-content');
   if (!el) return;

@@ -406,3 +406,14 @@ they come up; the plan is a living document.
   from independently-drawn OGF borders. Also: `parseImport` now prefers
   `name:<lang>` tags over `name=*` when a localised tag is present, using
   the current `_lang` value.
+- **Brick 6a** ✓ (PR open on `feature/brick-6a-boundaries`) — boundary entities,
+  table-driven. New `js/boundaries.js` data layer + Boundaries sidebar tab.
+  Searchable/sortable list (Name / Type / Members / Area). Detail modal with
+  editable name+notes, members list with Remove, type-locked-after-creation.
+  Member picker modal: search-filtered, grouped by section (Plots first, then
+  each boundary type in the type-chain below the parent). Enforces transitive
+  containment (entire primitiveId chain is eligible, not just immediate primitive)
+  and exclusivity (already-claimed items render disabled with a `claimed` tag).
+  No map rendering yet — that's Brick 6b.
+- **Brick 6b** (next) — map layer toggle per boundary type, dissolved geometry
+  via Turf union, single-click popup, double-click drill-through to sub-boundaries.

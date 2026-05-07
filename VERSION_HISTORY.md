@@ -1,3 +1,36 @@
+## 0.1.1 — Brick 6a: boundary entities (table-driven core)
+- New **`js/boundaries.js`** data layer: `createBoundary`, type-chain
+  walkers (`_typeChainBelow`, `_typeChainReachesPlots`),
+  `buildClaimedSet`, `getEligibleMembers`, `flattenBoundaryToPlotIds`,
+  `boundaryArea` (sum of transitively-contained plot areas).
+- New **Boundaries** sidebar tab between Boundary Types and Map.
+  Searchable + sortable table (Name / Type / Members / Area).
+  Empty states for "no types defined yet" (redirects to Boundary Types)
+  and "no boundaries yet" (with create button).
+- **Create modal** — name + type selector. Type cannot be changed after
+  creation (changing it would invalidate already-assigned members);
+  delete + recreate to switch.
+- **Detail modal** — editable name + notes (auto-save on blur), type /
+  ID / total-area metadata trio, members list with per-row Remove,
+  "+ Add members" button, Delete at the footer with `appConfirm`.
+- **Member picker modal** — search-filtered list grouped by section
+  (Plots first, then each eligible boundary type). Items already in
+  the boundary render as checked + disabled (current); items claimed
+  by another boundary render greyed out with a `claimed` tag.
+  Footer shows live count + an `Add N` primary button. Replaces the
+  detail modal in the single modal slot; on Cancel/Add we reopen the
+  detail modal so state stays continuous.
+- **Rule enforcement** in `getEligibleMembers`:
+  - **Transitive containment** — eligible types are the entire
+    primitiveId chain below the parent, not just the immediate primitive.
+    Plots are eligible whenever the chain bottoms out at null.
+  - **Exclusivity** — `buildClaimedSet` indexes every plot/boundary
+    already a direct member of any boundary; the picker hides those
+    behind a `disabled + claimed` row, except for the boundary's own
+    current members.
+- Brick 6b (next) — map layer per type, dissolved geometry rendering,
+  click-to-select on map, double-click drill-through.
+
 ## 0.1.0 — Brick 5b: snap tolerance + name:lang tag fix
 - **Snap tolerance** — configurable project setting (Settings page, default 10 m,
   0 = off). Before passing geometries to Turf, candidate boundary vertices
