@@ -1,3 +1,14 @@
+## 0.1.4 — Fix membership rewriting on cross-parent splits
+- When a single imported relation is split across two existing plots
+  (e.g. a city straddling two provinces), each parent plot's owning
+  boundary should keep ownership of *its own* sub-pieces plus its own
+  remainder. The previous logic indexed replacements by candidate, so
+  a parent boundary inherited its sibling's pieces and lost its own
+  remainder. Fix: build the parent→replacement map directly during the
+  per-parent split loop, listing only that parent's own pieces +
+  remainder. Each parent boundary now ends up with exactly the new
+  plots that cover the area its old parent plot covered.
+
 ## 0.1.3 — Bottom-up import (wrap mode)
 - Subdivision now detects when an incoming candidate fully **contains**
   an existing plot, instead of being contained by one. Previously this

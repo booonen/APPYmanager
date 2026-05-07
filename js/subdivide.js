@@ -333,23 +333,34 @@ function executeSubdivisionPlan(plan, nodes, ways, target) {
     trackPlot(c, p.id);
   }
 
-  // 3. Splits: store clipped geometry, create sub-plots, queue parent for removal
+  // 3. Splits: store clipped geometry, create sub-plots, queue parent for removal.
+  // Build the parent → [newPlotId, ...] replacement map AS WE GO so each
+  // parent gets exactly its own pieces + its own remainder (not other
+  // parents' pieces, even when they share a candidate).
   const toRemove = new Set();
+  const parentReplacements = new Map();
   for (const { parentPlot, pieces, remainder } of plan.splits) {
     toRemove.add(parentPlot.id);
+    const ownReplacements = [];
 
     for (const piece of pieces) {
       const polys = _normalizeFeature(piece.feature);
       const { outers, inners } = storeSubdivisionGeometry(polys);
       const p = createPlot({ name: piece.name, ogfRelationId: piece.ogfRelationId, outers, inners });
       trackPlot(piece.candidate, p.id);
+      ownReplacements.push(p.id);
     }
     if (remainder) {
       const polys = _normalizeFeature(remainder.feature);
       const { outers, inners } = storeSubdivisionGeometry(polys);
-      createPlot({ name: remainder.name, ogfRelationId: null, outers, inners, flags: ['subdivision_remainder'] });
-      // Remainders aren't tied to any incoming candidate, so they don't get wrapped.
+      const remP = createPlot({ name: remainder.name, ogfRelationId: null, outers, inners, flags: ['subdivision_remainder'] });
+      // Remainders aren't tied to any incoming candidate (so the boundary
+      // wrap step skips them) but they ARE part of the parent's coverage,
+      // so they belong in the replacement list for the parent's old members.
+      ownReplacements.push(remP.id);
     }
+
+    parentReplacements.set(parentPlot.id, ownReplacements);
   }
 
   // 3b. Wraps: each wrapped existing plot is kept as-is and tracked under
@@ -371,27 +382,15 @@ function executeSubdivisionPlan(plan, nodes, ways, target) {
   }
 
   // 4. Remove replaced parents. Any boundary that had a parent plot as a
-  // direct member is rewritten to instead reference the new sub-plots that
-  // came from it — preserving the visual coverage. Exclusivity is preserved
-  // because the parent itself is gone.
+  // direct member is rewritten to reference the same parent's own
+  // pieces+remainder — preserving visual coverage without leaking to
+  // other parents that happened to share an incoming candidate.
   if (toRemove.size > 0) {
-    // For every parent plot that just got replaced by sub-plots, build the
-    // list of new plot ids that cover it. Boundaries that had the parent
-    // plot as a direct member are rewritten to reference the new sub-plots,
-    // preserving visual coverage.
-    const replacements = new Map();
-    for (const { parentPlot, pieces } of plan.splits) {
-      const ids = [];
-      for (const piece of pieces) {
-        for (const id of (candidateToPlotIds.get(piece.candidate) || [])) ids.push(id);
-      }
-      replacements.set(parentPlot.id, [...new Set(ids)]);
-    }
     for (const b of data.boundaries) {
       const newMembers = [];
       for (const m of (b.members || [])) {
-        if (m.kind === 'plot' && replacements.has(m.id)) {
-          for (const newId of replacements.get(m.id)) {
+        if (m.kind === 'plot' && parentReplacements.has(m.id)) {
+          for (const newId of parentReplacements.get(m.id)) {
             newMembers.push({ kind: 'plot', id: newId });
           }
         } else {
