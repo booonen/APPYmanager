@@ -192,6 +192,15 @@ which rules it implements but does not re-state them in full. Read the
   project bootstraps with population, area, etc.; users add custom
   properties. Property kind (numeric / categorical / percentage) is
   declared per-property along with aggregation rule.
+- **Boundary containment is transitive and exclusive (Brick 6).** The
+  `primitiveId` on a boundary type declares only the *immediate*
+  primitive, but a boundary of type T is allowed to contain anything
+  that sits *anywhere* below T in the chain. This lets mappers skip
+  levels where they have no data (e.g. a Province directly holds Plots
+  where no Municipality has been defined). Simultaneously, membership
+  is exclusive: a plot already inside a sub-municipality cannot also be
+  directly assigned to a parent municipality — the parent already covers
+  it transitively. Overlap = data error, enforced at assignment time.
 
 ### Phase 1 — Geographic foundation
 
@@ -235,6 +244,21 @@ which rules it implements but does not re-state them in full. Read the
   UI: assign plots/sub-boundaries to a parent. Map layer toggle per
   boundary level (show/hide each level independently). Boundary list
   view per type.
+  **Containment rules (critical — read before building):**
+  - **Transitive containment**: a boundary of type T may contain any
+    plot or boundary whose type sits *anywhere* below T in the
+    primitiveId chain — not just the immediate declared primitive.
+    Example: if Province → Municipality → Plot, a Province can directly
+    hold a Municipality *or* a Plot (where no Municipality has been
+    defined for that area yet). This enables variable-depth hierarchies
+    where some municipalities have sub-municipalities and some do not.
+  - **Exclusivity / no-overlap rule**: membership is exclusive. A plot
+    or boundary already assigned to any boundary cannot be assigned to
+    another boundary at the same or higher level. Specifically, if plot
+    P is a member of sub-municipality S, P may not also be directly
+    assigned to municipality M — it is already transitively covered by
+    M through S. Enforce this at assignment time; flag violations in
+    the issues panel (Brick 14).
 
 ### Phase 2.5 — Settlements
 
