@@ -26,25 +26,31 @@ function renderDashboard() {
 }
 
 // ============================================================
-// PLOTS — read-only listing
+// PLOTS — sortable, searchable list
 // ============================================================
-// Brick 2: simple table (Name, OGF Relation ID, Plot ID) + Import
-// button. Sort/search/edit/delete and the row-click detail view all
-// arrive in Brick 3.
+// Brick 3: search by name (substring, case-insensitive), sortable
+// header (Name / Area / OGF Relation ID), Area column. Row click
+// opens the plot-detail modal. The static chrome (search input,
+// import button, table head) renders once per renderPlots call;
+// renderPlotsBody is called separately on search input so the input
+// keeps focus across keystrokes.
+
+let _plotsSort = { column: 'name', direction: 'asc' };
+let _plotsSearch = '';
 
 function renderPlots() {
   const el = document.getElementById('plots-content');
   if (!el) return;
-  const plots = data.plots;
+  const all = data.plots;
 
-  const head = `
-    <div class="flex" style="justify-content:space-between;align-items:center;margin-bottom:16px">
+  const top = `
+    <div class="flex" style="justify-content:space-between;align-items:center;margin-bottom:12px">
       <button class="btn btn-primary" onclick="openImportModal()">+ ${t('plots.import_btn')}</button>
-      <span class="text-dim" style="font-size:12px">${t('plots.count', { n: plots.length })}</span>
+      <span class="text-dim" style="font-size:12px">${t('plots.count', { n: all.length })}</span>
     </div>`;
 
-  if (plots.length === 0) {
-    el.innerHTML = head + `
+  if (all.length === 0) {
+    el.innerHTML = top + `
       <div class="empty-state">
         <div class="empty-icon">▱</div>
         <h3>${t('plots.empty_title')}</h3>
@@ -54,24 +60,87 @@ function renderPlots() {
     return;
   }
 
-  const rows = plots.map(p => `
-    <tr>
-      <td>${p.name ? esc(p.name) : `<span class="text-muted">${t('plots.unnamed')}</span>`}</td>
-      <td class="mono">${p.ogfRelationId != null ? p.ogfRelationId : '<span class="text-muted">—</span>'}</td>
-      <td class="mono text-dim" style="font-size:12px">${esc(p.id)}</td>
-    </tr>`).join('');
-
-  el.innerHTML = head + `
+  el.innerHTML = top + `
+    <div style="margin-bottom:12px">
+      <input type="text" id="plots-search-input"
+        placeholder="${t('plots.search_placeholder')}"
+        oninput="onPlotsSearch(this.value)"
+        value="${esc(_plotsSearch)}"
+        autocomplete="off"
+        style="max-width:320px">
+    </div>
     <table class="data-table">
       <thead>
         <tr>
-          <th>${t('plots.col_name')}</th>
-          <th>${t('plots.col_ogf_id')}</th>
-          <th>${t('plots.col_plot_id')}</th>
+          ${plotsSortHeader('name', t('plots.col_name'))}
+          ${plotsSortHeader('area', t('plots.col_area'))}
+          ${plotsSortHeader('ogfId', t('plots.col_ogf_id'))}
         </tr>
       </thead>
-      <tbody>${rows}</tbody>
-    </table>`;
+      <tbody id="plots-tbody"></tbody>
+    </table>
+    <div id="plots-empty-result"></div>`;
+  renderPlotsBody();
+}
+
+function plotsSortHeader(col, label) {
+  const active = _plotsSort.column === col;
+  const arrow = active ? (_plotsSort.direction === 'asc' ? ' ▲' : ' ▼') : '';
+  return `<th class="sortable${active ? ' active' : ''}" onclick="onPlotsSort('${col}')">${label}${arrow}</th>`;
+}
+
+function renderPlotsBody() {
+  const tbody = document.getElementById('plots-tbody');
+  const emptyEl = document.getElementById('plots-empty-result');
+  if (!tbody) return;
+
+  const q = _plotsSearch.trim().toLowerCase();
+  let list = data.plots;
+  if (q) list = list.filter(p => (p.name || '').toLowerCase().includes(q));
+
+  list = list.slice().sort((a, b) => {
+    const dir = _plotsSort.direction === 'asc' ? 1 : -1;
+    if (_plotsSort.column === 'name') {
+      return dir * (a.name || '').localeCompare(b.name || '');
+    }
+    if (_plotsSort.column === 'area') {
+      return dir * (plotArea(a) - plotArea(b));
+    }
+    if (_plotsSort.column === 'ogfId') {
+      const av = a.ogfRelationId == null ? -Infinity : Number(a.ogfRelationId);
+      const bv = b.ogfRelationId == null ? -Infinity : Number(b.ogfRelationId);
+      return dir * (av - bv);
+    }
+    return 0;
+  });
+
+  tbody.innerHTML = list.map(p => `
+    <tr class="row-click" onclick="openPlotDetail('${esc(p.id)}')">
+      <td>${p.name ? esc(p.name) : `<span class="text-muted">${t('plots.unnamed')}</span>`}</td>
+      <td class="mono">${formatArea(plotArea(p))}</td>
+      <td class="mono">${p.ogfRelationId != null ? p.ogfRelationId : '<span class="text-muted">—</span>'}</td>
+    </tr>`).join('');
+
+  if (emptyEl) {
+    emptyEl.innerHTML = (q && list.length === 0)
+      ? `<div class="text-dim" style="font-size:13px;padding:16px 0">${t('plots.no_search_results', { q: esc(_plotsSearch) })}</div>`
+      : '';
+  }
+}
+
+function onPlotsSearch(val) {
+  _plotsSearch = val;
+  renderPlotsBody();
+}
+
+function onPlotsSort(col) {
+  if (_plotsSort.column === col) {
+    _plotsSort.direction = _plotsSort.direction === 'asc' ? 'desc' : 'asc';
+  } else {
+    _plotsSort.column = col;
+    _plotsSort.direction = 'asc';
+  }
+  renderPlots();
 }
 
 function renderSettings() {
@@ -376,4 +445,103 @@ function setImportPreviewHTML(html) {
 function setImportActionBusy(busy) {
   const btn = document.getElementById('import-action-btn');
   if (btn) btn.disabled = !!busy;
+}
+
+// ============================================================
+// PLOT-DETAIL MODAL — view, edit, delete a single plot
+// ============================================================
+// Brick 3: row click → modal. Name + notes auto-save on blur, delete
+// fires appConfirm. Read-only metadata (OGF id, plot id, area) and
+// an inset Leaflet map for visual confirmation, mirroring the
+// import-preview-map pattern. Map remains the visualiser; this modal
+// is the data-stewardship surface.
+
+let _detailPlotId = null;
+
+function openPlotDetail(plotId) {
+  const plot = data.plots.find(p => p.id === plotId);
+  if (!plot) return;
+  _detailPlotId = plotId;
+
+  openModal(t('plot_detail.title'), `
+    <div class="form-group">
+      <label>${t('plot_detail.name_label')}</label>
+      <input type="text" id="plot-detail-name"
+        value="${esc(plot.name || '')}"
+        placeholder="${t('plot_detail.name_placeholder')}"
+        onblur="onPlotDetailSave()">
+    </div>
+    <div class="form-group">
+      <label>${t('plot_detail.notes_label')}</label>
+      <textarea id="plot-detail-notes" rows="3"
+        placeholder="${t('plot_detail.notes_placeholder')}"
+        onblur="onPlotDetailSave()">${esc(plot.notes || '')}</textarea>
+    </div>
+    <div class="plot-detail-meta">
+      <div>
+        <div class="plot-detail-meta-label">${t('plot_detail.ogf_id')}</div>
+        <div class="plot-detail-meta-value mono">${plot.ogfRelationId != null ? plot.ogfRelationId : '—'}</div>
+      </div>
+      <div>
+        <div class="plot-detail-meta-label">${t('plot_detail.plot_id')}</div>
+        <div class="plot-detail-meta-value mono">${esc(plot.id)}</div>
+      </div>
+      <div>
+        <div class="plot-detail-meta-label">${t('plot_detail.area')}</div>
+        <div class="plot-detail-meta-value mono">${formatArea(plotArea(plot))}</div>
+      </div>
+    </div>
+    <div id="plot-detail-map" style="height:240px;margin-top:12px;border-radius:var(--radius);border:1px solid var(--border);overflow:hidden"></div>
+  `, `
+    <button class="btn btn-danger" style="margin-right:auto" onclick="onPlotDetailDelete()">${t('plot_detail.delete_btn')}</button>
+    <button class="btn" onclick="closePlotDetail()">${t('btn.close')}</button>
+  `);
+
+  const modalEl = document.getElementById('modal');
+  if (modalEl) modalEl.style.width = '640px';
+
+  ensureDetailMap('plot-detail-map');
+  drawDetailPlot(plot);
+}
+
+function onPlotDetailSave() {
+  if (!_detailPlotId) return;
+  const plot = data.plots.find(p => p.id === _detailPlotId);
+  if (!plot) return;
+  const nameEl = document.getElementById('plot-detail-name');
+  const notesEl = document.getElementById('plot-detail-notes');
+  const newName = nameEl ? nameEl.value : plot.name;
+  const newNotes = notesEl ? notesEl.value : plot.notes;
+  if (plot.name === newName && plot.notes === newNotes) return;
+  plot.name = newName;
+  plot.notes = newNotes;
+  save();
+  renderPlotsBody();
+  redrawMapPlots();
+}
+
+function onPlotDetailDelete() {
+  if (!_detailPlotId) return;
+  const plot = data.plots.find(p => p.id === _detailPlotId);
+  if (!plot) return;
+  const displayName = plot.name || t('plots.unnamed');
+  appConfirm(t('plot_detail.confirm_delete', { name: displayName }), () => {
+    const idx = data.plots.findIndex(p => p.id === _detailPlotId);
+    if (idx < 0) return;
+    data.plots.splice(idx, 1);
+    save();
+    closePlotDetail();
+    refreshAll();
+    redrawMapPlots();
+    toast(t('plot_detail.deleted_toast', { name: displayName }), 'success');
+  });
+}
+
+function closePlotDetail() {
+  // Capture any pending edits before tearing down the modal so a click
+  // straight to Close (without blurring the input first) still saves.
+  onPlotDetailSave();
+  _detailPlotId = null;
+  destroyDetailMap();
+  closeModal();
 }

@@ -155,6 +155,25 @@ input[type="checkbox"]:checked::after {
 .data-table .actions-cell { text-align: right; white-space: nowrap; }
 .data-table .actions-cell .btn { margin-left: 4px; }
 
+.data-table th.sortable {
+  cursor: pointer; user-select: none; transition: color var(--transition);
+}
+.data-table th.sortable:hover { color: var(--text); }
+.data-table th.sortable.active { color: var(--accent); }
+
+.data-table tr.row-click { cursor: pointer; }
+
+.plot-detail-meta {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;
+  padding: 12px; margin-bottom: 4px;
+  background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.plot-detail-meta-label {
+  font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--text-muted); margin-bottom: 3px;
+}
+.plot-detail-meta-value { font-size: 13px; color: var(--text); }
+
 .empty-state { text-align: center; padding: 60px 20px; color: var(--text-dim); }
 .empty-state .empty-icon { font-size: 48px; margin-bottom: 16px; opacity: 0.4; }
 .empty-state h3 { font-family: var(--font-display); font-size: 18px; color: var(--text); margin-bottom: 8px; }

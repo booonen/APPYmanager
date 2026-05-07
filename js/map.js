@@ -159,3 +159,46 @@ function destroyPreviewMap() {
   if (_previewLayer) { _previewLayer.clearLayers(); _previewLayer = null; }
   if (_previewMap) { _previewMap.remove(); _previewMap = null; }
 }
+
+// ============================================================
+// DETAIL MAP (inset, inside the plot-detail modal — Brick 3)
+// ============================================================
+// Same pattern as the preview map but rendering a single committed
+// plot. Used inside openPlotDetail so the user can eyeball the
+// geometry without leaving the table-driven Plots context.
+
+let _detailMap = null;
+let _detailLayer = null;
+
+function ensureDetailMap(containerId) {
+  const el = document.getElementById(containerId);
+  if (!el) return null;
+  if (_detailMap) {
+    if (_detailMap._appyContainer === el) return _detailMap;
+    destroyDetailMap();
+  }
+  _detailMap = L.map(el, {
+    center: [0, 0], zoom: 1, minZoom: 1, maxZoom: 19,
+    zoomControl: true, attributionControl: false,
+  });
+  _detailMap._appyContainer = el;
+  L.tileLayer(OGF_TILE_URL, { maxZoom: 19 }).addTo(_detailMap);
+  _detailLayer = L.featureGroup().addTo(_detailMap);
+  setTimeout(() => _detailMap && _detailMap.invalidateSize(), 50);
+  return _detailMap;
+}
+
+function drawDetailPlot(plot) {
+  if (!_detailMap || !_detailLayer) return;
+  _detailLayer.clearLayers();
+  const geo = resolvePlotGeometry(plot);
+  if (!geo.polygons.length) return;
+  const poly = L.polygon(geo.polygons, plotPolygonStyle(false));
+  _detailLayer.addLayer(poly);
+  _detailMap.fitBounds(poly.getBounds(), { padding: [10, 10] });
+}
+
+function destroyDetailMap() {
+  if (_detailLayer) { _detailLayer.clearLayers(); _detailLayer = null; }
+  if (_detailMap) { _detailMap.remove(); _detailMap = null; }
+}

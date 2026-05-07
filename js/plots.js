@@ -136,3 +136,45 @@ function plotsOverlap(geoA, geoB) {
   }
   return false;
 }
+
+// ============================================================
+// AREA
+// ============================================================
+// Spherical-excess approximation — same routine Leaflet's geometryutil
+// plugin uses. WGS84 reference radius gives results within a few percent
+// of true geodesic area for plots up to country-scale, which is plenty
+// for demographic stewardship (no surveying-grade requirement here).
+
+const _EARTH_RADIUS_M = 6378137;
+
+function ringAreaM2(ring) {
+  if (!ring || ring.length < 3) return 0;
+  const d2r = Math.PI / 180;
+  let sum = 0;
+  for (let i = 0; i < ring.length; i++) {
+    const a = ring[i];
+    const b = ring[(i + 1) % ring.length];
+    sum += (b[1] - a[1]) * d2r * (2 + Math.sin(a[0] * d2r) + Math.sin(b[0] * d2r));
+  }
+  return Math.abs(sum * _EARTH_RADIUS_M * _EARTH_RADIUS_M / 2);
+}
+
+function plotArea(plot) {
+  const geo = resolvePlotGeometry(plot);
+  let total = 0;
+  for (const polygon of geo.polygons) {
+    if (polygon.length === 0) continue;
+    total += ringAreaM2(polygon[0]);
+    for (let i = 1; i < polygon.length; i++) {
+      total -= ringAreaM2(polygon[i]);
+    }
+  }
+  return Math.max(0, total);
+}
+
+function formatArea(m2) {
+  if (!isFinite(m2) || m2 <= 0) return '—';
+  if (m2 < 10000) return `${Math.round(m2)} m²`;
+  const km2 = m2 / 1e6;
+  return `${km2.toFixed(2)} km²`;
+}
