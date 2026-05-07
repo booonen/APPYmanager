@@ -1,3 +1,25 @@
+## 0.0.9 — Brick 5a: smaller-boundary import + auto-subdivision (preview)
+- **Turf.js v6** added via CDN — provides polygon intersection, difference,
+  and area for the subdivision engine.
+- **`js/subdivide.js`** — new geometry engine. Classifies imported candidates
+  as "free" (don't overlap any existing plot) or "subdividers" (overlap ≥ 1
+  existing plot). For each overlapping pair it computes
+  `turf.intersect(plot, candidate)` → new sub-plot, and
+  `turf.difference(plot, allCandidates)` → remainder plot.
+  Results are stored as local negative-id nodes + ways via `nextLocalOsmId()`.
+- **Subdivision preview** in the import modal — the result list now shows
+  two sections: "Will subdivide N existing plot(s)" (with an indented
+  child list per parent) and "Will add as new plots" (free candidates).
+  Remainder plots are tagged `(remainder)`.
+- **Commit** replaces each subdivided parent with its pieces + any non-trivial
+  remainder (≥ 1 ha). Parent is removed from `data.plots` after all
+  sub-plots are created. Free candidates are added normally alongside.
+- **Name fallback**: sub-plots take the incoming OGF boundary name if it
+  exists; unnamed remainder plots get `"<parent> (remainder)"`.
+- The old overlap-reject policy is fully replaced — overlapping shapes
+  now trigger subdivision instead of being silently skipped.
+- Brick 5b (snap tolerance) is the next step.
+
 ## 0.0.8 — Brick 4: boundary-type schema editor
 - **Boundary Types tab** added to the nav (between Plots and Map).
 - **Hierarchy card** — visual top-to-bottom ladder showing each level

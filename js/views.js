@@ -561,45 +561,58 @@ async function runImportPreview() {
     return;
   }
 
-  // Partition accept vs. reject by overlap with existing plots.
-  const existingGeos = data.plots.map(p => resolvePlotGeometry(p));
-  for (const c of parsed.candidates) {
-    c._rejected = existingGeos.some(g => plotsOverlap(c.geometry, g));
-  }
-  const accepted = parsed.candidates.filter(c => !c._rejected);
-  const rejected = parsed.candidates.filter(c => c._rejected);
-  parsed._accepted = accepted;
-  parsed._rejected = rejected;
+  // Classify candidates as free (no overlap) vs. subdividers (overlap existing plots).
+  // parseImport already sets candidate.geometry via resolvePlotGeometry.
+  const plan = computeSubdivisionPlan(parsed.candidates, parsed.nodes, parsed.ways);
+  parsed._plan = plan;
   _importPreview = parsed;
 
-  let listHtml = `<ul class="import-result-list">`;
-  for (const c of accepted) {
-    listHtml += `<li><span class="import-result-mark ok">✓</span> ${c.name ? esc(c.name) : `<span class="text-muted">${t('plots.unnamed')}</span>`} <span class="text-muted mono">#${c.ogfRelationId}</span></li>`;
-  }
-  for (const c of rejected) {
-    listHtml += `<li class="rejected"><span class="import-result-mark warn">⊘</span> ${c.name ? esc(c.name) : `<span class="text-muted">${t('plots.unnamed')}</span>`} <span class="text-muted mono">#${c.ogfRelationId}</span> <span class="text-muted">— ${t('import.rejected_overlap')}</span></li>`;
-  }
-  listHtml += `</ul>`;
-
+  // ── Build result list HTML ──
   let header = `<div style="font-size:13px"><strong>${t('import.found', { n: parsed.candidates.length })}</strong>`;
   if (parsed.skipped > 0) header += ` <span class="text-dim">(${t('import.skipped', { n: parsed.skipped })})</span>`;
   header += `</div>`;
 
-  let footer = '';
-  if (rejected.length > 0) {
-    footer = `<div style="font-size:12px;color:var(--warn);margin-top:6px">${t('import.rejected_summary', { n: rejected.length })}</div>`;
+  let listHtml = '';
+
+  if (plan.splits.length > 0) {
+    listHtml += `<div class="subdivide-section-label">${t('import.subdivide_section', { n: plan.splits.length })}</div>`;
+    listHtml += `<ul class="import-result-list">`;
+    for (const { parentPlot, pieces, remainder } of plan.splits) {
+      const parentName = parentPlot.name
+        ? esc(parentPlot.name)
+        : `<span class="text-muted">${t('plots.unnamed')}</span>`;
+      listHtml += `<li><span class="import-result-mark warn">⚡</span> ${parentName} ${t('import.subdivide_splits_into')}`;
+      listHtml += `<ul class="subdivide-children">`;
+      for (const piece of pieces) {
+        const pName = piece.name ? esc(piece.name) : `<span class="text-muted">${t('plots.unnamed')}</span>`;
+        listHtml += `<li><span class="import-result-mark ok">✓</span> ${pName}${piece.ogfRelationId ? ` <span class="text-muted mono">#${piece.ogfRelationId}</span>` : ''}</li>`;
+      }
+      if (remainder) {
+        listHtml += `<li><span class="import-result-mark muted">⌁</span> <em>${esc(remainder.name)}</em></li>`;
+      }
+      listHtml += `</ul></li>`;
+    }
+    listHtml += `</ul>`;
   }
 
-  const commitBtn = accepted.length > 0
+  if (plan.free.length > 0) {
+    listHtml += `<div class="subdivide-section-label">${t('import.subdivide_free_section')}</div>`;
+    listHtml += `<ul class="import-result-list">`;
+    for (const c of plan.free) {
+      listHtml += `<li><span class="import-result-mark ok">✓</span> ${c.name ? esc(c.name) : `<span class="text-muted">${t('plots.unnamed')}</span>`}${c.ogfRelationId ? ` <span class="text-muted mono">#${c.ogfRelationId}</span>` : ''}</li>`;
+    }
+    listHtml += `</ul>`;
+  }
+
+  const commitBtn = plan.newPlotCount > 0
     ? `<div class="flex" style="justify-content:flex-end;margin-top:12px">
-         <button class="btn btn-primary" onclick="runImportCommit()">${t('import.commit_btn', { n: accepted.length })}</button>
+         <button class="btn btn-primary" onclick="runImportCommit()">${t('import.commit_btn', { n: plan.newPlotCount })}</button>
        </div>`
     : '';
 
   setImportPreviewHTML(`
     ${header}
     ${listHtml}
-    ${footer}
     <div id="import-preview-map" style="height:240px;margin-top:10px;border-radius:var(--radius);border:1px solid var(--border);overflow:hidden"></div>
     ${commitBtn}
   `);
@@ -609,27 +622,22 @@ async function runImportPreview() {
 }
 
 function runImportCommit() {
-  if (!_importPreview || !_importPreview._accepted || _importPreview._accepted.length === 0) return;
-  const { _accepted, nodes, ways } = _importPreview;
+  if (!_importPreview || !_importPreview._plan) return;
+  const { _plan, nodes, ways } = _importPreview;
+  if (_plan.newPlotCount === 0) return;
 
-  // Merge node/way pool into data.osm (dedupes by OGF id automatically).
-  for (const id of Object.keys(nodes)) {
-    osmAddNode(id, nodes[id].lat, nodes[id].lon);
-  }
-  for (const id of Object.keys(ways)) {
-    osmAddWay(id, ways[id].nodes);
-  }
+  executeSubdivisionPlan(_plan, nodes, ways);
 
-  for (const c of _accepted) {
-    createPlot({
-      name: c.name,
-      ogfRelationId: c.ogfRelationId,
-      outers: c.outers,
-      inners: c.inners,
-    });
+  const splitCount = _plan.splits.length;
+  const freeCount  = _plan.free.length;
+
+  if (splitCount > 0) {
+    toast(t('import.subdivided_toast', { split: splitCount, created: _plan.newPlotCount - freeCount }), 'success');
+    if (freeCount > 0) toast(t('import.imported_toast', { n: freeCount }), 'success');
+  } else {
+    toast(t('import.imported_toast', { n: freeCount }), 'success');
   }
 
-  toast(t('import.imported_toast', { n: _accepted.length }), 'success');
   save();
   closeImportModal();
   refreshAll();

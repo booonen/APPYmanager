@@ -323,7 +323,7 @@ input[type="checkbox"]:checked::after {
 .import-tag-row input[type="text"] { font-family: var(--font-mono); font-size: 12px; }
 
 .import-result-list {
-  list-style: none; padding: 0; margin: 8px 0 0; max-height: 160px; overflow-y: auto;
+  list-style: none; padding: 0; margin: 8px 0 0; max-height: 220px; overflow-y: auto;
   font-size: 12px;
 }
 .import-result-list li { padding: 3px 0; }
@@ -333,6 +333,14 @@ input[type="checkbox"]:checked::after {
 }
 .import-result-mark.ok { color: var(--success); }
 .import-result-mark.warn { color: var(--warn); }
+.import-result-mark.muted { color: var(--text-muted); }
+.subdivide-section-label {
+  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--text-muted); margin: 10px 0 2px;
+}
+.subdivide-children {
+  list-style: none; padding: 0; margin: 2px 0 2px 20px;
+}
 
 /* ============================================================
    BOUNDARY TYPE TREE (Brick 4)
