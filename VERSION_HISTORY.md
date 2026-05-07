@@ -1,3 +1,26 @@
+## 0.1.2 — Brick 6a polish: import-as-boundary + member promotion
+- **Import as boundary** — the import modal now has a "Create as: Plot |
+  Boundary [Type]" selector at the top. Plot is the default (existing
+  behaviour). When Boundary is chosen, every imported OGF relation also
+  becomes a Boundary record of the chosen type, with all sub-plots that
+  came from that relation as direct members. The boundary's name is
+  inherited from the relation's `name:<lang>` (or `name=*`) tag.
+- **Plot reference rewriting** — when subdivision replaces a parent plot
+  with sub-plots, any boundary that had the parent as a direct member is
+  rewritten to reference all the new sub-plots that cover the same area.
+  No silent data loss when subdividing already-grouped plots.
+- **Member promotion (inbetweener)** — the picker no longer hard-blocks
+  items already claimed by another boundary. If the claiming boundary's
+  type may transitively contain the new boundary's type, the row renders
+  in green with a "in: X — will move" tag. On commit, the item is moved
+  from the claimer to the new boundary, and the new boundary is added to
+  the claimer (wedged between). Items that fail the chain-validity check
+  remain blocked with the existing "claimed" badge.
+- New `boundaries.js` helpers: `canTypeContain`, `findClaimingBoundary`,
+  `promoteMember`. New `import.create_as` / `target_*` /
+  `wrapped_as_boundary_toast` strings, and a green
+  `boundary-picker-promote` chip.
+
 ## 0.1.1 — Brick 6a: boundary entities (table-driven core)
 - New **`js/boundaries.js`** data layer: `createBoundary`, type-chain
   walkers (`_typeChainBelow`, `_typeChainReachesPlots`),

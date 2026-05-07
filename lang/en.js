@@ -200,11 +200,13 @@ registerLanguage('en', 'English', {
     "filter_all": "All eligible types",
     "no_eligible": "No eligible plots or boundaries available. Either nothing matches the type chain below “{type}”, or everything is already claimed.",
     "claimed_label": "claimed",
+    "promote_from": "in: {name} — will move",
     "section_plots": "Plots",
     "section_boundary_type": "{type}",
     "selected_count": "{n} selected",
     "add_btn": "Add {n}",
-    "added_toast": "Added {n} member(s)"
+    "added_toast": "Added {n} member(s)",
+    "added_with_promote_toast": "Added {added} member(s); {promoted} promoted from another boundary"
   },
   "import": {
     "title": "Import boundary",
@@ -233,6 +235,11 @@ registerLanguage('en', 'English', {
     "rejected_summary": "{n} shape(s) will be skipped because they overlap existing plots.",
     "imported_toast": "Imported {n} plot(s)",
     "subdivided_toast": "Subdivided {split} plot(s) → {created} new plots",
+    "create_as": "Create as:",
+    "target_plot": "Plot",
+    "target_boundary": "Boundary",
+    "target_boundary_no_types": "(define a Boundary Type first)",
+    "wrapped_as_boundary_toast": "Wrapped {n} import(s) as {type}",
     "remainder": "(remainder)",
     "subdivide_section": "Will subdivide {n} existing plot(s):",
     "subdivide_splits_into": "→",

@@ -388,6 +388,23 @@ input[type="checkbox"]:checked::after {
   font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em;
   color: var(--warn); margin-left: 4px;
 }
+.import-target-row {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 8px 10px; margin-bottom: 12px;
+  background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
+.import-target-label { font-size: 12px; font-weight: 600; color: var(--text-dim); }
+.import-target-radio { font-size: 13px; display: flex; align-items: center; gap: 4px; cursor: pointer; }
+.import-target-radio.disabled { opacity: 0.5; cursor: not-allowed; }
+.import-target-radio input[type="radio"] { cursor: pointer; }
+.import-target-radio.disabled input[type="radio"] { cursor: not-allowed; }
+
+.boundary-picker-row.promotable { background: rgba(85, 192, 122, 0.06); }
+.boundary-picker-row.promotable:hover { background: rgba(85, 192, 122, 0.14); }
+.boundary-picker-promote {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--success); margin-left: 4px;
+}
 #boundary-picker-list { max-height: 360px; overflow-y: auto; padding-right: 4px; }
 
 /* ============================================================

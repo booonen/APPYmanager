@@ -232,6 +232,7 @@ function computeSubdivisionPlan(candidates, nodes, ways) {
         name: c.name || '',
         ogfRelationId: c.ogfRelationId || null,
         feature: intersection,
+        candidate: c,
       });
 
       if (remainderFeature) {
@@ -267,14 +268,29 @@ function computeSubdivisionPlan(candidates, nodes, ways) {
 // Merges the OGF node/way pools, creates new plots, removes
 // replaced parents. Call this from runImportCommit().
 
-function executeSubdivisionPlan(plan, nodes, ways) {
+// target: { kind: 'plot' } (default) or { kind: 'boundary', typeId }.
+// When 'boundary', each imported OGF relation also becomes a Boundary record
+// of the chosen type, with its resulting sub-plots as members.
+function executeSubdivisionPlan(plan, nodes, ways, target) {
+  target = target || { kind: 'plot' };
+
   // 1. Merge imported pool into data.osm
   for (const id of Object.keys(nodes)) osmAddNode(id, nodes[id].lat, nodes[id].lon);
   for (const id of Object.keys(ways)) osmAddWay(id, ways[id].nodes);
 
+  // Track which plot ids were created for which candidate so the boundary
+  // wrap step (below) knows what to bundle.
+  const candidateToPlotIds = new Map();
+  const trackPlot = (candidate, plotId) => {
+    if (!candidate) return;
+    if (!candidateToPlotIds.has(candidate)) candidateToPlotIds.set(candidate, []);
+    candidateToPlotIds.get(candidate).push(plotId);
+  };
+
   // 2. Free candidates → normal plots
   for (const c of plan.free) {
-    createPlot({ name: c.name, ogfRelationId: c.ogfRelationId, outers: c.outers, inners: c.inners });
+    const p = createPlot({ name: c.name, ogfRelationId: c.ogfRelationId, outers: c.outers, inners: c.inners });
+    trackPlot(c, p.id);
   }
 
   // 3. Splits: store clipped geometry, create sub-plots, queue parent for removal
@@ -285,15 +301,59 @@ function executeSubdivisionPlan(plan, nodes, ways) {
     for (const piece of pieces) {
       const polys = _normalizeFeature(piece.feature);
       const { outers, inners } = storeSubdivisionGeometry(polys);
-      createPlot({ name: piece.name, ogfRelationId: piece.ogfRelationId, outers, inners });
+      const p = createPlot({ name: piece.name, ogfRelationId: piece.ogfRelationId, outers, inners });
+      trackPlot(piece.candidate, p.id);
     }
     if (remainder) {
       const polys = _normalizeFeature(remainder.feature);
       const { outers, inners } = storeSubdivisionGeometry(polys);
       createPlot({ name: remainder.name, ogfRelationId: null, outers, inners, flags: ['subdivision_remainder'] });
+      // Remainders aren't tied to any incoming candidate, so they don't get wrapped.
     }
   }
 
-  // 4. Remove replaced parents
-  data.plots = data.plots.filter(p => !toRemove.has(p.id));
+  // 4. Remove replaced parents. Any boundary that had a parent plot as a
+  // direct member is rewritten to instead reference the new sub-plots that
+  // came from it — preserving the visual coverage. Exclusivity is preserved
+  // because the parent itself is gone.
+  if (toRemove.size > 0) {
+    // For every parent plot that just got replaced by sub-plots, build the
+    // list of new plot ids that cover it. Boundaries that had the parent
+    // plot as a direct member are rewritten to reference the new sub-plots,
+    // preserving visual coverage.
+    const replacements = new Map();
+    for (const { parentPlot, pieces } of plan.splits) {
+      const ids = [];
+      for (const piece of pieces) {
+        for (const id of (candidateToPlotIds.get(piece.candidate) || [])) ids.push(id);
+      }
+      replacements.set(parentPlot.id, [...new Set(ids)]);
+    }
+    for (const b of data.boundaries) {
+      const newMembers = [];
+      for (const m of (b.members || [])) {
+        if (m.kind === 'plot' && replacements.has(m.id)) {
+          for (const newId of replacements.get(m.id)) {
+            newMembers.push({ kind: 'plot', id: newId });
+          }
+        } else {
+          newMembers.push(m);
+        }
+      }
+      b.members = newMembers;
+    }
+    data.plots = data.plots.filter(p => !toRemove.has(p.id));
+  }
+
+  // 5. Wrap each candidate as a boundary if the user chose that target.
+  if (target.kind === 'boundary' && target.typeId) {
+    for (const [candidate, plotIds] of candidateToPlotIds) {
+      if (plotIds.length === 0) continue;
+      createBoundary({
+        name:    candidate.name || '',
+        typeId:  target.typeId,
+        members: plotIds.map(id => ({ kind: 'plot', id })),
+      });
+    }
+  }
 }

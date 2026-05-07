@@ -73,6 +73,25 @@ function _typeChainReachesPlots(typeId) {
   return false;
 }
 
+// True if a boundary of parentTypeId may transitively contain a boundary
+// of childTypeId. Used by the promotion check: a boundary B can be wedged
+// between an existing claimer A and the previously-direct member X iff
+// A's type may contain B's type.
+function canTypeContain(parentTypeId, childTypeId) {
+  if (!parentTypeId || !childTypeId) return false;
+  return _typeChainBelow(parentTypeId).includes(childTypeId);
+}
+
+// Returns the boundary that currently has (kind:id) as a direct member,
+// excluding excludeBoundaryId. null if free.
+function findClaimingBoundary(kind, id, excludeBoundaryId) {
+  for (const b of data.boundaries) {
+    if (excludeBoundaryId && b.id === excludeBoundaryId) continue;
+    if ((b.members || []).some(m => m.kind === kind && m.id === id)) return b;
+  }
+  return null;
+}
+
 // ============================================================
 // CLAIMED-MEMBERSHIP INDEX
 // ============================================================
@@ -116,17 +135,31 @@ function getEligibleMembers(parentTypeId, parentBoundaryId) {
 
   const out = [];
 
+  const annotateClaim = (entry) => {
+    if (!entry.claimedElsewhere) return entry;
+    const claimer = findClaimingBoundary(entry.kind, entry.id, parentBoundaryId);
+    if (claimer) {
+      entry.claimingBoundaryId   = claimer.id;
+      entry.claimingBoundaryName = claimer.name || '';
+      entry.claimingBoundaryType = getBoundaryTypeName(claimer.typeId);
+      // Promotable iff the claimer's type may contain parent's type:
+      // we plan to wedge `parent` between `claimer` and `entry`.
+      entry.promotable = canTypeContain(claimer.typeId, parentTypeId);
+    }
+    return entry;
+  };
+
   if (reachPlots) {
     for (const p of data.plots) {
       const key = 'plot:' + p.id;
-      out.push({
+      out.push(annotateClaim({
         kind: 'plot',
         id: p.id,
         name: p.name || '',
         typeName: null,
         currentMember:    ownMembers.has(key),
         claimedElsewhere: claimed.has(key),
-      });
+      }));
     }
   }
 
@@ -135,7 +168,7 @@ function getEligibleMembers(parentTypeId, parentBoundaryId) {
     if (!chainTypes.includes(b.typeId)) continue;
     const key = 'boundary:' + b.id;
     const type = data.boundaryTypes.find(t => t.id === b.typeId);
-    out.push({
+    out.push(annotateClaim({
       kind: 'boundary',
       id: b.id,
       name: b.name || '',
@@ -143,10 +176,27 @@ function getEligibleMembers(parentTypeId, parentBoundaryId) {
       typeName: type?.name || '',
       currentMember:    ownMembers.has(key),
       claimedElsewhere: claimed.has(key),
-    });
+    }));
   }
 
   return out;
+}
+
+// Wedge `newParentBoundary` between an existing claimer and member.
+// Mutates data.boundaries: removes (kind:memberId) from claimer.members,
+// adds newParentBoundary to claimer.members if not already present.
+// Caller is responsible for adding (kind:memberId) to newParentBoundary.members.
+function promoteMember(kind, memberId, newParentBoundary) {
+  const claimer = findClaimingBoundary(kind, memberId, newParentBoundary.id);
+  if (!claimer) return false;
+  if (!canTypeContain(claimer.typeId, newParentBoundary.typeId)) return false;
+  claimer.members = (claimer.members || []).filter(m => !(m.kind === kind && m.id === memberId));
+  const newParentKey = 'boundary:' + newParentBoundary.id;
+  const alreadyContains = (claimer.members || []).some(m => m.kind === 'boundary' && m.id === newParentBoundary.id);
+  if (!alreadyContains) {
+    claimer.members.push({ kind: 'boundary', id: newParentBoundary.id });
+  }
+  return true;
 }
 
 // ============================================================

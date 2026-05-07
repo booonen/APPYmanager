@@ -406,14 +406,19 @@ they come up; the plan is a living document.
   from independently-drawn OGF borders. Also: `parseImport` now prefers
   `name:<lang>` tags over `name=*` when a localised tag is present, using
   the current `_lang` value.
-- **Brick 6a** ✓ (PR open on `feature/brick-6a-boundaries`) — boundary entities,
-  table-driven. New `js/boundaries.js` data layer + Boundaries sidebar tab.
-  Searchable/sortable list (Name / Type / Members / Area). Detail modal with
-  editable name+notes, members list with Remove, type-locked-after-creation.
-  Member picker modal: search-filtered, grouped by section (Plots first, then
-  each boundary type in the type-chain below the parent). Enforces transitive
-  containment (entire primitiveId chain is eligible, not just immediate primitive)
-  and exclusivity (already-claimed items render disabled with a `claimed` tag).
+- **Brick 6a** ✓ (merged to main) — boundary entities, table-driven.
+  `js/boundaries.js` data layer + Boundaries sidebar tab. Searchable/sortable
+  list (Name / Type / Members / Area). Detail modal with editable name+notes,
+  members list with Remove, type-locked-after-creation. Member picker modal:
+  search-filtered, grouped by section (Plots first, then each boundary type
+  in the type-chain below the parent). Enforces transitive containment +
+  exclusivity. **v0.1.2 follow-ups:** (1) "Create as: Plot | Boundary [type]"
+  selector in the import modal — when Boundary is chosen, each imported OGF
+  relation is wrapped in a Boundary of the chosen type with its sub-plots as
+  members; subdivision rewrites boundary plot-references to the new sub-plots.
+  (2) Member promotion (inbetweener): claimed items render promotable when
+  the claimer's type chain allows wedging the new boundary; on commit the
+  item moves and the new boundary is inserted between claimer and item.
   No map rendering yet — that's Brick 6b.
 - **Brick 6b** (next) — map layer toggle per boundary type, dissolved geometry
   via Turf union, single-click popup, double-click drill-through to sub-boundaries.

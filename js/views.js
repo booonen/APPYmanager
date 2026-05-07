@@ -738,21 +738,35 @@ function _renderPickerList() {
 
 function _pickerRow(e) {
   const key = e.kind + ':' + e.id;
-  const disabled = e.claimedElsewhere && !e.currentMember;
-  const checked  = e.currentMember || _pickerSelected.has(key);
-  const claimedTag = disabled
-    ? ` <span class="boundary-picker-claimed">${t('boundary_picker.claimed_label')}</span>`
-    : '';
+  // Three states for a claimed item:
+  //   currentMember: in this boundary already (checked, locked)
+  //   promotable:    in another boundary, but a wedge is geometrically valid (checkable)
+  //   blocked:       in another boundary, no valid wedge (disabled)
+  const blocked    = e.claimedElsewhere && !e.currentMember && !e.promotable;
+  const promotable = e.claimedElsewhere && !e.currentMember && e.promotable;
+  const checked    = e.currentMember || _pickerSelected.has(key);
   const nameDisplay = e.name
     ? esc(e.name)
     : `<span class="text-muted">${e.kind === 'plot' ? t('plots.unnamed') : t('boundaries.unnamed')}</span>`;
-  return `<label class="boundary-picker-row${disabled ? ' disabled' : ''}${e.currentMember ? ' current' : ''}">
+
+  let tag = '';
+  if (blocked)    tag = ` <span class="boundary-picker-claimed">${t('boundary_picker.claimed_label')}</span>`;
+  if (promotable) tag = ` <span class="boundary-picker-promote">${t('boundary_picker.promote_from', { name: esc(e.claimingBoundaryName || e.claimingBoundaryType || '') })}</span>`;
+
+  const cls = [
+    'boundary-picker-row',
+    blocked    ? 'disabled'   : '',
+    promotable ? 'promotable' : '',
+    e.currentMember ? 'current' : '',
+  ].filter(Boolean).join(' ');
+
+  return `<label class="${cls}">
     <input type="checkbox"
       data-key="${esc(key)}"
       ${checked ? 'checked' : ''}
-      ${disabled || e.currentMember ? 'disabled' : ''}
+      ${blocked || e.currentMember ? 'disabled' : ''}
       onchange="onPickerToggle('${esc(key)}', this.checked)">
-    <span>${nameDisplay}${claimedTag}</span>
+    <span>${nameDisplay}${tag}</span>
   </label>`;
 }
 
@@ -778,18 +792,29 @@ function commitMembersPicker() {
   if (!_boundaryDetailId) return;
   const b = data.boundaries.find(x => x.id === _boundaryDetailId);
   if (!b) { closeModal(); return; }
-  let added = 0;
+  let added = 0, promoted = 0;
+  b.members = b.members || [];
   for (const key of _pickerSelected) {
     const [kind, id] = key.split(':');
-    if (!(b.members || []).some(m => m.kind === kind && m.id === id)) {
-      b.members = b.members || [];
-      b.members.push({ kind, id });
-      added++;
+    if (b.members.some(m => m.kind === kind && m.id === id)) continue;
+    // If this item is already claimed by another boundary, attempt promotion
+    // (wedge `b` between the claimer and the item).
+    const claimer = findClaimingBoundary(kind, id, b.id);
+    if (claimer) {
+      const ok = promoteMember(kind, id, b);
+      if (!ok) continue; // shouldn't happen — UI only checked promotable rows
+      promoted++;
     }
+    b.members.push({ kind, id });
+    added++;
   }
   if (added > 0) {
     save();
-    toast(t('boundary_picker.added_toast', { n: added }), 'success');
+    if (promoted > 0) {
+      toast(t('boundary_picker.added_with_promote_toast', { added, promoted }), 'success');
+    } else {
+      toast(t('boundary_picker.added_toast', { n: added }), 'success');
+    }
   }
   _pickerSelected.clear();
   openBoundaryDetail(_boundaryDetailId);
@@ -876,7 +901,29 @@ function openImportModal() {
   _importPreview = null;
   destroyPreviewMap();
 
+  // Boundary type options for the optional "Create as: Boundary" target.
+  const btypeOpts = data.boundaryTypes.slice()
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map(ty => `<option value="${esc(ty.id)}">${esc(ty.name)}</option>`)
+    .join('');
+  const noTypes = data.boundaryTypes.length === 0;
+
   openModal(t('import.title'), `
+    <div class="import-target-row">
+      <label class="import-target-label">${t('import.create_as')}</label>
+      <label class="import-target-radio">
+        <input type="radio" name="import-target" value="plot" checked onchange="onImportTargetChange()">
+        ${t('import.target_plot')}
+      </label>
+      <label class="import-target-radio${noTypes ? ' disabled' : ''}">
+        <input type="radio" name="import-target" value="boundary" ${noTypes ? 'disabled' : ''} onchange="onImportTargetChange()">
+        ${t('import.target_boundary')}
+      </label>
+      <select id="import-target-typeid" disabled style="margin-left:6px">
+        ${btypeOpts || '<option value="">—</option>'}
+      </select>
+      ${noTypes ? `<span class="text-dim" style="font-size:11px;margin-left:8px">${t('import.target_boundary_no_types')}</span>` : ''}
+    </div>
     <div class="import-tabs">
       <button class="import-tab active" data-mode="search" onclick="switchImportMode('search')">${t('import.tab_search')}</button>
       <button class="import-tab" data-mode="byid" onclick="switchImportMode('byid')">${t('import.tab_byid')}</button>
@@ -928,6 +975,21 @@ function openImportModal() {
   // Make the modal a bit taller so the inset preview map gets room.
   const modalEl = document.getElementById('modal');
   if (modalEl) modalEl.style.width = '720px';
+}
+
+function onImportTargetChange() {
+  const target = document.querySelector('input[name="import-target"]:checked')?.value || 'plot';
+  const sel = document.getElementById('import-target-typeid');
+  if (sel) sel.disabled = (target !== 'boundary');
+}
+
+function getImportTarget() {
+  const target = document.querySelector('input[name="import-target"]:checked')?.value || 'plot';
+  if (target === 'boundary') {
+    const typeId = document.getElementById('import-target-typeid')?.value || '';
+    if (typeId) return { kind: 'boundary', typeId };
+  }
+  return { kind: 'plot' };
 }
 
 function switchImportMode(mode) {
@@ -1099,7 +1161,8 @@ function runImportCommit() {
   const { _plan, nodes, ways } = _importPreview;
   if (_plan.newPlotCount === 0) return;
 
-  executeSubdivisionPlan(_plan, nodes, ways);
+  const target = getImportTarget();
+  executeSubdivisionPlan(_plan, nodes, ways, target);
 
   const splitCount = _plan.splits.length;
   const freeCount  = _plan.free.length;
@@ -1109,6 +1172,12 @@ function runImportCommit() {
     if (freeCount > 0) toast(t('import.imported_toast', { n: freeCount }), 'success');
   } else {
     toast(t('import.imported_toast', { n: freeCount }), 'success');
+  }
+
+  if (target.kind === 'boundary') {
+    const typeName = getBoundaryTypeName(target.typeId);
+    const candCount = _plan.free.length + new Set(_plan.splits.flatMap(s => s.pieces.map(p => p.candidate))).size;
+    toast(t('import.wrapped_as_boundary_toast', { n: candCount, type: typeName }), 'success');
   }
 
   save();
