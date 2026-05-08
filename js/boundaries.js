@@ -248,3 +248,72 @@ function boundaryArea(boundary) {
   }
   return total;
 }
+
+// ============================================================
+// BOUNDARY GEOMETRY (Brick 6b)
+// ============================================================
+// Boundaries carry no geometry of their own — their shape is the dissolved
+// union of all transitively-contained plot polygons. We fold turf.union
+// over the plot Features and convert the resulting GeoJSON Polygon /
+// MultiPolygon into Leaflet [lat,lon][][] form for rendering.
+//
+// Cached per boundary id. Mutation sites must call invalidateBoundaryGeometry()
+// (no arg = clear all). The cache is correct because boundaries can only
+// influence each other through membership chains; on any plot/boundary
+// change we just nuke the whole cache.
+
+let _boundaryGeomCache = new Map();
+
+function invalidateBoundaryGeometry(boundaryId) {
+  if (boundaryId) _boundaryGeomCache.delete(boundaryId);
+  else _boundaryGeomCache.clear();
+}
+
+function resolveBoundaryGeometry(boundary) {
+  if (!boundary) return null;
+  const cached = _boundaryGeomCache.get(boundary.id);
+  if (cached !== undefined) return cached;
+
+  const plotIds = new Set(flattenBoundaryToPlotIds(boundary));
+  const features = [];
+  for (const pid of plotIds) {
+    const p = data.plots.find(pp => pp.id === pid);
+    if (!p) continue;
+    const f = plotToGeoJSONFeature(p);
+    if (f) features.push(f);
+  }
+  if (features.length === 0) {
+    _boundaryGeomCache.set(boundary.id, null);
+    return null;
+  }
+
+  let merged = features[0];
+  for (let i = 1; i < features.length; i++) {
+    try {
+      const next = turf.union(merged, features[i]);
+      if (next) merged = next;
+    } catch (_) { /* skip degenerate union */ }
+  }
+
+  const polygons = _boundaryGeoJSONToLeafletPolygons(merged);
+  const result = { polygons, feature: merged };
+  _boundaryGeomCache.set(boundary.id, result);
+  return result;
+}
+
+function _boundaryGeoJSONToLeafletPolygons(feature) {
+  // Returns [[outerRing, hole1, ...], [outerRing2, ...], ...] with rings as [[lat,lon], ...]
+  const geom = feature?.geometry || feature;
+  if (!geom) return [];
+  const toRing = ring => ring.map(([lon, lat]) => [lat, lon]);
+  if (geom.type === 'Polygon') {
+    return [geom.coordinates.map(toRing)];
+  }
+  if (geom.type === 'MultiPolygon') {
+    return geom.coordinates.map(rings => rings.map(toRing));
+  }
+  if (geom.type === 'GeometryCollection') {
+    return (geom.geometries || []).flatMap(g => _boundaryGeoJSONToLeafletPolygons({ geometry: g }));
+  }
+  return [];
+}

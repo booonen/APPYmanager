@@ -1,3 +1,32 @@
+## 0.1.8 — Brick 6b: boundary map layers, toggle strip, drill-through
+- **Dissolved boundary geometry via Turf**: `resolveBoundaryGeometry`
+  (in `js/boundaries.js`) flattens a boundary to its transitive plot
+  set, builds a GeoJSON Feature per plot, and folds `turf.union` over
+  them. Output is converted back to Leaflet `[lat,lon][][][]`
+  multipolygon shape. Result cached per boundary id; mutation sites
+  (member add/remove, plot delete, subdivision commit, boundary delete,
+  flush) call `invalidateBoundaryGeometry()`.
+- **Per-type Leaflet layers**: each boundary type gets its own
+  `L.featureGroup`, stroke-only (`fill: false`) so plots stay readable
+  underneath. Color cycles a small palette by type index, computed
+  deterministically.
+- **Toggle strip + breadcrumb**: a single-line chip strip above the map
+  with one chip per layer (Plots first, then each boundary type sorted
+  alphabetically). Chips show an ◯ when off and a ● in the type's color
+  when on. Strip uses `overflow-x: auto` so it stays single-line for
+  any number of types. A breadcrumb appears above the strip when
+  drilled in, with clickable ancestors back to "All".
+- **Click vs. double-click**:
+  - Single-click on a boundary opens its detail modal (240 ms
+    debounce so it can be cancelled by a double-click).
+  - Double-click drills into the boundary: the map filters to plots
+    and sub-boundaries transitively contained by it; the breadcrumb
+    deepens. Default Leaflet dblclick-zoom is disabled on the map so
+    this doesn't fight zoom.
+- New CSS: `.map-chip-strip`, `.map-chip`, `.map-crumbs`,
+  `.map-crumb-link/current/sep`. New l10n keys: `map.layer_plots`,
+  `map.crumb_root`.
+
 ## 0.1.7 — Settings: default search area + flush; unified "Create as" dropdown
 - **Unified "Create as" dropdown** in the Import modal: replaced the
   radio + separate type select with a single `<select>` whose first

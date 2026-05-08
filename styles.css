@@ -395,6 +395,48 @@ input[type="checkbox"]:checked::after {
 }
 .import-target-label { font-size: 12px; font-weight: 600; color: var(--text-dim); }
 
+/* ──────────────────────────────────────────────────────────────
+   MAP TOOLBAR (Brick 6b) — single-line chip strip + breadcrumb
+   ────────────────────────────────────────────────────────────── */
+#map-toolbar { margin-bottom: 8px; }
+.map-crumbs {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  margin-bottom: 6px; font-size: 12px; color: var(--text-dim);
+}
+.map-crumb-link {
+  color: var(--accent); cursor: pointer; text-decoration: none;
+}
+.map-crumb-link:hover { text-decoration: underline; }
+.map-crumb-current { color: var(--text); font-weight: 600; }
+.map-crumb-sep { color: var(--text-muted); margin: 0 2px; }
+
+.map-chip-strip {
+  display: flex; flex-wrap: nowrap; gap: 6px;
+  overflow-x: auto; overflow-y: hidden;
+  scrollbar-width: thin;
+  padding: 2px 0 4px;
+}
+.map-chip-strip::-webkit-scrollbar { height: 5px; }
+.map-chip-strip::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+.map-chip {
+  --chip-color: #888;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px; flex-shrink: 0;
+  background: var(--bg-input);
+  border: 1px solid var(--border); border-radius: 999px;
+  font-size: 12px; color: var(--text-dim); cursor: pointer; white-space: nowrap;
+  transition: opacity 0.1s, border-color 0.1s, color 0.1s;
+  opacity: 0.55;
+}
+.map-chip:hover { opacity: 0.85; }
+.map-chip.active { opacity: 1; color: var(--text); border-color: var(--chip-color); }
+.map-chip-dot {
+  width: 10px; height: 10px; border-radius: 50%;
+  background: var(--chip-color);
+  border: 2px solid var(--chip-color);
+}
+.map-chip:not(.active) .map-chip-dot { background: transparent; }
+
 .boundary-picker-row.promotable { background: rgba(85, 192, 122, 0.06); }
 .boundary-picker-row.promotable:hover { background: rgba(85, 192, 122, 0.14); }
 .boundary-picker-promote {

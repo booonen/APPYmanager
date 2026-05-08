@@ -625,6 +625,7 @@ function removeBoundaryMember(kind, memberId) {
   const b = data.boundaries.find(x => x.id === _boundaryDetailId);
   if (!b) return;
   b.members = (b.members || []).filter(m => !(m.kind === kind && m.id === memberId));
+  invalidateBoundaryGeometry();
   save();
   openBoundaryDetail(_boundaryDetailId); // re-render in place
   _renderBoundariesBody();
@@ -637,6 +638,7 @@ function onBoundaryDetailDelete() {
   const displayName = b.name || t('boundaries.unnamed');
   appConfirm(t('boundaries.confirm_delete', { name: displayName }), () => {
     data.boundaries = data.boundaries.filter(x => x.id !== _boundaryDetailId);
+    invalidateBoundaryGeometry();
     save();
     closeBoundaryDetail();
     refreshAll();
@@ -809,6 +811,7 @@ function commitMembersPicker() {
     added++;
   }
   if (added > 0) {
+    invalidateBoundaryGeometry();
     save();
     if (promoted > 0) {
       toast(t('boundary_picker.added_with_promote_toast', { added, promoted }), 'success');
@@ -926,6 +929,7 @@ function flushSaveFile() {
     data.plots = [];
     data.boundaries = [];
     data.osm = { nodes: {}, ways: {}, _nextLocalId: 0 };
+    invalidateBoundaryGeometry();
     save();
     refreshAll();
     toast(t('settings.flush_toast'), 'success');
@@ -1277,6 +1281,7 @@ function runImportCommit() {
   if (!canCommit) return;
 
   executeSubdivisionPlan(_plan, nodes, ways, target);
+  invalidateBoundaryGeometry();
 
   const splitCount = _plan.splits.length;
   const wrapCount  = (_plan.wraps || []).length;
@@ -1403,6 +1408,7 @@ function onPlotDetailDelete() {
     const idx = data.plots.findIndex(p => p.id === _detailPlotId);
     if (idx < 0) return;
     data.plots.splice(idx, 1);
+    invalidateBoundaryGeometry();
     save();
     closePlotDetail();
     refreshAll();

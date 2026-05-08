@@ -420,5 +420,18 @@ they come up; the plan is a living document.
   the claimer's type chain allows wedging the new boundary; on commit the
   item moves and the new boundary is inserted between claimer and item.
   No map rendering yet — that's Brick 6b.
-- **Brick 6b** (next) — map layer toggle per boundary type, dissolved geometry
-  via Turf union, single-click popup, double-click drill-through to sub-boundaries.
+- **Brick 6b** ✓ (PR open on `feature/brick-6a-boundaries`) — boundary map
+  rendering. `resolveBoundaryGeometry` (boundaries.js) folds `turf.union`
+  over all transitively-contained plots and caches the result; mutation
+  sites call `invalidateBoundaryGeometry()`. Each boundary type is its
+  own toggleable `L.featureGroup`, stroke-only with a per-type palette
+  color. A single-line chip strip above the map (Plots + each type)
+  toggles visibility (`overflow-x: auto` for many types). Single-click
+  on a boundary opens its detail modal (240 ms debounce so dblclick can
+  cancel); double-click drills through — the map filters to the
+  boundary's transitive contents and a breadcrumb appears above the
+  strip with clickable ancestors back to "All". Leaflet's dblclick-zoom
+  is disabled to avoid fighting the drill gesture.
+- **Brick 7** (next) — Settlements (Phase 2.5). Import OGF `place=*` nodes
+  via Overpass; one parent per settlement (plot or boundary); markers,
+  list view, edit/delete. Not load-bearing for aggregation.

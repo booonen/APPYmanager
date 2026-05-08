@@ -95,6 +95,10 @@ registerLanguage('en', 'English', {
     "flush_confirm": "Remove all plots and boundaries?\nBoundary types and settings will be kept.\nThis cannot be undone.",
     "flush_toast": "Plots and boundaries cleared"
   },
+  "map": {
+    "layer_plots": "Plots",
+    "crumb_root": "All"
+  },
   "stat": {
     "plots": "Plots",
     "boundaries": "Boundaries",
