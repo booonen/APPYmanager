@@ -837,7 +837,7 @@ async function runSettlementImportPreview() {
   // Auto-assign parents now so the preview shows what each candidate will
   // attach to. Stored on the candidate; the user will be able to override
   // per-row in Brick 7d.
-  for (const c of fresh) c._parent = autoAssignSettlementParent(c.lat, c.lng);
+  for (const c of fresh) c._parent = autoAssignSettlementParent(c.lat, c.lng, c.name);
   _settlementImportPreview = { fresh, dupCount, skipped: parsed.skipped };
 
   // Build preview HTML
@@ -1020,7 +1020,7 @@ function onSettlementDetailAutoAssign() {
   const s = (data.settlements || []).find(x => x.id === _settlementDetailId);
   if (!s) return;
   const newParent = (typeof autoAssignSettlementParent === 'function')
-    ? autoAssignSettlementParent(s.lat, s.lng)
+    ? autoAssignSettlementParent(s.lat, s.lng, s.name)
     : null;
   if (!newParent) {
     toast(t('settlement_detail.auto_no_match'), 'warning');

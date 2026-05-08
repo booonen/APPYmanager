@@ -151,10 +151,49 @@ function settlementsForPlot(plotId) {
 // Plot first (most specific anchor), then boundaries smallest-type-first
 // (deepest in the primitiveId chain). Returns null if nothing contains
 // the point — the user can still import it as an unparented settlement.
-function autoAssignSettlementParent(lat, lng) {
+// Pick the most appropriate parent for a settlement at (lat, lng).
+//
+// Pass 1 (Brick 7d follow-up): match by name. Walk containing
+// boundaries largest-type-first and return the first whose `name`
+// equals the settlement's `name` (case-insensitive). This handles the
+// canonical OGF case where a `place=city` node and its
+// `boundary=administrative` polygon share a name — the settlement
+// should anchor to the boundary that represents the city, not to
+// whichever plot the centroid happens to fall on. When several
+// matching levels exist (e.g. Country, Province, and Municipality
+// all named "Foo"), the largest wins so the settlement points at the
+// most encompassing entity.
+//
+// Pass 2 (existing): smallest containing region. Plot first (most
+// specific anchor), then boundaries smallest-type-first. Used for
+// nameless settlements and for any candidate without a matching
+// curated region.
+function autoAssignSettlementParent(lat, lng, settlementName) {
   if (typeof turf === 'undefined') return null;
   const pt = turf.point([lng, lat]);
+  const wantName = (settlementName || '').trim().toLowerCase();
 
+  const types = (typeof _typesLargestFirst === 'function')
+    ? _typesLargestFirst()
+    : (data.boundaryTypes || []);
+
+  // Pass 1: name-matching boundary, largest type first.
+  if (wantName) {
+    for (const ty of types) {
+      for (const b of data.boundaries) {
+        if (b.typeId !== ty.id) continue;
+        const bn = (b.name || '').trim().toLowerCase();
+        if (!bn || bn !== wantName) continue;
+        const geom = (typeof resolveBoundaryGeometry === 'function') ? resolveBoundaryGeometry(b) : null;
+        if (!geom?.feature) continue;
+        try {
+          if (turf.booleanPointInPolygon(pt, geom.feature)) return { kind: 'boundary', id: b.id };
+        } catch (_) {}
+      }
+    }
+  }
+
+  // Pass 2: plot (most specific), then smallest-type containing boundary.
   for (const plot of data.plots) {
     const f = plotToGeoJSONFeature(plot);
     if (!f) continue;
@@ -162,11 +201,6 @@ function autoAssignSettlementParent(lat, lng) {
       if (turf.booleanPointInPolygon(pt, f)) return { kind: 'plot', id: plot.id };
     } catch (_) {}
   }
-
-  // _typesLargestFirst lives in map.js; reverse for smallest first.
-  const types = (typeof _typesLargestFirst === 'function')
-    ? _typesLargestFirst()
-    : (data.boundaryTypes || []);
   for (let i = types.length - 1; i >= 0; i--) {
     const ty = types[i];
     for (const b of data.boundaries) {
@@ -216,7 +250,7 @@ function reconcileSettlementParents() {
     // Auto-assign null parents (whether they were imported uncovered
     // or just orphaned above).
     if (!s.parent) {
-      const newParent = autoAssignSettlementParent(s.lat, s.lng);
+      const newParent = autoAssignSettlementParent(s.lat, s.lng, s.name);
       if (newParent) s.parent = newParent;
     }
 

@@ -1,3 +1,17 @@
+## 0.2.7 — Settlement auto-assign: name-match boundary preferred
+- `autoAssignSettlementParent(lat, lng, name)` gains a name-matching
+  pass that runs before the existing smallest-region logic. Walks
+  containing boundaries largest-type-first and returns the first
+  whose `name` equals the settlement's `name` (case-insensitive,
+  trimmed). When several levels match (e.g. Country, Province, and
+  Municipality all named "Foo"), the largest wins so the settlement
+  anchors to the most encompassing matching entity.
+- Falls back to the existing logic (smallest containing plot, then
+  smallest containing boundary) for nameless candidates and for
+  settlements with no matching curated boundary.
+- All three call sites (preview, reconcile, manual auto-assign) now
+  forward the settlement's name.
+
 ## 0.2.6 — Brick 7d: Settlements table + edit modal (Brick 7 done)
 - Settlements tab now has a sortable, searchable table mirroring the
   Plots tab. Sort columns: Name (alpha), Place (rank, so cities lead),
