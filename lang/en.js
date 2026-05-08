@@ -15,6 +15,7 @@ registerLanguage('en', 'English', {
     "plots": "Plots",
     "boundary_types": "Boundary Types",
     "boundaries": "Boundaries",
+    "settlements": "Settlements",
     "map": "Map",
     "settings": "Settings",
     "import_export": "Import / Export"
@@ -24,6 +25,7 @@ registerLanguage('en', 'English', {
     "plots": "Plots",
     "boundary_types": "Boundary Types",
     "boundaries": "Boundaries",
+    "settlements": "Settlements",
     "map": "Map",
     "settings": "Settings",
     "import_export": "Import / Export"
@@ -33,6 +35,7 @@ registerLanguage('en', 'English', {
     "plots": "All plots in the project",
     "boundary_types": "Define the region hierarchy for this project",
     "boundaries": "Group plots and sub-boundaries into regions",
+    "settlements": "OGF place=* nodes attached to plots or boundaries",
     "map": "Geographic view of plots and boundaries",
     "settings": "Project configuration",
     "import_export": "Move project data in and out"
@@ -107,7 +110,16 @@ registerLanguage('en', 'English', {
     "plots": "Plots",
     "boundaries": "Boundaries",
     "boundary_types": "Boundary Types",
+    "settlements": "Settlements",
     "properties": "Properties"
+  },
+  "settlements": {
+    "import_btn": "Import settlements",
+    "import_pending": "Import lands in Brick 7b",
+    "list_pending": "Sortable list arrives in Brick 7d.",
+    "count": "{n} settlement(s)",
+    "empty_title": "No settlements yet",
+    "empty_body": "Settlements are OGF place=* nodes (cities, towns, villages, …) attached to a plot or boundary. Once Brick 7b lands you'll be able to import them via Overpass."
   },
   "dashboard": {
     "welcome_title": "Welcome to APPYmanager",

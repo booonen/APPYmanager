@@ -29,12 +29,13 @@
       <div class="nav-item" data-tab="plots" onclick="switchTab('plots')"><span class="nav-icon">▱</span> <span data-t="nav.plots">Plots</span></div>
       <div class="nav-item" data-tab="boundary-types" onclick="switchTab('boundary-types')"><span class="nav-icon">≡</span> <span data-t="nav.boundary_types">Boundary Types</span></div>
       <div class="nav-item" data-tab="boundaries" onclick="switchTab('boundaries')"><span class="nav-icon">⬢</span> <span data-t="nav.boundaries">Boundaries</span></div>
+      <div class="nav-item" data-tab="settlements" onclick="switchTab('settlements')"><span class="nav-icon">◉</span> <span data-t="nav.settlements">Settlements</span></div>
       <div class="nav-item" data-tab="map" onclick="switchTab('map')"><span class="nav-icon">🗺</span> <span data-t="nav.map">Map</span></div>
       <div class="nav-section" data-t="nav_section.system">System</div>
       <div class="nav-item" data-tab="settings" onclick="switchTab('settings')"><span class="nav-icon">⚙</span> <span data-t="nav.settings">Settings</span></div>
       <div class="nav-item" data-tab="import-export" onclick="switchTab('import-export')"><span class="nav-icon">⇅</span> <span data-t="nav.import_export">Import / Export</span></div>
       <div class="spacer"></div>
-      <div style="padding:8px 16px;font-size:10px;color:var(--text-muted);font-family:var(--font-mono);opacity:0.6">v0.1.11</div>
+      <div style="padding:8px 16px;font-size:10px;color:var(--text-muted);font-family:var(--font-mono);opacity:0.6">v0.2.0</div>
     </nav>
     <div class="content">
 
@@ -61,6 +62,12 @@
       <div class="tab-panel" id="panel-boundaries">
         <div class="page-header"><div><h1 data-t="page.boundaries">Boundaries</h1><div class="subtitle" data-t="subtitle.boundaries">Group plots and sub-boundaries into regions</div></div></div>
         <div id="boundaries-content"></div>
+      </div>
+
+      <!-- SETTLEMENTS -->
+      <div class="tab-panel" id="panel-settlements">
+        <div class="page-header"><div><h1 data-t="page.settlements">Settlements</h1><div class="subtitle" data-t="subtitle.settlements">OGF place=* nodes attached to plots or boundaries</div></div></div>
+        <div id="settlements-content"></div>
       </div>
 
       <!-- MAP -->
@@ -106,6 +113,7 @@
 <script src="js/osm.js"></script>
 <script src="js/plots.js"></script>
 <script src="js/boundaries.js"></script>
+<script src="js/settlements.js"></script>
 <script src="js/overpass.js"></script>
 <script src="js/subdivide.js"></script>
 <script src="js/persistence.js"></script>

@@ -11,6 +11,7 @@ function renderDashboard() {
       <div class="stat-card"><div class="stat-value">${data.plots.length}</div><div class="stat-label">${t('stat.plots')}</div></div>
       <div class="stat-card"><div class="stat-value">${data.boundaries.length}</div><div class="stat-label">${t('stat.boundaries')}</div></div>
       <div class="stat-card"><div class="stat-value">${data.boundaryTypes.length}</div><div class="stat-label">${t('stat.boundary_types')}</div></div>
+      <div class="stat-card"><div class="stat-value">${(data.settlements || []).length}</div><div class="stat-label">${t('stat.settlements')}</div></div>
       <div class="stat-card"><div class="stat-value">${data.propertySchemas.length}</div><div class="stat-label">${t('stat.properties')}</div></div>
     `;
   }
@@ -478,6 +479,37 @@ function onBoundariesSort(col) {
     _boundariesSort.direction = 'asc';
   }
   renderBoundaries();
+}
+
+// ============================================================
+// SETTLEMENTS — list view (Brick 7a)
+// ============================================================
+// Empty state only for now — import flow lands in Brick 7b, table view
+// + edit modal in 7d. The map-marker layer ships in 7c.
+
+function renderSettlements() {
+  const el = document.getElementById('settlements-content');
+  if (!el) return;
+  const all = data.settlements || [];
+
+  if (all.length === 0) {
+    el.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-icon">◉</div>
+        <h3>${t('settlements.empty_title')}</h3>
+        <p>${t('settlements.empty_body')}</p>
+        <button class="btn" disabled title="${t('settlements.import_pending')}">+ ${t('settlements.import_btn')}</button>
+      </div>`;
+    return;
+  }
+
+  // Stub list — sortable/searchable table arrives in Brick 7d.
+  el.innerHTML = `
+    <div class="flex" style="justify-content:space-between;align-items:center;margin-bottom:12px">
+      <button class="btn" disabled title="${t('settlements.import_pending')}">+ ${t('settlements.import_btn')}</button>
+      <span class="text-dim" style="font-size:12px">${t('settlements.count', { n: all.length })}</span>
+    </div>
+    <div class="text-dim" style="font-size:12px">${t('settlements.list_pending')}</div>`;
 }
 
 // ============================================================

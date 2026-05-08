@@ -15,6 +15,7 @@ const EMPTY_DATA = () => ({
   plots: [],
   boundaries: [],
   boundaryTypes: [],
+  settlements: [],
   propertySchemas: [],
   settings: {}
 });
@@ -73,6 +74,7 @@ function saveSlotStats() {
     plots: data.plots.length,
     boundaries: data.boundaries.length,
     boundaryTypes: data.boundaryTypes.length,
+    settlements: (data.settlements || []).length,
     propertySchemas: data.propertySchemas.length
   };
 }

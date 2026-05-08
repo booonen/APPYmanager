@@ -1,3 +1,17 @@
+## 0.2.0 — Brick 7a: Settlements scaffolding
+- New `data.settlements` array (with `EMPTY_DATA` migration so existing
+  saves pick up `[]` on next load — no schema bump needed).
+- `js/settlements.js` defines the record shape and CRUD primitives:
+  `createSettlement`, `deleteSettlement`, `findSettlementByOgfNodeId`,
+  `getSettlementParentInfo`, `flattenSettlementsForBoundary`,
+  `settlementsForPlot`, plus the `PLACE_TYPES` preset list for the
+  upcoming import preset selector.
+- Sidebar gets a Settlements item under Geography (between Boundaries
+  and Map). Empty `panel-settlements` tab with placeholder import
+  button (disabled — full import flow lands in 7b).
+- Dashboard shows a Settlements stat card.
+- Bumped to v0.2.0 — Phase 2.5 begins.
+
 ## 0.1.11 — Map side panel, single drill chain, scoped viewport fit
 - **Side panel replaces popups.** Single-clicking a boundary or plot on
   the map no longer opens a Leaflet popup. Instead a 280 px side panel
