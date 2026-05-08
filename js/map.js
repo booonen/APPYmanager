@@ -15,7 +15,10 @@ const OGF_OVERPASS_URL = 'https://overpass.opengeofiction.net/api/interpreter';
 let _map = null;
 let _mapTileLayer = null;
 let _mapPlotLayer = null;
-let _selectedPlotId = null;
+
+// Selection state — one item at a time (plot or boundary)
+let _selectedItemKind = null;  // 'plot' | 'boundary' | null
+let _selectedItemId   = null;
 
 // ── Brick 6b/6c: hierarchical boundary view ──
 // One displayed level at a time. Top-level: a dropdown picks a boundary
@@ -33,10 +36,13 @@ let _mapCurrentTypeId    = null;        // type selected in dropdown (null = uni
 let _drillStack          = [];          // [{ boundaryId, name, typeId }, ...]
 let _boundaryClickTimer  = null;        // single-click vs double-click guard
 
+// Sentinel id for the synthetic "Plots" dropdown option.
+const PLOTS_TYPE_SENTINEL = '__plots__';
+
 function initMap() {
   const el = document.getElementById('map');
   if (!el) return;
-  if (_map) { _map.invalidateSize(); redrawMapPlots(); return; }
+  if (_map) { _map.invalidateSize(); redrawMap(); return; }
 
   _map = L.map(el, {
     center: [0, 0],
@@ -57,11 +63,9 @@ function initMap() {
 
   _mapPlotLayer     = L.featureGroup().addTo(_map);
   _mapBoundaryLayer = L.featureGroup().addTo(_map);
+
   _map.on('click', () => {
-    if (_selectedPlotId !== null) {
-      _selectedPlotId = null;
-      redrawMap();
-    }
+    if (_selectedItemId !== null) _clearMapSelection();
   });
 
   const view = data.settings?.mapView;
@@ -90,20 +94,12 @@ function plotPolygonStyle(selected) {
     color: selected ? '#1f2937' : '#475569',
     weight: selected ? 3 : 2,
     fillColor: '#475569',
-    fillOpacity: selected ? 0.28 : 0.12,
+    fillOpacity: selected ? 0.32 : 0.12,
   };
 }
 
-// Single-click on a plot polygon opens the plot-detail modal so the user
-// can inspect/edit it. Used in drill view and the no-types fallback at
-// root. Selection-highlight is gone; the modal is the inspection surface.
-function onPlotPolyClick(e, plotId) {
-  L.DomEvent.stopPropagation(e);
-  if (typeof openPlotDetail === 'function') openPlotDetail(plotId);
-}
-
-// Backwards-compat alias for any external callers (e.g. plot-detail save
-// handler) that want to refresh the map after a data change.
+// Backwards-compat alias for any external callers that want to refresh
+// the map after a data change.
 function redrawMapPlots() { redrawMap(); }
 
 // ============================================================
@@ -219,9 +215,8 @@ function destroyDetailMap() {
 //           contains). Sub-boundaries render filled in their own type's
 //           color; plots render in the neutral plot style.
 //
-// Single-click on any polygon opens its detail modal. Double-click on a
-// boundary drills in one level (deferred 240 ms so it can cancel the
-// pending click). Plots are leaves — double-click does nothing extra.
+// Single-click selects an item → side panel. Double-click drills in.
+// Plots are leaves — double-click does nothing extra.
 
 function colorForBoundaryType(typeId) {
   const idx = data.boundaryTypes.findIndex(t => t.id === typeId);
@@ -229,8 +224,14 @@ function colorForBoundaryType(typeId) {
   return BOUNDARY_TYPE_PALETTE[idx % BOUNDARY_TYPE_PALETTE.length];
 }
 
-function boundaryFilledStyle(color) {
-  return { color, weight: 2, fillColor: color, fillOpacity: 0.18, lineJoin: 'round' };
+function boundaryFilledStyle(color, selected) {
+  return {
+    color,
+    weight: selected ? 3.5 : 2,
+    fillColor: color,
+    fillOpacity: selected ? 0.35 : 0.18,
+    lineJoin: 'round',
+  };
 }
 
 // "Largest" = the type closest to the root of the primitiveId chain.
@@ -284,9 +285,6 @@ function _normalizeMapState() {
   }
 }
 
-// Sentinel id for the synthetic "Plots" dropdown option.
-const PLOTS_TYPE_SENTINEL = '__plots__';
-
 function redrawMap() {
   if (!_map || !_mapPlotLayer || !_mapBoundaryLayer) return;
   _normalizeMapState();
@@ -321,6 +319,7 @@ function redrawMap() {
   }
 
   renderMapToolbar();
+  renderMapSidePanel();
 }
 
 function _renderRootLevel(drawnBoundaries) {
@@ -342,12 +341,13 @@ function _renderRootLevel(drawnBoundaries) {
 function _drawPlotPoly(plot) {
   const geo = resolvePlotGeometry(plot);
   if (!geo.polygons.length) return;
-  const poly = L.polygon(geo.polygons, plotPolygonStyle(false));
+  const isSelected = _selectedItemKind === 'plot' && _selectedItemId === plot.id;
+  const poly = L.polygon(geo.polygons, plotPolygonStyle(isSelected));
   poly._appyPlotId = plot.id;
   if (plot.name) poly.bindTooltip(plot.name);
   poly.on('click', (e) => {
     L.DomEvent.stopPropagation(e);
-    _showPlotPopup(e.latlng, plot);
+    _selectItem('plot', plot.id);
   });
   _mapPlotLayer.addLayer(poly);
 }
@@ -355,7 +355,8 @@ function _drawPlotPoly(plot) {
 function _drawBoundaryPoly(b, color) {
   const geom = resolveBoundaryGeometry(b);
   if (!geom || !geom.polygons.length) return;
-  const poly = L.polygon(geom.polygons, boundaryFilledStyle(color));
+  const isSelected = _selectedItemKind === 'boundary' && _selectedItemId === b.id;
+  const poly = L.polygon(geom.polygons, boundaryFilledStyle(color, isSelected));
   poly._appyBoundaryId = b.id;
   poly.bindTooltip(b.name || `(${getBoundaryTypeName(b.typeId)})`);
   poly.on('click',    (e) => onBoundaryPolyClick(e, b));
@@ -366,12 +367,12 @@ function _drawBoundaryPoly(b, color) {
 function onBoundaryPolyClick(e, b) {
   L.DomEvent.stopPropagation(e);
   // Defer single-click so an in-flight dblclick can cancel it (drilling
-  // shouldn't briefly flash the popup).
+  // shouldn't flash the selection before the drill takes effect).
   if (_boundaryClickTimer) return;
-  const latlng = e.latlng;
+  const bId = b.id;
   _boundaryClickTimer = setTimeout(() => {
     _boundaryClickTimer = null;
-    _showBoundaryPopup(latlng, b);
+    _selectItem('boundary', bId);
   }, 240);
 }
 
@@ -379,70 +380,231 @@ function onBoundaryPolyDblClick(e, boundaryId) {
   L.DomEvent.stopPropagation(e);
   L.DomEvent.preventDefault(e);
   if (_boundaryClickTimer) { clearTimeout(_boundaryClickTimer); _boundaryClickTimer = null; }
-  if (_map) _map.closePopup();
   drillIntoBoundary(boundaryId);
 }
 
 // ============================================================
-// MAP POPUPS — quick-look tooltip with name/type/area + open-detail
+// SELECTION & SIDE PANEL
 // ============================================================
-// Click on any polygon spawns a Leaflet popup with name, type chip,
-// area, and an "Open details" button. The button opens the same
-// detail modal the table-views use; the popup is a lightweight
-// navigation surface for the map itself.
 
-function _showBoundaryPopup(latlng, b) {
-  const typeName = getBoundaryTypeName(b.typeId);
-  const color = colorForBoundaryType(b.typeId);
-  const html = `
-    <div class="map-popup">
-      <div class="map-popup-name">${b.name ? esc(b.name) : `<em class="text-muted">${t('boundaries.unnamed')}</em>`}</div>
-      <div class="map-popup-meta">
-        <span class="map-popup-type" style="background:${color}">${esc(typeName) || '—'}</span>
-        <span class="map-popup-area">${formatArea(boundaryArea(b))}</span>
-      </div>
-      <button class="btn btn-sm btn-primary map-popup-btn"
-        onclick="_map.closePopup(); openBoundaryDetail('${esc(b.id)}')">
-        ${t('map.popup_open')}
-      </button>
-    </div>`;
-  L.popup({ autoClose: true, closeOnClick: true, closeButton: true })
-    .setLatLng(latlng).setContent(html).openOn(_map);
+function _selectItem(kind, id) {
+  _selectedItemKind = kind;
+  _selectedItemId   = id;
+  redrawMap();
 }
 
-function _showPlotPopup(latlng, plot) {
-  const html = `
-    <div class="map-popup">
-      <div class="map-popup-name">${plot.name ? esc(plot.name) : `<em class="text-muted">${t('plots.unnamed')}</em>`}</div>
-      <div class="map-popup-meta">
-        <span class="map-popup-type map-popup-type-plot">${t('map.popup_kind_plot')}</span>
-        <span class="map-popup-area">${formatArea(plotArea(plot))}</span>
-      </div>
-      <button class="btn btn-sm btn-primary map-popup-btn"
-        onclick="_map.closePopup(); openPlotDetail('${esc(plot.id)}')">
-        ${t('map.popup_open')}
-      </button>
-    </div>`;
-  L.popup({ autoClose: true, closeOnClick: true, closeButton: true })
-    .setLatLng(latlng).setContent(html).openOn(_map);
+function _clearMapSelection() {
+  _selectedItemKind = null;
+  _selectedItemId   = null;
+  redrawMap();
 }
+
+// Returns the chain of ancestor boundaries from direct parent upward.
+// chain[0] = direct parent, chain[1] = grandparent, etc.
+function _getAncestorChain(kind, id) {
+  const chain = [];
+  let curKind = kind, curId = id;
+  while (true) {
+    const parent = findClaimingBoundary(curKind, curId, null);
+    if (!parent) break;
+    chain.push(parent);
+    curKind = 'boundary';
+    curId   = parent.id;
+  }
+  return chain;
+}
+
+function _renderMemberships(kind, id) {
+  const ancestors = _getAncestorChain(kind, id);
+  if (ancestors.length === 0) {
+    return `<div class="map-panel-membership-none">No parent boundary</div>`;
+  }
+  let html = `<div class="map-panel-section">Membership</div>`;
+  ancestors.forEach((b, i) => {
+    const typeName = getBoundaryTypeName(b.typeId);
+    const color    = colorForBoundaryType(b.typeId);
+    const label    = i === 0 ? 'Direct member of' : 'Also within';
+    html += `
+      <div class="map-panel-membership">
+        <span class="map-panel-member-label">${label}</span>
+        <a class="map-panel-member-link" onclick="openBoundaryDetail('${esc(b.id)}')">
+          <span class="map-panel-member-type" style="background:${color}">${esc(typeName)}</span>
+          ${b.name ? esc(b.name) : '<em>Unnamed</em>'}
+        </a>
+      </div>`;
+  });
+  return html;
+}
+
+function renderMapSidePanel() {
+  const el = document.getElementById('map-side-panel');
+  if (!el) return;
+
+  // If the selected item was deleted, clear stale selection silently.
+  if (_selectedItemId) {
+    const exists = _selectedItemKind === 'boundary'
+      ? data.boundaries.some(x => x.id === _selectedItemId)
+      : data.plots.some(x => x.id === _selectedItemId);
+    if (!exists) { _selectedItemKind = null; _selectedItemId = null; }
+  }
+
+  if (!_selectedItemId) {
+    const wasVisible = el.style.display !== 'none';
+    el.style.display = 'none';
+    if (wasVisible) setTimeout(() => _map && _map.invalidateSize(), 0);
+    return;
+  }
+
+  const wasHidden = el.style.display === 'none';
+  el.style.display = '';
+  if (wasHidden) setTimeout(() => _map && _map.invalidateSize(), 0);
+
+  let html = '';
+
+  if (_selectedItemKind === 'boundary') {
+    const b = data.boundaries.find(x => x.id === _selectedItemId);
+    if (!b) { el.style.display = 'none'; return; }
+    const typeName = getBoundaryTypeName(b.typeId);
+    const color    = colorForBoundaryType(b.typeId);
+    const area     = formatArea(boundaryArea(b));
+    html = `
+      <div class="map-panel-inner">
+        <div class="map-panel-hdr">
+          <span class="map-popup-type" style="background:${color}">${esc(typeName)}</span>
+          <button class="map-panel-close" onclick="_clearMapSelection()" title="Deselect">✕</button>
+        </div>
+        <div class="map-panel-field">
+          <label class="map-panel-label">Name</label>
+          <input class="input map-panel-input" value="${esc(b.name || '')}"
+            onblur="_panelSaveName(this.value)" placeholder="Unnamed">
+        </div>
+        <div class="map-panel-meta">${area}</div>
+        <div class="map-panel-field">
+          <label class="map-panel-label">Notes</label>
+          <textarea class="input map-panel-notes" onblur="_panelSaveNotes(this.value)"
+            rows="3" placeholder="No notes">${esc(b.notes || '')}</textarea>
+        </div>
+        ${_renderMemberships('boundary', b.id)}
+        <button class="btn btn-sm btn-primary" style="width:100%;margin-top:4px"
+          onclick="openBoundaryDetail('${esc(b.id)}')">Open full details</button>
+      </div>`;
+
+  } else if (_selectedItemKind === 'plot') {
+    const p = data.plots.find(x => x.id === _selectedItemId);
+    if (!p) { el.style.display = 'none'; return; }
+    const area = formatArea(plotArea(p));
+    html = `
+      <div class="map-panel-inner">
+        <div class="map-panel-hdr">
+          <span class="map-popup-type map-popup-type-plot">Plot</span>
+          <button class="map-panel-close" onclick="_clearMapSelection()" title="Deselect">✕</button>
+        </div>
+        <div class="map-panel-field">
+          <label class="map-panel-label">Name</label>
+          <input class="input map-panel-input" value="${esc(p.name || '')}"
+            onblur="_panelSaveName(this.value)" placeholder="Unnamed">
+        </div>
+        <div class="map-panel-meta">${area}</div>
+        <div class="map-panel-field">
+          <label class="map-panel-label">Notes</label>
+          <textarea class="input map-panel-notes" onblur="_panelSaveNotes(this.value)"
+            rows="3" placeholder="No notes">${esc(p.notes || '')}</textarea>
+        </div>
+        ${_renderMemberships('plot', p.id)}
+        <button class="btn btn-sm btn-primary" style="width:100%;margin-top:4px"
+          onclick="openPlotDetail('${esc(p.id)}')">Open full details</button>
+      </div>`;
+  }
+
+  el.innerHTML = html;
+}
+
+function _panelSaveName(value) {
+  if (_selectedItemKind === 'boundary') {
+    const b = data.boundaries.find(x => x.id === _selectedItemId);
+    if (!b) return;
+    b.name = value.trim();
+    // Keep drill stack label in sync
+    for (const entry of _drillStack) {
+      if (entry.boundaryId === b.id) entry.name = b.name || getBoundaryTypeName(b.typeId) || '?';
+    }
+    save();
+    redrawMap();
+  } else if (_selectedItemKind === 'plot') {
+    const p = data.plots.find(x => x.id === _selectedItemId);
+    if (!p) return;
+    p.name = value.trim();
+    save();
+    redrawMap();
+  }
+}
+
+function _panelSaveNotes(value) {
+  if (_selectedItemKind === 'boundary') {
+    const b = data.boundaries.find(x => x.id === _selectedItemId);
+    if (b) { b.notes = value; save(); }
+  } else if (_selectedItemKind === 'plot') {
+    const p = data.plots.find(x => x.id === _selectedItemId);
+    if (p) { p.notes = value; save(); }
+  }
+}
+
+// ============================================================
+// DRILL NAVIGATION
+// ============================================================
 
 function drillIntoBoundary(boundaryId) {
   const b = data.boundaries.find(x => x.id === boundaryId);
   if (!b) return;
+
+  // Single drill chain: only extend the stack if this boundary is a direct
+  // member of the current top. If it's at root level or unrelated, start
+  // a fresh chain.
+  if (_drillStack.length > 0) {
+    const top  = _drillStack[_drillStack.length - 1];
+    const topB = data.boundaries.find(x => x.id === top.boundaryId);
+    const isDirectChild = topB && (topB.members || []).some(
+      m => m.kind === 'boundary' && m.id === boundaryId
+    );
+    if (!isDirectChild) _drillStack = [];
+  }
+
   _drillStack.push({
     boundaryId: b.id,
     name: b.name || getBoundaryTypeName(b.typeId) || '?',
     typeId: b.typeId,
   });
   redrawMap();
-  _fitMapToActiveLayers();
+
+  // Fit viewport to the drilled boundary's own geometry only.
+  try {
+    const geom = resolveBoundaryGeometry(b);
+    if (geom && geom.polygons.length) {
+      const bounds = L.polygon(geom.polygons).getBounds();
+      if (bounds.isValid()) _map.fitBounds(bounds, { padding: [20, 20] });
+    }
+  } catch (e) { /* geometry unavailable */ }
 }
 
 function drillBackTo(level) {
   _drillStack = _drillStack.slice(0, level);
   redrawMap();
-  _fitMapToActiveLayers();
+  if (level === 0) {
+    _fitMapToActiveLayers();
+  } else {
+    const entry = _drillStack[level - 1];
+    const b = data.boundaries.find(x => x.id === entry?.boundaryId);
+    if (b) {
+      try {
+        const geom = resolveBoundaryGeometry(b);
+        if (geom && geom.polygons.length) {
+          const bounds = L.polygon(geom.polygons).getBounds();
+          if (bounds.isValid()) { _map.fitBounds(bounds, { padding: [20, 20] }); return; }
+        }
+      } catch (e) {}
+    }
+    _fitMapToActiveLayers();
+  }
 }
 
 function onMapTypeChange(typeId) {

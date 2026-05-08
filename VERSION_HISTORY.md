@@ -1,3 +1,28 @@
+## 0.1.11 — Map side panel, single drill chain, scoped viewport fit
+- **Side panel replaces popups.** Single-clicking a boundary or plot on
+  the map no longer opens a Leaflet popup. Instead a 280 px side panel
+  slides open to the right of the map. The panel shows the type chip,
+  editable name, area, editable notes, and an "Open full details" button.
+  The selected polygon is highlighted (heavier stroke + stronger fill).
+  Click ✕ or click an empty area of the map to deselect.
+- **Membership chain in the panel.** The panel shows every ancestor of
+  the selected item: "Direct member of [Province X]" for the immediate
+  parent, then "Also within [Country Y]" for each ancestor above that.
+  Clicking any ancestor name opens its detail modal. Items with no
+  parent show "No parent boundary".
+- **Single drill chain.** Double-clicking a boundary that is NOT a
+  direct child of the current drill-stack top now resets the chain
+  rather than appending an unrelated entry. Drilling from root always
+  starts a fresh chain; drilling a child extends it. This prevents
+  stray multi-branch stacks.
+- **Viewport fit scoped to drilled boundary.** Drilling into a boundary
+  now fits the viewport to *that boundary's own geometry* only, rather
+  than all loaded objects. Navigating back via the breadcrumb fits to
+  the ancestor boundary's geometry; returning to root fits all layers.
+- **Inline name/notes editing.** Name and notes in the side panel are
+  editable and auto-saved on blur, updating map tooltips and the drill-
+  stack breadcrumb label without opening a modal.
+
 ## 0.1.10 — Brick 6c polish: stacked drill, popups, plots view, absorption fix
 - **Stacked drill levels.** Drilling no longer hides the rest of the
   map: the dropdown's selected type stays rendered at the bottom and
