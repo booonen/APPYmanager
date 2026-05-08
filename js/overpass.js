@@ -62,6 +62,53 @@ function tagFilter(key, value) {
 }
 
 // ============================================================
+// SETTLEMENTS — Overpass builders + parser (Brick 7b)
+// ============================================================
+// Three import modes, mirroring the plot import flow but emitting nodes
+// (place=*) instead of relations. The parser drops anything that lacks
+// a `place` tag so a custom query that pulls extra junk still produces
+// a clean candidate list.
+
+function buildSettlementSearchQuery(areaTags, placeTypes) {
+  const areaFilter = areaTags.map(([k, v]) => tagFilter(k, v)).join('');
+  const safe = (placeTypes || []).map(p => String(p).replace(/[^a-z_]/gi, '')).filter(Boolean);
+  const placeFilter = safe.length > 0
+    ? `[place~"^(${safe.join('|')})$"]`
+    : `[place]`;
+  return `[out:json][timeout:60];
+area${areaFilter}->.searchArea;
+node(area.searchArea)${placeFilter};
+out body;`;
+}
+
+function buildSettlementByIdQuery(nodeId) {
+  return `[out:json][timeout:60];
+node(${Number(nodeId)});
+out body;`;
+}
+
+function parseSettlementImport(json) {
+  const out = [];
+  let skipped = 0;
+  const lang = (typeof _lang !== 'undefined') ? _lang : 'en';
+  for (const el of (json && json.elements) || []) {
+    if (el.type !== 'node') continue;
+    const tags = el.tags || {};
+    if (!tags.place) { skipped++; continue; }
+    const localName = tags[`name:${lang}`] || tags.name || '';
+    out.push({
+      ogfNodeId: String(el.id),
+      name:      localName,
+      lat:       el.lat,
+      lng:       el.lon,
+      place:     tags.place,
+      tags,
+    });
+  }
+  return { candidates: out, skipped };
+}
+
+// ============================================================
 // FETCH
 // ============================================================
 

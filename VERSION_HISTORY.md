@@ -1,3 +1,29 @@
+## 0.2.1 — Brick 7b: Settlements import flow
+- Three-mode Overpass import for settlements, mirroring Brick 2's plot
+  flow:
+  - **Search** — area-tag rows (seeded from `data.settings.defaultSearchArea`)
+    plus a `place=*` chip strip; common types (city, town, village)
+    default on, the rest are opt-in.
+  - **By ID** — paste a single OGF node id.
+  - **Custom** — full Overpass QL passthrough (re-using `buildCustomQuery`
+    so `[out:json]` injection works the same way as plot import).
+- New helpers in `js/overpass.js`: `buildSettlementSearchQuery`,
+  `buildSettlementByIdQuery`, `parseSettlementImport` (drops anything
+  without a `place` tag, picks `name:<lang>` first, falls back to `name`).
+- `autoAssignSettlementParent(lat, lng)` in `js/settlements.js` picks
+  the most-specific containing region: plot first, then boundaries
+  smallest-type-first via point-in-polygon. Runs at preview time so the
+  user sees what each candidate will attach to before commit.
+- Inset preview map shows candidate dots with name tooltips
+  (`drawPreviewSettlements` in `js/map.js`).
+- Dedup at preview time against existing `ogfNodeId`. The user sees
+  separate counts for "found", "already imported", and "non-place node
+  skipped".
+- Settlements tab shows a read-only list (Name, Place chip, Parent, OGF
+  Node ID) so imports can be verified without map markers — those land
+  in 7c. Sortable/searchable table + edit modal land in 7d.
+- l10n keys for all new strings; `EMPTY_DATA` migration unchanged.
+
 ## 0.2.0 — Brick 7a: Settlements scaffolding
 - New `data.settlements` array (with `EMPTY_DATA` migration so existing
   saves pick up `[]` on next load — no schema bump needed).

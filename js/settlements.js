@@ -26,6 +26,11 @@ const PLACE_TYPES = [
   'borough', 'quarter', 'neighbourhood', 'isolated_dwelling', 'locality',
 ];
 
+// Sensible default for the import-modal preset selector. Pulls in the
+// load-bearing settlement nodes; smaller place types stay opt-in to keep
+// initial imports tight.
+const PLACE_TYPES_DEFAULT_CHECKED = ['city', 'town', 'village'];
+
 function createSettlement({ name, lat, lng, ogfNodeId, place, parent, notes, flags }) {
   const s = {
     id:        uid(),
@@ -101,4 +106,38 @@ function flattenSettlementsForBoundary(boundary) {
 // Settlements directly attached to a single plot. Cheap lookup.
 function settlementsForPlot(plotId) {
   return (data.settlements || []).filter(s => s.parent?.kind === 'plot' && s.parent.id === plotId);
+}
+
+// Pick the most specific containing region for a settlement at (lat, lng).
+// Plot first (most specific anchor), then boundaries smallest-type-first
+// (deepest in the primitiveId chain). Returns null if nothing contains
+// the point — the user can still import it as an unparented settlement.
+function autoAssignSettlementParent(lat, lng) {
+  if (typeof turf === 'undefined') return null;
+  const pt = turf.point([lng, lat]);
+
+  for (const plot of data.plots) {
+    const f = plotToGeoJSONFeature(plot);
+    if (!f) continue;
+    try {
+      if (turf.booleanPointInPolygon(pt, f)) return { kind: 'plot', id: plot.id };
+    } catch (_) {}
+  }
+
+  // _typesLargestFirst lives in map.js; reverse for smallest first.
+  const types = (typeof _typesLargestFirst === 'function')
+    ? _typesLargestFirst()
+    : (data.boundaryTypes || []);
+  for (let i = types.length - 1; i >= 0; i--) {
+    const ty = types[i];
+    for (const b of data.boundaries) {
+      if (b.typeId !== ty.id) continue;
+      const geom = (typeof resolveBoundaryGeometry === 'function') ? resolveBoundaryGeometry(b) : null;
+      if (!geom?.feature) continue;
+      try {
+        if (turf.booleanPointInPolygon(pt, geom.feature)) return { kind: 'boundary', id: b.id };
+      } catch (_) {}
+    }
+  }
+  return null;
 }

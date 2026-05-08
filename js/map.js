@@ -169,6 +169,29 @@ function destroyPreviewMap() {
   if (_previewMap) { _previewMap.remove(); _previewMap = null; }
 }
 
+// Draw settlement candidates as circle markers in the preview map
+// (Brick 7b). One marker per candidate, gold to match the settlements
+// accent. Bounds fit to the marker set.
+function drawPreviewSettlements(candidates) {
+  if (!_previewMap || !_previewLayer) return;
+  _previewLayer.clearLayers();
+  const all = L.latLngBounds([]);
+  for (const c of candidates) {
+    if (!Number.isFinite(c.lat) || !Number.isFinite(c.lng)) continue;
+    const m = L.circleMarker([c.lat, c.lng], {
+      radius: 6,
+      color: '#0f1117',
+      weight: 1.5,
+      fillColor: '#e0a855',
+      fillOpacity: 0.9,
+    });
+    m.bindTooltip(c.name ? c.name : `(${c.place})`);
+    _previewLayer.addLayer(m);
+    all.extend([c.lat, c.lng]);
+  }
+  if (all.isValid()) _previewMap.fitBounds(all, { padding: [20, 20] });
+}
+
 // ============================================================
 // DETAIL MAP (inset, inside the plot-detail modal — Brick 3)
 // ============================================================
