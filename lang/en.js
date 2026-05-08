@@ -96,8 +96,9 @@ registerLanguage('en', 'English', {
     "flush_toast": "Plots and boundaries cleared"
   },
   "map": {
-    "layer_plots": "Plots",
-    "crumb_root": "All"
+    "show_label": "Show:",
+    "crumb_root": "All",
+    "crumb_all_of": "All {type}"
   },
   "stat": {
     "plots": "Plots",

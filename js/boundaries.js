@@ -200,6 +200,60 @@ function promoteMember(kind, memberId, newParentBoundary) {
 }
 
 // ============================================================
+// MEMBER ABSORPTION (Brick 6c)
+// ============================================================
+// Given a target boundary type T_B and a plot-id set P, return the
+// "right" member list for a new boundary of type T_B covering P:
+// where existing intermediate boundaries (types in chainBelow(T_B))
+// fully fit inside P, replace those plots with the boundary itself.
+// Plots not covered by any absorbed boundary stay as direct members,
+// unless they're already claimed by some other boundary that didn't
+// absorb (skipped to preserve exclusivity).
+//
+// Greedy largest-first: a Province import containing two municipalities
+// becomes [Mun1, Mun2] rather than [P1..Pn]. If those municipalities
+// were themselves owned by an existing Country, callers should follow
+// up with promoteMember to wedge the new Province in between.
+function resolveBoundaryMembersForPlots(plotIds, targetTypeId) {
+  const targetChain = _typeChainBelow(targetTypeId);
+  const remaining   = new Set(plotIds);
+  const members     = [];
+  const insideAbsorbed = new Set();
+
+  // Sort candidates by chain depth (smallest index = type closest to T_B,
+  // i.e. largest level first). This way a Sub-Province absorbed wholesale
+  // is preferred over its individual Municipalities.
+  const candidates = data.boundaries
+    .filter(x => targetChain.includes(x.typeId))
+    .map(x => ({ x, depth: targetChain.indexOf(x.typeId) }))
+    .sort((a, b) => a.depth - b.depth);
+
+  for (const { x } of candidates) {
+    if (insideAbsorbed.has(x.id)) continue;
+    const xPlots = flattenBoundaryToPlotIds(x);
+    if (xPlots.length === 0) continue;
+    if (!xPlots.every(pid => remaining.has(pid))) continue;
+
+    members.push({ kind: 'boundary', id: x.id });
+    for (const pid of xPlots) remaining.delete(pid);
+    (function walk(b) {
+      for (const m of (b.members || [])) {
+        if (m.kind !== 'boundary') continue;
+        insideAbsorbed.add(m.id);
+        const sub = data.boundaries.find(bb => bb.id === m.id);
+        if (sub) walk(sub);
+      }
+    })(x);
+  }
+
+  for (const pid of remaining) {
+    if (findClaimingBoundary('plot', pid, null)) continue;
+    members.push({ kind: 'plot', id: pid });
+  }
+  return members;
+}
+
+// ============================================================
 // BOUNDARY HELPERS
 // ============================================================
 

@@ -89,9 +89,7 @@ function switchTab(tab) {
     map: () => {
       if (!_map) { initMap(); return; }
       _map.invalidateSize();
-      redrawMapPlots();
-      redrawMapBoundaries();
-      renderMapToolbar();
+      redrawMap();
     },
     settings: renderSettings,
     'import-export': renderImportExport

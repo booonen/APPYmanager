@@ -17,22 +17,21 @@ let _mapTileLayer = null;
 let _mapPlotLayer = null;
 let _selectedPlotId = null;
 
-// ── Brick 6b: per-type boundary layers + drill-through ──
-// Each boundary type is its own toggleable Leaflet FeatureGroup, keyed by
-// typeId. Visibility is sticky across tab switches via _visibleBoundaryTypes.
-// Drill state: _drillStack holds the chain from root to the deepest
-// drilled-into boundary; an empty stack = full project view.
+// ── Brick 6b/6c: hierarchical boundary view ──
+// One displayed level at a time. Top-level: a dropdown picks a boundary
+// type T → all boundaries of that type render filled, like the plot view.
+// Double-click on a boundary drills in: the map switches to the *direct
+// members* of that boundary (its sub-boundaries + any plots it directly
+// contains). Each drill step descends one level. A breadcrumb above the
+// dropdown lets you return to any ancestor view, including "All [type]".
 const BOUNDARY_TYPE_PALETTE = [
   '#6f86d6', '#48b287', '#d97757', '#9b6dd0',
   '#d4a13d', '#3aa2c7', '#c763a3', '#7c8c5b'
 ];
-const PLOTS_LAYER_COLOR = '#475569';
-let _mapBoundaryLayers     = new Map(); // typeId → L.featureGroup
-let _visibleBoundaryTypes  = null;      // Set<typeId> | null (null = uninitialized)
-let _seenBoundaryTypeIds   = null;      // Set<typeId> — track which types we've already defaulted on
-let _plotsLayerVisible     = true;
-let _drillStack            = [];        // [{ boundaryId, name, typeId }, ...]
-let _boundaryClickTimer    = null;      // single-click vs double-click guard
+let _mapBoundaryLayer    = null;        // single L.featureGroup for boundary polygons
+let _mapCurrentTypeId    = null;        // type selected in dropdown (null = uninitialized → largest)
+let _drillStack          = [];          // [{ boundaryId, name, typeId }, ...]
+let _boundaryClickTimer  = null;        // single-click vs double-click guard
 
 function initMap() {
   const el = document.getElementById('map');
@@ -56,12 +55,12 @@ function initMap() {
     attribution: 'Tiles © <a href="https://opengeofiction.net">OpenGeofiction</a>'
   }).addTo(_map);
 
-  _mapPlotLayer = L.featureGroup().addTo(_map);
+  _mapPlotLayer     = L.featureGroup().addTo(_map);
+  _mapBoundaryLayer = L.featureGroup().addTo(_map);
   _map.on('click', () => {
-    // Bare-map clicks deselect; clicks on plot polygons stop propagation.
     if (_selectedPlotId !== null) {
       _selectedPlotId = null;
-      redrawMapPlots();
+      redrawMap();
     }
   });
 
@@ -77,34 +76,12 @@ function initMap() {
     save();
   });
 
-  redrawMapPlots();
-  redrawMapBoundaries();
-  renderMapToolbar();
+  redrawMap();
 }
 
 // ============================================================
-// PLOT RENDERING
+// PLOT STYLING (shared with detail map)
 // ============================================================
-
-function redrawMapPlots() {
-  if (!_map || !_mapPlotLayer) return;
-  _mapPlotLayer.clearLayers();
-  const scope = _getDrillScope();
-  for (const plot of data.plots) {
-    if (scope && !scope.plotIds.has(plot.id)) continue;
-    const geo = resolvePlotGeometry(plot);
-    if (!geo.polygons.length) continue;
-    const selected = plot.id === _selectedPlotId;
-    const poly = L.polygon(geo.polygons, plotPolygonStyle(selected));
-    poly._appyPlotId = plot.id;
-    poly.on('click', (e) => {
-      L.DomEvent.stopPropagation(e);
-      onPlotClick(plot.id);
-    });
-    if (plot.name) poly.bindTooltip(plot.name);
-    _mapPlotLayer.addLayer(poly);
-  }
-}
 
 function plotPolygonStyle(selected) {
   // Neutral slate so plots read as data on the map without competing
@@ -117,10 +94,17 @@ function plotPolygonStyle(selected) {
   };
 }
 
-function onPlotClick(plotId) {
-  _selectedPlotId = (_selectedPlotId === plotId) ? null : plotId;
-  redrawMapPlots();
+// Single-click on a plot polygon opens the plot-detail modal so the user
+// can inspect/edit it. Used in drill view and the no-types fallback at
+// root. Selection-highlight is gone; the modal is the inspection surface.
+function onPlotPolyClick(e, plotId) {
+  L.DomEvent.stopPropagation(e);
+  if (typeof openPlotDetail === 'function') openPlotDetail(plotId);
 }
+
+// Backwards-compat alias for any external callers (e.g. plot-detail save
+// handler) that want to refresh the map after a data change.
+function redrawMapPlots() { redrawMap(); }
 
 // ============================================================
 // PREVIEW MAP (inset, inside import modal)
@@ -223,12 +207,21 @@ function destroyDetailMap() {
 }
 
 // ============================================================
-// BOUNDARY RENDERING (Brick 6b)
+// HIERARCHICAL MAP RENDERING (Brick 6c)
 // ============================================================
-// Each boundary type gets its own L.featureGroup so we can toggle the
-// whole level on/off as a unit. Geometry is the dissolved turf-union of
-// constituent plots (cached by id). Stroke-only style — fills are
-// reserved for future choropleth (Brick 13).
+// Two view modes:
+//   ROOT  — drill stack empty: map shows every boundary of the type
+//           selected in the dropdown, rendered filled (the same visual
+//           treatment as plots). With no boundary types defined we fall
+//           back to the all-plots view.
+//   DRILL — drill stack non-empty: map shows the *direct members* of the
+//           top-of-stack boundary (sub-boundaries + plots it directly
+//           contains). Sub-boundaries render filled in their own type's
+//           color; plots render in the neutral plot style.
+//
+// Single-click on any polygon opens its detail modal. Double-click on a
+// boundary drills in one level (deferred 240 ms so it can cancel the
+// pending click). Plots are leaves — double-click does nothing extra.
 
 function colorForBoundaryType(typeId) {
   const idx = data.boundaryTypes.findIndex(t => t.id === typeId);
@@ -236,91 +229,123 @@ function colorForBoundaryType(typeId) {
   return BOUNDARY_TYPE_PALETTE[idx % BOUNDARY_TYPE_PALETTE.length];
 }
 
-function _ensureBoundaryVisibilityInit() {
-  if (_visibleBoundaryTypes === null) _visibleBoundaryTypes = new Set();
-  if (_seenBoundaryTypeIds === null)  _seenBoundaryTypeIds  = new Set();
-  // First time we see a type id, default it to visible. After that it's
-  // user-controlled — if they toggle it off it stays off.
-  for (const ty of data.boundaryTypes) {
-    if (_seenBoundaryTypeIds.has(ty.id)) continue;
-    _seenBoundaryTypeIds.add(ty.id);
-    _visibleBoundaryTypes.add(ty.id);
+function boundaryFilledStyle(color) {
+  return { color, weight: 2, fillColor: color, fillOpacity: 0.18, lineJoin: 'round' };
+}
+
+// "Largest" = the type closest to the root of the primitiveId chain.
+// Roots are types not pointed at by any other type. Multiple roots tie-break
+// alphabetically.
+function _typesLargestFirst() {
+  const types = data.boundaryTypes;
+  if (types.length === 0) return [];
+  const pointedTo = new Set(types.map(t => t.primitiveId).filter(Boolean));
+  const depth = new Map();
+  for (const ty of types) if (!pointedTo.has(ty.id)) depth.set(ty.id, 0);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const ty of types) {
+      if (depth.has(ty.id)) continue;
+      // ty is the primitive of some parent: depth = parent.depth + 1
+      const parents = types.filter(p => p.primitiveId === ty.id);
+      const ds = parents.map(p => depth.get(p.id)).filter(d => d !== undefined);
+      if (ds.length > 0) {
+        depth.set(ty.id, Math.min(...ds) + 1);
+        changed = true;
+      }
+    }
   }
+  return types.slice().sort((a, b) => {
+    const da = depth.get(a.id) ?? 999;
+    const db = depth.get(b.id) ?? 999;
+    if (da !== db) return da - db;
+    return a.name.localeCompare(b.name);
+  });
+}
+
+function _largestBoundaryTypeId() {
+  return _typesLargestFirst()[0]?.id || null;
+}
+
+function _normalizeMapState() {
   // Drop drill-stack entries whose boundary has since been deleted.
   while (_drillStack.length > 0) {
     const top = _drillStack[_drillStack.length - 1];
     if (data.boundaries.some(b => b.id === top.boundaryId)) break;
     _drillStack.pop();
   }
-}
-
-function _getDrillScope() {
-  // Returns { plotIds, boundaryIds } limiting what's rendered, or null
-  // for the unrestricted root view. Drilling into B shows everything
-  // transitively contained by B but not B itself or anything above.
-  if (_drillStack.length === 0) return null;
-  const top = _drillStack[_drillStack.length - 1];
-  const b = data.boundaries.find(x => x.id === top.boundaryId);
-  if (!b) return { plotIds: new Set(), boundaryIds: new Set() };
-
-  const plotIds = new Set(flattenBoundaryToPlotIds(b));
-  const boundaryIds = new Set();
-  (function walk(boundary) {
-    for (const m of (boundary.members || [])) {
-      if (m.kind !== 'boundary') continue;
-      boundaryIds.add(m.id);
-      const sub = data.boundaries.find(x => x.id === m.id);
-      if (sub) walk(sub);
-    }
-  })(b);
-  return { plotIds, boundaryIds };
-}
-
-function redrawMapBoundaries() {
-  if (!_map) return;
-  _ensureBoundaryVisibilityInit();
-
-  // Tear down old layers.
-  for (const layer of _mapBoundaryLayers.values()) {
-    if (_map.hasLayer(layer)) _map.removeLayer(layer);
+  // Default the dropdown selection to the largest type.
+  if (_mapCurrentTypeId === null || !data.boundaryTypes.some(t => t.id === _mapCurrentTypeId)) {
+    _mapCurrentTypeId = _largestBoundaryTypeId();
   }
-  _mapBoundaryLayers.clear();
+}
 
-  const scope = _getDrillScope();
+function redrawMap() {
+  if (!_map || !_mapPlotLayer || !_mapBoundaryLayer) return;
+  _normalizeMapState();
+  _mapPlotLayer.clearLayers();
+  _mapBoundaryLayer.clearLayers();
 
-  // Group in-scope boundaries by typeId.
-  const byType = new Map();
+  if (_drillStack.length === 0) _renderRootView();
+  else                          _renderDrillView();
+
+  renderMapToolbar();
+}
+
+function _renderRootView() {
+  if (data.boundaryTypes.length === 0 || !_mapCurrentTypeId) {
+    // Fallback: show all plots, no boundary type to display.
+    for (const plot of data.plots) _drawPlotPoly(plot);
+    return;
+  }
+  const color = colorForBoundaryType(_mapCurrentTypeId);
   for (const b of data.boundaries) {
-    if (scope && !scope.boundaryIds.has(b.id)) continue;
-    if (!byType.has(b.typeId)) byType.set(b.typeId, []);
-    byType.get(b.typeId).push(b);
-  }
-
-  for (const [typeId, list] of byType) {
-    const group = L.featureGroup();
-    const color = colorForBoundaryType(typeId);
-    for (const b of list) {
-      const geom = resolveBoundaryGeometry(b);
-      if (!geom || !geom.polygons.length) continue;
-      const poly = L.polygon(geom.polygons, boundaryPolygonStyle(color));
-      poly._appyBoundaryId = b.id;
-      poly.bindTooltip(b.name || `(${getBoundaryTypeName(b.typeId)})`);
-      poly.on('click', (e) => onBoundaryPolyClick(e, b.id));
-      poly.on('dblclick', (e) => onBoundaryPolyDblClick(e, b.id));
-      group.addLayer(poly);
-    }
-    _mapBoundaryLayers.set(typeId, group);
-    if (_visibleBoundaryTypes.has(typeId)) group.addTo(_map);
+    if (b.typeId !== _mapCurrentTypeId) continue;
+    _drawBoundaryPoly(b, color);
   }
 }
 
-function boundaryPolygonStyle(color) {
-  return { color, weight: 3, fill: false, opacity: 0.9, lineJoin: 'round' };
+function _renderDrillView() {
+  const top    = _drillStack[_drillStack.length - 1];
+  const parent = data.boundaries.find(b => b.id === top.boundaryId);
+  if (!parent) return;
+
+  for (const m of (parent.members || [])) {
+    if (m.kind === 'plot') {
+      const plot = data.plots.find(p => p.id === m.id);
+      if (plot) _drawPlotPoly(plot);
+    } else if (m.kind === 'boundary') {
+      const sub = data.boundaries.find(b => b.id === m.id);
+      if (sub) _drawBoundaryPoly(sub, colorForBoundaryType(sub.typeId));
+    }
+  }
+}
+
+function _drawPlotPoly(plot) {
+  const geo = resolvePlotGeometry(plot);
+  if (!geo.polygons.length) return;
+  const poly = L.polygon(geo.polygons, plotPolygonStyle(false));
+  poly._appyPlotId = plot.id;
+  if (plot.name) poly.bindTooltip(plot.name);
+  poly.on('click', (e) => onPlotPolyClick(e, plot.id));
+  _mapPlotLayer.addLayer(poly);
+}
+
+function _drawBoundaryPoly(b, color) {
+  const geom = resolveBoundaryGeometry(b);
+  if (!geom || !geom.polygons.length) return;
+  const poly = L.polygon(geom.polygons, boundaryFilledStyle(color));
+  poly._appyBoundaryId = b.id;
+  poly.bindTooltip(b.name || `(${getBoundaryTypeName(b.typeId)})`);
+  poly.on('click',    (e) => onBoundaryPolyClick(e, b.id));
+  poly.on('dblclick', (e) => onBoundaryPolyDblClick(e, b.id));
+  _mapBoundaryLayer.addLayer(poly);
 }
 
 function onBoundaryPolyClick(e, boundaryId) {
   L.DomEvent.stopPropagation(e);
-  // Single click defers; if a dblclick arrives within the window we cancel.
+  // Defer single-click so an in-flight dblclick can cancel it.
   if (_boundaryClickTimer) return;
   _boundaryClickTimer = setTimeout(() => {
     _boundaryClickTimer = null;
@@ -343,72 +368,51 @@ function drillIntoBoundary(boundaryId) {
     name: b.name || getBoundaryTypeName(b.typeId) || '?',
     typeId: b.typeId,
   });
-  redrawMapPlots();
-  redrawMapBoundaries();
-  renderMapToolbar();
-  _fitMapToVisible();
+  redrawMap();
+  _fitMapToActiveLayers();
 }
 
 function drillBackTo(level) {
-  // level=0 → root; level=N → keep first N entries.
   _drillStack = _drillStack.slice(0, level);
-  redrawMapPlots();
-  redrawMapBoundaries();
-  renderMapToolbar();
-  _fitMapToVisible();
+  redrawMap();
+  _fitMapToActiveLayers();
 }
 
-function _fitMapToVisible() {
+function onMapTypeChange(typeId) {
+  _mapCurrentTypeId = typeId || null;
+  _drillStack = [];
+  redrawMap();
+  _fitMapToActiveLayers();
+}
+
+function _fitMapToActiveLayers() {
   if (!_map) return;
   const bounds = L.latLngBounds([]);
-  if (_plotsLayerVisible && _mapPlotLayer) {
-    const b = _mapPlotLayer.getBounds();
-    if (b.isValid()) bounds.extend(b);
-  }
-  for (const [typeId, layer] of _mapBoundaryLayers) {
-    if (!_visibleBoundaryTypes.has(typeId)) continue;
+  for (const layer of [_mapPlotLayer, _mapBoundaryLayer]) {
+    if (!layer) continue;
     const b = layer.getBounds();
     if (b.isValid()) bounds.extend(b);
   }
   if (bounds.isValid()) _map.fitBounds(bounds, { padding: [20, 20] });
 }
 
-function togglePlotsLayer() {
-  _plotsLayerVisible = !_plotsLayerVisible;
-  if (!_map || !_mapPlotLayer) return;
-  if (_plotsLayerVisible) _mapPlotLayer.addTo(_map);
-  else _map.removeLayer(_mapPlotLayer);
-  renderMapToolbar();
-}
-
-function toggleBoundaryTypeLayer(typeId) {
-  _ensureBoundaryVisibilityInit();
-  const layer = _mapBoundaryLayers.get(typeId);
-  if (_visibleBoundaryTypes.has(typeId)) {
-    _visibleBoundaryTypes.delete(typeId);
-    if (layer && _map.hasLayer(layer)) _map.removeLayer(layer);
-  } else {
-    _visibleBoundaryTypes.add(typeId);
-    if (layer) layer.addTo(_map);
-  }
-  renderMapToolbar();
-}
-
 // ============================================================
-// MAP TOOLBAR — breadcrumb + per-layer toggle chips
+// MAP TOOLBAR — breadcrumb + level dropdown
 // ============================================================
-// Single-line strip that sits above the map. Chips toggle layer
-// visibility. When drilled in, a breadcrumb appears above the strip
-// with clickable ancestors back to the project root.
 
 function renderMapToolbar() {
   const el = document.getElementById('map-toolbar');
   if (!el) return;
-  _ensureBoundaryVisibilityInit();
+  _normalizeMapState();
 
+  // Breadcrumb: "All [largest-type] › Drilled-1 › Drilled-2 …"
   let breadcrumbHtml = '';
   if (_drillStack.length > 0) {
-    const parts = [`<a class="map-crumb-link" onclick="drillBackTo(0)">${t('map.crumb_root')}</a>`];
+    const rootType = data.boundaryTypes.find(t => t.id === _mapCurrentTypeId);
+    const rootLabel = rootType
+      ? t('map.crumb_all_of', { type: esc(rootType.name) })
+      : t('map.crumb_root');
+    const parts = [`<a class="map-crumb-link" onclick="drillBackTo(0)">${rootLabel}</a>`];
     _drillStack.forEach((entry, i) => {
       const last = i === _drillStack.length - 1;
       const label = entry.name ? esc(entry.name) : '?';
@@ -419,34 +423,22 @@ function renderMapToolbar() {
     breadcrumbHtml = `<div class="map-crumbs">${parts.join('<span class="map-crumb-sep">›</span>')}</div>`;
   }
 
-  const chips = [];
-  chips.push(_chipHtml('plots',
-    t('map.layer_plots'),
-    PLOTS_LAYER_COLOR,
-    _plotsLayerVisible,
-    `togglePlotsLayer()`));
-  for (const ty of data.boundaryTypes.slice().sort((a, b) => a.name.localeCompare(b.name))) {
-    chips.push(_chipHtml(ty.id,
-      ty.name,
-      colorForBoundaryType(ty.id),
-      _visibleBoundaryTypes.has(ty.id),
-      `toggleBoundaryTypeLayer('${esc(ty.id)}')`));
+  // Dropdown: boundary types, largest first. Hidden when there are none.
+  let dropdownHtml = '';
+  const types = _typesLargestFirst();
+  if (types.length > 0) {
+    const opts = types.map(ty =>
+      `<option value="${esc(ty.id)}"${ty.id === _mapCurrentTypeId ? ' selected' : ''}>${esc(ty.name)}</option>`
+    ).join('');
+    dropdownHtml = `
+      <div class="map-toolbar-row">
+        <label class="import-target-label">${t('map.show_label')}</label>
+        <select onchange="onMapTypeChange(this.value)">${opts}</select>
+      </div>`;
   }
 
-  el.innerHTML = breadcrumbHtml + `<div class="map-chip-strip">${chips.join('')}</div>`;
+  el.innerHTML = breadcrumbHtml + dropdownHtml;
 }
 
-function _chipHtml(key, label, color, active, onclick) {
-  const cls = `map-chip${active ? ' active' : ''}`;
-  return `<button class="${cls}" style="--chip-color:${color}" onclick="${onclick}">
-    <span class="map-chip-dot"></span>${esc(label)}
-  </button>`;
-}
-
-function fitMapToPlots() {
-  // Legacy helper — still wired in case anything calls it. Use _fitMapToVisible
-  // when boundaries are involved.
-  if (!_map || !_mapPlotLayer) return;
-  const b = _mapPlotLayer.getBounds();
-  if (b.isValid()) _map.fitBounds(b, { padding: [20, 20] });
-}
+// Backwards-compat alias, in case anything still calls the old name.
+function redrawMapBoundaries() { redrawMap(); }

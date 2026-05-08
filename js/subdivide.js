@@ -413,14 +413,24 @@ function executeSubdivisionPlan(plan, nodes, ways, target) {
   }
 
   // 5. Wrap each candidate as a boundary if the user chose that target.
+  // Absorption rule (Brick 6c): when the imported boundary's plot set is
+  // already fully covered by an existing intermediate boundary (e.g.
+  // importing a Province whose plots all live inside known Municipalities),
+  // the intermediate boundary is taken as a member instead of its plots.
+  // Promotion (existing flow) wedges the new boundary between any prior
+  // claimer and the absorbed member.
   if (target.kind === 'boundary' && target.typeId) {
     for (const [candidate, plotIds] of candidateToPlotIds) {
       if (plotIds.length === 0) continue;
-      createBoundary({
+      const members = resolveBoundaryMembersForPlots(plotIds, target.typeId);
+      const newB = createBoundary({
         name:    candidate.name || '',
         typeId:  target.typeId,
-        members: plotIds.map(id => ({ kind: 'plot', id })),
+        members,
       });
+      for (const m of members) {
+        promoteMember(m.kind, m.id, newB);
+      }
     }
   }
 }

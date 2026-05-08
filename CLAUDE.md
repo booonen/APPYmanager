@@ -420,18 +420,27 @@ they come up; the plan is a living document.
   the claimer's type chain allows wedging the new boundary; on commit the
   item moves and the new boundary is inserted between claimer and item.
   No map rendering yet — that's Brick 6b.
-- **Brick 6b** ✓ (PR open on `feature/brick-6a-boundaries`) — boundary map
-  rendering. `resolveBoundaryGeometry` (boundaries.js) folds `turf.union`
-  over all transitively-contained plots and caches the result; mutation
-  sites call `invalidateBoundaryGeometry()`. Each boundary type is its
-  own toggleable `L.featureGroup`, stroke-only with a per-type palette
-  color. A single-line chip strip above the map (Plots + each type)
-  toggles visibility (`overflow-x: auto` for many types). Single-click
-  on a boundary opens its detail modal (240 ms debounce so dblclick can
-  cancel); double-click drills through — the map filters to the
-  boundary's transitive contents and a breadcrumb appears above the
-  strip with clickable ancestors back to "All". Leaflet's dblclick-zoom
-  is disabled to avoid fighting the drill gesture.
+- **Brick 6b** ✓ (superseded by 6c) — first cut of boundary map rendering
+  used a multi-layer chip strip with stroke-only fills. Replaced in 6c
+  by the hierarchical dropdown view; `resolveBoundaryGeometry` (the
+  cached turf.union folder in boundaries.js) survived from 6b.
+- **Brick 6c** ✓ (PR open on `feature/brick-6a-boundaries`) — hierarchical
+  map view + import absorption. The Map tab uses a single dropdown that
+  picks one boundary type to display (largest first by `primitiveId`
+  depth). At top level it renders every boundary of that type filled
+  in the type's color, like plots are rendered. Double-click drills
+  into a boundary's *direct members* — sub-boundaries render in their
+  own type color, plots in neutral style — repeating descends one
+  level per dblclick. Single-click on any polygon opens its detail
+  modal (boundaries get a 240 ms debounce so dblclick can cancel).
+  Breadcrumb above the dropdown returns to any ancestor view. On
+  import-as-boundary, `resolveBoundaryMembersForPlots` (boundaries.js)
+  performs greedy largest-first absorption: an imported Province whose
+  plots are fully covered by existing Municipalities becomes a Boundary
+  whose members are those Municipalities, not the raw plots. The
+  existing `promoteMember` flow then wedges the new boundary between
+  any prior claimer (e.g. a Country owning the Municipalities) and
+  each absorbed member, preserving exclusivity.
 - **Brick 7** (next) — Settlements (Phase 2.5). Import OGF `place=*` nodes
   via Overpass; one parent per settlement (plot or boundary); markers,
   list view, edit/delete. Not load-bearing for aggregation.

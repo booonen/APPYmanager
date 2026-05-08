@@ -1,3 +1,26 @@
+## 0.1.9 — Brick 6c: hierarchical map view + import absorption
+- **Map view rebuilt around the hierarchy.** Replaced the multi-layer
+  chip strip with a single dropdown picking which boundary type to
+  display. Default = the largest type (root of the primitiveId chain).
+  At top level the map shows every boundary of that type, rendered
+  filled in the type's color (the same visual treatment as plots).
+- **Drill steps one level down.** Double-clicking a boundary descends
+  into its *direct members* — sub-boundaries get their own type-color
+  fill, plots in the neutral plot style. Single-click on any polygon
+  opens its detail modal. Breadcrumb above the dropdown shows the
+  drill path back to "All [type]".
+- **Plots in drill view open the plot detail.** The previous
+  click-to-highlight behaviour is gone (the modal is the inspection
+  surface across the app).
+- **Import-as-boundary now absorbs intermediate boundaries.** When a
+  newly-imported boundary's plot set is fully covered by existing
+  intermediate-type boundaries, those intermediates become its members
+  instead of the raw plots. Greedy largest-first absorption: a Province
+  imported on top of two existing Municipalities ends up as
+  `[Mun1, Mun2]` rather than `[P1..Pn]`. Existing `promoteMember`
+  follow-up wedges the new boundary between any prior claimer
+  (e.g. a Country) and each absorbed member, preserving exclusivity.
+
 ## 0.1.8 — Brick 6b: boundary map layers, toggle strip, drill-through
 - **Dissolved boundary geometry via Turf**: `resolveBoundaryGeometry`
   (in `js/boundaries.js`) flattens a boundary to its transitive plot
