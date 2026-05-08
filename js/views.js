@@ -11,6 +11,7 @@ function renderDashboard() {
       <div class="stat-card"><div class="stat-value">${data.plots.length}</div><div class="stat-label">${t('stat.plots')}</div></div>
       <div class="stat-card"><div class="stat-value">${data.boundaries.length}</div><div class="stat-label">${t('stat.boundaries')}</div></div>
       <div class="stat-card"><div class="stat-value">${data.boundaryTypes.length}</div><div class="stat-label">${t('stat.boundary_types')}</div></div>
+      <div class="stat-card"><div class="stat-value">${(data.settlements || []).length}</div><div class="stat-label">${t('stat.settlements')}</div></div>
       <div class="stat-card"><div class="stat-value">${data.propertySchemas.length}</div><div class="stat-label">${t('stat.properties')}</div></div>
     `;
   }
@@ -478,6 +479,739 @@ function onBoundariesSort(col) {
     _boundariesSort.direction = 'asc';
   }
   renderBoundaries();
+}
+
+// ============================================================
+// SETTLEMENTS — list view (Brick 7a, table polished in 7d)
+// ============================================================
+// Sortable + searchable table mirroring the Plots tab. Row click
+// opens the detail modal (`openSettlementDetail`).
+
+let _settlementsSort = { column: 'name', direction: 'asc' };
+let _settlementsSearch = '';
+
+function renderSettlements() {
+  const el = document.getElementById('settlements-content');
+  if (!el) return;
+  const all = data.settlements || [];
+
+  if (all.length === 0) {
+    el.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-icon">◉</div>
+        <h3>${t('settlements.empty_title')}</h3>
+        <p>${t('settlements.empty_body')}</p>
+        <button class="btn btn-primary" onclick="openSettlementImportModal()">+ ${t('settlements.import_btn')}</button>
+      </div>`;
+    return;
+  }
+
+  const top = `
+    <div class="flex" style="justify-content:space-between;align-items:center;margin-bottom:12px">
+      <button class="btn btn-primary" onclick="openSettlementImportModal()">+ ${t('settlements.import_btn')}</button>
+      <span class="text-dim" style="font-size:12px">${t('settlements.count', { n: all.length })}</span>
+    </div>`;
+
+  el.innerHTML = top + `
+    <div style="margin-bottom:12px">
+      <input type="text" id="settlements-search-input"
+        placeholder="${t('settlements.search_placeholder')}"
+        oninput="onSettlementsSearch(this.value)"
+        value="${esc(_settlementsSearch)}"
+        autocomplete="off"
+        style="max-width:320px">
+    </div>
+    <table class="data-table">
+      <thead>
+        <tr>
+          ${settlementsSortHeader('name', t('settlements.col_name'))}
+          ${settlementsSortHeader('place', t('settlements.col_place'))}
+          ${settlementsSortHeader('parent', t('settlements.col_parent'))}
+          ${settlementsSortHeader('ogfId', t('settlements.col_ogf_id'))}
+        </tr>
+      </thead>
+      <tbody id="settlements-tbody"></tbody>
+    </table>
+    <div id="settlements-empty-result"></div>`;
+  renderSettlementsBody();
+}
+
+function settlementsSortHeader(col, label) {
+  const active = _settlementsSort.column === col;
+  const arrow = active ? (_settlementsSort.direction === 'asc' ? ' ▲' : ' ▼') : '';
+  return `<th class="sortable${active ? ' active' : ''}" onclick="onSettlementsSort('${col}')">${label}${arrow}</th>`;
+}
+
+function _settlementParentDisplayString(s) {
+  const info = (typeof getSettlementParentInfo === 'function') ? getSettlementParentInfo(s) : null;
+  if (!info) return '';
+  return `${info.typeLabel}: ${info.name || ''}`;
+}
+
+function renderSettlementsBody() {
+  const tbody = document.getElementById('settlements-tbody');
+  const emptyEl = document.getElementById('settlements-empty-result');
+  if (!tbody) return;
+
+  const q = _settlementsSearch.trim().toLowerCase();
+  let list = data.settlements || [];
+  if (q) list = list.filter(s => {
+    if ((s.name || '').toLowerCase().includes(q)) return true;
+    if ((s.place || '').toLowerCase().includes(q)) return true;
+    if (_settlementParentDisplayString(s).toLowerCase().includes(q)) return true;
+    if ((s.ogfNodeId || '').includes(q)) return true;
+    return false;
+  });
+
+  list = list.slice().sort((a, b) => {
+    const dir = _settlementsSort.direction === 'asc' ? 1 : -1;
+    if (_settlementsSort.column === 'name') {
+      return dir * (a.name || '').localeCompare(b.name || '');
+    }
+    if (_settlementsSort.column === 'place') {
+      // Sort by rank so cities/towns cluster together.
+      const ra = (typeof rankForPlaceType === 'function') ? rankForPlaceType(a.place) : 0;
+      const rb = (typeof rankForPlaceType === 'function') ? rankForPlaceType(b.place) : 0;
+      return dir * (rb - ra); // higher rank first when asc (city > town > …)
+    }
+    if (_settlementsSort.column === 'parent') {
+      return dir * _settlementParentDisplayString(a).localeCompare(_settlementParentDisplayString(b));
+    }
+    if (_settlementsSort.column === 'ogfId') {
+      const av = a.ogfNodeId == null ? -Infinity : Number(a.ogfNodeId);
+      const bv = b.ogfNodeId == null ? -Infinity : Number(b.ogfNodeId);
+      return dir * (av - bv);
+    }
+    return 0;
+  });
+
+  if (list.length === 0) {
+    tbody.innerHTML = '';
+    if (emptyEl) emptyEl.innerHTML = `<div class="empty-state-inline">${t('settlements.no_search_results')}</div>`;
+    return;
+  }
+  if (emptyEl) emptyEl.innerHTML = '';
+
+  tbody.innerHTML = list.map(s => {
+    const info = getSettlementParentInfo(s);
+    const parentLabel = info
+      ? `${esc(info.typeLabel)}: ${info.name ? esc(info.name) : `<em class="text-muted">${t('plots.unnamed')}</em>`}`
+      : `<span class="text-muted">${t('settlements.no_parent')}</span>`;
+    const placeColor = (typeof colorForPlaceType === 'function') ? colorForPlaceType(s.place) : '#7f8c8d';
+    return `
+      <tr class="row-click" onclick="openSettlementDetail('${esc(s.id)}')">
+        <td>${s.name ? esc(s.name) : `<em class="text-muted">${t('plots.unnamed')}</em>`}</td>
+        <td><span class="map-popup-type" style="background:${placeColor}">${esc(s.place || '')}</span></td>
+        <td>${parentLabel}</td>
+        <td class="text-mono text-dim" style="font-size:11px">${esc(s.ogfNodeId || '')}</td>
+      </tr>`;
+  }).join('');
+}
+
+function onSettlementsSearch(value) {
+  _settlementsSearch = value;
+  renderSettlementsBody();
+}
+
+function onSettlementsSort(col) {
+  if (_settlementsSort.column === col) {
+    _settlementsSort.direction = _settlementsSort.direction === 'asc' ? 'desc' : 'asc';
+  } else {
+    _settlementsSort.column = col;
+    _settlementsSort.direction = 'asc';
+  }
+  renderSettlements();
+}
+
+// ============================================================
+// SETTLEMENT IMPORT MODAL (Brick 7b)
+// ============================================================
+// Mirrors the plot import modal: same three modes (Search / By ID /
+// Custom), same Overpass plumbing, same default-search-area seeding.
+// Distinct module-level state (_settlementImport*) so the two modals
+// don't collide. Auto-parent assignment runs at preview time so the
+// user can see what each candidate would attach to before committing.
+
+let _settlementImportPreview = null;
+
+function openSettlementImportModal() {
+  _settlementImportPreview = null;
+  destroyPreviewMap();
+
+  const placeChips = PLACE_TYPES.map(pt => {
+    const checked = PLACE_TYPES_DEFAULT_CHECKED.includes(pt);
+    return `
+      <label class="place-chip">
+        <input type="checkbox" value="${esc(pt)}" ${checked ? 'checked' : ''}>
+        <span>${esc(pt)}</span>
+      </label>`;
+  }).join('');
+
+  openModal(t('settlements.import_title'), `
+    <div class="import-tabs">
+      <button class="import-tab active" data-mode="search" onclick="switchSettlementImportMode('search')">${t('import.tab_search')}</button>
+      <button class="import-tab" data-mode="byid" onclick="switchSettlementImportMode('byid')">${t('import.tab_byid')}</button>
+      <button class="import-tab" data-mode="custom" onclick="switchSettlementImportMode('custom')">${t('import.tab_custom')}</button>
+    </div>
+
+    <div class="import-pane" data-mode="search">
+      <div class="form-group">
+        <label>${t('import.search_area_label')}</label>
+        <p class="text-dim" style="font-size:12px;margin-bottom:8px">${t('import.search_area_help')}</p>
+        <div id="settlement-import-area-rows" class="import-rows"></div>
+        <button class="btn btn-sm" onclick="addSettlementAreaRow()">+ ${t('import.add_row')}</button>
+      </div>
+      <div class="form-group">
+        <label>${t('settlements.import_place_label')}</label>
+        <p class="text-dim" style="font-size:12px;margin-bottom:8px">${t('settlements.import_place_help')}</p>
+        <div id="settlement-place-chips" class="place-chips">${placeChips}</div>
+      </div>
+    </div>
+
+    <div class="import-pane" data-mode="byid" style="display:none">
+      <div class="form-group">
+        <label>${t('settlements.import_byid_label')}</label>
+        <p class="text-dim" style="font-size:12px;margin-bottom:8px">${t('settlements.import_byid_help')}</p>
+        <input type="number" id="settlement-import-byid-input" placeholder="12345" autocomplete="off" style="max-width:240px">
+      </div>
+    </div>
+
+    <div class="import-pane" data-mode="custom" style="display:none">
+      <div class="form-group">
+        <label>${t('settlements.import_custom_label')}</label>
+        <p class="text-dim" style="font-size:12px;margin-bottom:8px">${t('settlements.import_custom_help')}</p>
+        <textarea id="settlement-import-custom-input" rows="8" placeholder="[bbox:s,w,n,e];&#10;node[place=city];&#10;out body;" style="font-family:var(--font-mono);font-size:12px"></textarea>
+      </div>
+    </div>
+
+    <div id="settlement-import-preview-result" style="margin-top:16px"></div>
+  `, `
+    <button class="btn" onclick="closeSettlementImportModal()">${t('btn.cancel')}</button>
+    <button class="btn btn-primary" id="settlement-import-action-btn" onclick="runSettlementImportPreview()">${t('import.import_btn')}</button>
+  `);
+
+  const defaultArea = getSetting('defaultSearchArea', []);
+  if (defaultArea.length > 0) {
+    for (const row of defaultArea) addSettlementAreaRow(row);
+  } else {
+    addSettlementAreaRow();
+  }
+
+  const modalEl = document.getElementById('modal');
+  if (modalEl) modalEl.style.width = '720px';
+}
+
+function closeSettlementImportModal() {
+  closeModal();
+  destroyPreviewMap();
+  _settlementImportPreview = null;
+}
+
+function switchSettlementImportMode(mode) {
+  document.querySelectorAll('#modal .import-tab').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
+  document.querySelectorAll('#modal .import-pane').forEach(p => p.style.display = (p.dataset.mode === mode ? '' : 'none'));
+  _setSettlementPreviewHTML('');
+  destroyPreviewMap();
+  _settlementImportPreview = null;
+  _setSettlementActionBtn(t('import.import_btn'), false);
+}
+
+function addSettlementAreaRow(seed) {
+  const c = document.getElementById('settlement-import-area-rows');
+  if (!c) return;
+  const row = document.createElement('div');
+  row.className = 'import-tag-row';
+  row.innerHTML = `
+    <input type="text" placeholder="${t('import.key_placeholder')}" value="${esc(seed?.key || seed?.[0] || '')}" data-field="key">
+    <input type="text" placeholder="${t('import.value_placeholder')}" value="${esc(seed?.value || seed?.[1] || '')}" data-field="value">
+    <button class="btn btn-sm" title="${t('import.remove_row')}" onclick="this.parentElement.remove()">✕</button>`;
+  c.appendChild(row);
+}
+
+function _readSettlementAreaRows() {
+  const rows = document.querySelectorAll('#settlement-import-area-rows .import-tag-row');
+  const out = [];
+  rows.forEach(r => {
+    const k = r.querySelector('[data-field="key"]').value.trim();
+    const v = r.querySelector('[data-field="value"]').value.trim();
+    if (k && v) out.push([k, v]);
+  });
+  return out;
+}
+
+function _readSettlementPlaceTypes() {
+  const boxes = document.querySelectorAll('#settlement-place-chips input[type=checkbox]');
+  return Array.from(boxes).filter(b => b.checked).map(b => b.value);
+}
+
+function _settlementImportMode() {
+  return document.querySelector('#modal .import-tab.active')?.dataset.mode || 'search';
+}
+
+function _setSettlementPreviewHTML(html) {
+  const el = document.getElementById('settlement-import-preview-result');
+  if (el) el.innerHTML = html;
+}
+
+function _setSettlementActionBtn(label, busy) {
+  const b = document.getElementById('settlement-import-action-btn');
+  if (!b) return;
+  b.textContent = label;
+  b.disabled = !!busy;
+}
+
+async function runSettlementImportPreview() {
+  const mode = _settlementImportMode();
+  let query;
+  try {
+    if (mode === 'search') {
+      const area = _readSettlementAreaRows();
+      const types = _readSettlementPlaceTypes();
+      if (area.length === 0) { toast(t('import.error_empty_filters'), 'error'); return; }
+      if (types.length === 0) { toast(t('settlements.error_no_place_types'), 'error'); return; }
+      query = buildSettlementSearchQuery(area, types);
+    } else if (mode === 'byid') {
+      const id = (document.getElementById('settlement-import-byid-input')?.value || '').trim();
+      if (!id || !/^\d+$/.test(id)) { toast(t('import.error_byid_invalid'), 'error'); return; }
+      query = buildSettlementByIdQuery(id);
+    } else {
+      const text = (document.getElementById('settlement-import-custom-input')?.value || '').trim();
+      if (!text) { toast(t('import.error_custom_empty'), 'error'); return; }
+      query = buildCustomQuery(text);
+    }
+  } catch (e) {
+    toast(t('import.error_query_build', { msg: e.message }), 'error');
+    return;
+  }
+
+  _setSettlementPreviewHTML(`<div class="text-dim" style="font-size:13px">${t('import.fetching')}</div>`);
+  destroyPreviewMap();
+  _settlementImportPreview = null;
+
+  _setSettlementActionBtn(t('import.import_btn'), true);
+  let json;
+  try {
+    json = await overpassFetch(query);
+  } catch (e) {
+    _setSettlementPreviewHTML('');
+    _setSettlementActionBtn(t('import.import_btn'), false);
+    if (e.is429) {
+      const msg = e.retryAfter != null
+        ? t('import.error_rate_limited', { seconds: e.retryAfter })
+        : t('import.error_rate_limited_no_eta');
+      toast(msg, 'error');
+    } else {
+      toast(t('import.error_fetch', { msg: e.message }), 'error');
+    }
+    return;
+  }
+  _setSettlementActionBtn(t('import.import_btn'), false);
+
+  let parsed;
+  try { parsed = parseSettlementImport(json); }
+  catch (e) {
+    toast(t('import.error_parse', { msg: e.message }), 'error');
+    _setSettlementPreviewHTML('');
+    return;
+  }
+
+  // Dedup against existing settlements; mark dupes for display so the user
+  // can see what was already in the project.
+  const dupCount = parsed.candidates.filter(c => findSettlementByOgfNodeId(c.ogfNodeId)).length;
+  const fresh    = parsed.candidates.filter(c => !findSettlementByOgfNodeId(c.ogfNodeId));
+
+  if (parsed.candidates.length === 0) {
+    let msg = t('settlements.import_no_results');
+    if (parsed.skipped > 0) msg += ' ' + t('settlements.skipped_no_place', { n: parsed.skipped });
+    _setSettlementPreviewHTML(`<div class="text-dim" style="font-size:13px">${msg}</div>`);
+    toast(msg, 'warning');
+    return;
+  }
+
+  if (fresh.length === 0) {
+    _setSettlementPreviewHTML(`<div class="text-dim" style="font-size:13px">${t('settlements.all_dupes', { n: dupCount })}</div>`);
+    toast(t('settlements.all_dupes', { n: dupCount }), 'warning');
+    return;
+  }
+
+  // Auto-assign parents now so the preview shows what each candidate will
+  // attach to. Stored on the candidate; the user will be able to override
+  // per-row in Brick 7d.
+  for (const c of fresh) c._parent = autoAssignSettlementParent(c.lat, c.lng, c.name);
+  _settlementImportPreview = { fresh, dupCount, skipped: parsed.skipped };
+
+  // Build preview HTML
+  let header = `<div style="font-size:13px"><strong>${t('settlements.import_found', { n: fresh.length })}</strong>`;
+  if (dupCount > 0)        header += ` <span class="text-dim">(${t('settlements.skipped_dupes', { n: dupCount })})</span>`;
+  if (parsed.skipped > 0)  header += ` <span class="text-dim">(${t('settlements.skipped_no_place', { n: parsed.skipped })})</span>`;
+  header += `</div>`;
+
+  let listHtml = `<ul class="import-result-list">`;
+  for (const c of fresh) {
+    const parentInfo = c._parent
+      ? _settlementParentDescriptor(c._parent)
+      : `<span class="text-muted">${t('settlements.no_parent')}</span>`;
+    const nameHtml = c.name ? esc(c.name) : `<em class="text-muted">${t('plots.unnamed')}</em>`;
+    listHtml += `
+      <li>
+        <span class="map-popup-type" style="background:${colorForPlaceType(c.place)};margin-right:6px">${esc(c.place)}</span>
+        <strong>${nameHtml}</strong>
+        <span class="text-dim" style="font-size:11px"> · #${esc(c.ogfNodeId)}</span>
+        <div class="text-dim" style="font-size:12px;margin-top:2px">→ ${parentInfo}</div>
+      </li>`;
+  }
+  listHtml += `</ul>`;
+
+  // Inset preview map with circle markers
+  const mapHtml = `<div id="settlement-preview-map" style="height:260px;border-radius:var(--radius);overflow:hidden;border:1px solid var(--border);margin-top:10px"></div>`;
+  _setSettlementPreviewHTML(header + mapHtml + listHtml);
+  ensurePreviewMap('settlement-preview-map');
+  drawPreviewSettlements(fresh);
+
+  _setSettlementActionBtn(t('settlements.commit_btn', { n: fresh.length }), false);
+  const btn = document.getElementById('settlement-import-action-btn');
+  if (btn) btn.setAttribute('onclick', 'runSettlementImportCommit()');
+}
+
+function _settlementParentDescriptor(parent) {
+  if (!parent) return '';
+  if (parent.kind === 'plot') {
+    const p = data.plots.find(x => x.id === parent.id);
+    const nm = p?.name ? esc(p.name) : `<em class="text-muted">${t('plots.unnamed')}</em>`;
+    return `Plot: ${nm}`;
+  }
+  if (parent.kind === 'boundary') {
+    const b = data.boundaries.find(x => x.id === parent.id);
+    if (!b) return '';
+    const tName = getBoundaryTypeName(b.typeId);
+    const nm = b.name ? esc(b.name) : `<em class="text-muted">${t('plots.unnamed')}</em>`;
+    return `${esc(tName)}: ${nm}`;
+  }
+  return '';
+}
+
+// ============================================================
+// SETTLEMENT DETAIL MODAL (Brick 7d)
+// ============================================================
+// Editable name, place type, parent (with picker + auto-assign),
+// notes, plus the read-only OGF node id and lat/lng. Delete with
+// confirmation.
+
+let _settlementDetailId = null;
+let _settlementParentSearch = '';
+
+function openSettlementDetail(id) {
+  const s = (data.settlements || []).find(x => x.id === id);
+  if (!s) return;
+  _settlementDetailId = id;
+  _settlementParentSearch = '';
+
+  const placeOpts = PLACE_TYPES.map(p =>
+    `<option value="${esc(p)}"${p === s.place ? ' selected' : ''}>${esc(p)}</option>`
+  ).join('');
+
+  openModal(t('settlement_detail.title'), `
+    <div class="form-group">
+      <label>${t('settlement_detail.name_label')}</label>
+      <input type="text" id="settlement-detail-name"
+        value="${esc(s.name || '')}"
+        placeholder="${t('settlement_detail.name_placeholder')}"
+        onblur="onSettlementDetailSave()">
+    </div>
+    <div class="form-group">
+      <label>${t('settlement_detail.place_label')}</label>
+      <select id="settlement-detail-place" onchange="onSettlementDetailPlaceChange(this.value)">
+        ${placeOpts}
+      </select>
+    </div>
+    <div class="form-group">
+      <label>${t('settlement_detail.parent_label')}</label>
+      <div id="settlement-detail-parent-row">${_renderSettlementDetailParentRow(s)}</div>
+      <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">
+        <button class="btn btn-sm" onclick="openSettlementParentPicker()">${t('settlement_detail.parent_change_btn')}</button>
+        <button class="btn btn-sm" onclick="onSettlementDetailAutoAssign()">${t('settlement_detail.parent_auto_btn')}</button>
+        <button class="btn btn-sm" onclick="onSettlementDetailClearParent()">${t('settlement_detail.parent_clear_btn')}</button>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>${t('settlement_detail.notes_label')}</label>
+      <textarea id="settlement-detail-notes" rows="3"
+        placeholder="${t('settlement_detail.notes_placeholder')}"
+        onblur="onSettlementDetailSave()">${esc(s.notes || '')}</textarea>
+    </div>
+    <div class="plot-detail-meta">
+      <div>
+        <div class="plot-detail-meta-label">${t('settlement_detail.coords_label')}</div>
+        <div class="plot-detail-meta-value mono">${s.lat.toFixed(5)}, ${s.lng.toFixed(5)}</div>
+      </div>
+      <div>
+        <div class="plot-detail-meta-label">${t('settlement_detail.ogf_id_label')}</div>
+        <div class="plot-detail-meta-value mono">${s.ogfNodeId != null ? esc(s.ogfNodeId) : '—'}</div>
+      </div>
+      <div>
+        <div class="plot-detail-meta-label">${t('settlement_detail.id_label')}</div>
+        <div class="plot-detail-meta-value mono">${esc(s.id)}</div>
+      </div>
+    </div>
+  `, `
+    <button class="btn btn-danger" style="margin-right:auto" onclick="onSettlementDetailDelete()">${t('settlement_detail.delete_btn')}</button>
+    <button class="btn" onclick="closeSettlementDetail()">${t('btn.close')}</button>
+  `);
+
+  const modalEl = document.getElementById('modal');
+  if (modalEl) modalEl.style.width = '560px';
+}
+
+function _renderSettlementDetailParentRow(s) {
+  const info = getSettlementParentInfo(s);
+  if (!info) {
+    return `<span class="text-muted">${t('settlements.no_parent')}</span>`;
+  }
+  let chipColor = '#475569';
+  if (s.parent.kind === 'boundary') {
+    const b = data.boundaries.find(x => x.id === s.parent.id);
+    chipColor = (typeof colorForBoundaryType === 'function') ? colorForBoundaryType(b?.typeId) : '#475569';
+  }
+  const nameHtml = info.name ? esc(info.name) : `<em class="text-muted">${t('plots.unnamed')}</em>`;
+  return `
+    <span class="map-popup-type" style="background:${chipColor};margin-right:6px">${esc(info.typeLabel)}</span>
+    ${nameHtml}`;
+}
+
+function onSettlementDetailSave() {
+  if (!_settlementDetailId) return;
+  const s = (data.settlements || []).find(x => x.id === _settlementDetailId);
+  if (!s) return;
+  const nameEl  = document.getElementById('settlement-detail-name');
+  const notesEl = document.getElementById('settlement-detail-notes');
+  const newName  = nameEl  ? nameEl.value  : s.name;
+  const newNotes = notesEl ? notesEl.value : s.notes;
+  if (s.name === newName && s.notes === newNotes) return;
+  s.name  = newName;
+  s.notes = newNotes;
+  save();
+  renderSettlementsBody();
+  redrawMap();
+}
+
+function onSettlementDetailPlaceChange(value) {
+  if (!_settlementDetailId) return;
+  const s = (data.settlements || []).find(x => x.id === _settlementDetailId);
+  if (!s) return;
+  s.place = value;
+  save();
+  renderSettlementsBody();
+  redrawMap();
+}
+
+function onSettlementDetailClearParent() {
+  if (!_settlementDetailId) return;
+  const s = (data.settlements || []).find(x => x.id === _settlementDetailId);
+  if (!s) return;
+  s.parent = null;
+  save();
+  _refreshSettlementDetailParentRow();
+  renderSettlementsBody();
+  redrawMap();
+}
+
+function onSettlementDetailAutoAssign() {
+  if (!_settlementDetailId) return;
+  const s = (data.settlements || []).find(x => x.id === _settlementDetailId);
+  if (!s) return;
+  const newParent = (typeof autoAssignSettlementParent === 'function')
+    ? autoAssignSettlementParent(s.lat, s.lng, s.name)
+    : null;
+  if (!newParent) {
+    toast(t('settlement_detail.auto_no_match'), 'warning');
+    return;
+  }
+  s.parent = newParent;
+  save();
+  _refreshSettlementDetailParentRow();
+  renderSettlementsBody();
+  redrawMap();
+}
+
+function _refreshSettlementDetailParentRow() {
+  const s = (data.settlements || []).find(x => x.id === _settlementDetailId);
+  const el = document.getElementById('settlement-detail-parent-row');
+  if (!s || !el) return;
+  el.innerHTML = _renderSettlementDetailParentRow(s);
+}
+
+function onSettlementDetailDelete() {
+  if (!_settlementDetailId) return;
+  const s = (data.settlements || []).find(x => x.id === _settlementDetailId);
+  if (!s) return;
+  const displayName = s.name || t('plots.unnamed');
+  appConfirm(t('settlement_detail.confirm_delete', { name: displayName }), () => {
+    deleteSettlement(_settlementDetailId);
+    save();
+    closeSettlementDetail();
+    refreshAll();
+    redrawMap();
+    toast(t('settlement_detail.deleted_toast', { name: displayName }), 'success');
+  });
+}
+
+function closeSettlementDetail() {
+  // Capture pending edits before tearing down — close-without-blur path.
+  onSettlementDetailSave();
+  _settlementDetailId = null;
+  closeModal();
+}
+
+// ── Parent picker (sub-modal) ──
+// Replaces the detail modal contents while picking; on commit re-opens
+// the detail modal with the new parent applied.
+
+function openSettlementParentPicker() {
+  // Capture in-progress edits in the detail modal before swapping content.
+  onSettlementDetailSave();
+  _settlementParentSearch = '';
+  _renderSettlementParentPicker();
+}
+
+function _renderSettlementParentPicker() {
+  const s = (data.settlements || []).find(x => x.id === _settlementDetailId);
+  if (!s) return;
+
+  const q = _settlementParentSearch.trim().toLowerCase();
+
+  const plots = (data.plots || [])
+    .map(p => ({ kind: 'plot', id: p.id, name: p.name || '', typeLabel: 'Plot' }))
+    .filter(e => !q || (e.name + ' ' + e.typeLabel).toLowerCase().includes(q));
+
+  const boundaries = (data.boundaries || [])
+    .map(b => ({
+      kind: 'boundary',
+      id:   b.id,
+      name: b.name || '',
+      typeLabel: getBoundaryTypeName(b.typeId) || 'Boundary',
+      typeId:    b.typeId,
+    }))
+    .filter(e => !q || (e.name + ' ' + e.typeLabel).toLowerCase().includes(q));
+
+  const currentKey = s.parent ? `${s.parent.kind}:${s.parent.id}` : '';
+
+  const renderRow = (e) => {
+    const isCur = (`${e.kind}:${e.id}` === currentKey);
+    const color = e.kind === 'plot'
+      ? '#475569'
+      : ((typeof colorForBoundaryType === 'function') ? colorForBoundaryType(e.typeId) : '#475569');
+    const nm = e.name ? esc(e.name) : `<em class="text-muted">${t('plots.unnamed')}</em>`;
+    return `
+      <div class="boundary-picker-row${isCur ? ' current' : ''}"
+        onclick="onSettlementParentPicked('${e.kind}','${esc(e.id)}')">
+        <span class="map-popup-type" style="background:${color}">${esc(e.typeLabel)}</span>
+        <span style="margin-left:8px">${nm}</span>
+        ${isCur ? `<span class="text-dim" style="margin-left:auto;font-size:11px">${t('settlement_detail.parent_current')}</span>` : ''}
+      </div>`;
+  };
+
+  const boundaryHtml = boundaries.length > 0
+    ? `<div class="boundary-picker-section-label">${t('settlement_detail.parent_section_boundaries', { n: boundaries.length })}</div>${boundaries.map(renderRow).join('')}`
+    : '';
+  const plotHtml = plots.length > 0
+    ? `<div class="boundary-picker-section-label">${t('settlement_detail.parent_section_plots', { n: plots.length })}</div>${plots.map(renderRow).join('')}`
+    : '';
+  const noResults = (boundaries.length + plots.length === 0)
+    ? `<div class="text-dim" style="font-size:13px;padding:12px">${t('settlement_detail.parent_no_match')}</div>`
+    : '';
+
+  openModal(t('settlement_detail.parent_picker_title'), `
+    <div class="form-group">
+      <input type="text" id="settlement-parent-search"
+        placeholder="${t('settlement_detail.parent_search_placeholder')}"
+        oninput="onSettlementParentSearch(this.value)"
+        value="${esc(_settlementParentSearch)}"
+        autocomplete="off">
+    </div>
+    <div id="boundary-picker-list">${boundaryHtml}${plotHtml}${noResults}</div>
+  `, `
+    <button class="btn" onclick="openSettlementDetail(_settlementDetailId)">${t('btn.cancel')}</button>
+  `);
+
+  const modalEl = document.getElementById('modal');
+  if (modalEl) modalEl.style.width = '560px';
+}
+
+function onSettlementParentSearch(value) {
+  _settlementParentSearch = value;
+  // Re-render only the list, keep the search input focused.
+  const s = (data.settlements || []).find(x => x.id === _settlementDetailId);
+  if (!s) return;
+  const q = value.trim().toLowerCase();
+
+  const plots = (data.plots || [])
+    .map(p => ({ kind: 'plot', id: p.id, name: p.name || '', typeLabel: 'Plot' }))
+    .filter(e => !q || (e.name + ' ' + e.typeLabel).toLowerCase().includes(q));
+  const boundaries = (data.boundaries || [])
+    .map(b => ({
+      kind: 'boundary', id: b.id, name: b.name || '',
+      typeLabel: getBoundaryTypeName(b.typeId) || 'Boundary', typeId: b.typeId,
+    }))
+    .filter(e => !q || (e.name + ' ' + e.typeLabel).toLowerCase().includes(q));
+
+  const currentKey = s.parent ? `${s.parent.kind}:${s.parent.id}` : '';
+  const renderRow = (e) => {
+    const isCur = (`${e.kind}:${e.id}` === currentKey);
+    const color = e.kind === 'plot'
+      ? '#475569'
+      : ((typeof colorForBoundaryType === 'function') ? colorForBoundaryType(e.typeId) : '#475569');
+    const nm = e.name ? esc(e.name) : `<em class="text-muted">${t('plots.unnamed')}</em>`;
+    return `
+      <div class="boundary-picker-row${isCur ? ' current' : ''}"
+        onclick="onSettlementParentPicked('${e.kind}','${esc(e.id)}')">
+        <span class="map-popup-type" style="background:${color}">${esc(e.typeLabel)}</span>
+        <span style="margin-left:8px">${nm}</span>
+        ${isCur ? `<span class="text-dim" style="margin-left:auto;font-size:11px">${t('settlement_detail.parent_current')}</span>` : ''}
+      </div>`;
+  };
+
+  const list = document.getElementById('boundary-picker-list');
+  if (!list) return;
+  const boundaryHtml = boundaries.length > 0
+    ? `<div class="boundary-picker-section-label">${t('settlement_detail.parent_section_boundaries', { n: boundaries.length })}</div>${boundaries.map(renderRow).join('')}`
+    : '';
+  const plotHtml = plots.length > 0
+    ? `<div class="boundary-picker-section-label">${t('settlement_detail.parent_section_plots', { n: plots.length })}</div>${plots.map(renderRow).join('')}`
+    : '';
+  const noResults = (boundaries.length + plots.length === 0)
+    ? `<div class="text-dim" style="font-size:13px;padding:12px">${t('settlement_detail.parent_no_match')}</div>`
+    : '';
+  list.innerHTML = boundaryHtml + plotHtml + noResults;
+}
+
+function onSettlementParentPicked(kind, id) {
+  const s = (data.settlements || []).find(x => x.id === _settlementDetailId);
+  if (!s) return;
+  s.parent = { kind, id };
+  save();
+  renderSettlementsBody();
+  redrawMap();
+  // Re-open the detail modal so the user sees the new parent reflected.
+  openSettlementDetail(_settlementDetailId);
+}
+
+function runSettlementImportCommit() {
+  const preview = _settlementImportPreview;
+  if (!preview || preview.fresh.length === 0) return;
+  for (const c of preview.fresh) {
+    createSettlement({
+      name:      c.name,
+      lat:       c.lat,
+      lng:       c.lng,
+      ogfNodeId: c.ogfNodeId,
+      place:     c.place,
+      parent:    c._parent || null,
+    });
+  }
+  save();
+  closeSettlementImportModal();
+  toast(t('settlements.commit_toast', { n: preview.fresh.length }), 'success');
+  refreshAll();
 }
 
 // ============================================================

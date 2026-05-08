@@ -31,6 +31,7 @@ const BOUNDARY_TYPE_PALETTE = [
   '#6f86d6', '#48b287', '#d97757', '#9b6dd0',
   '#d4a13d', '#3aa2c7', '#c763a3', '#7c8c5b'
 ];
+let _mapSettlementLayer  = null;        // L.featureGroup for settlement markers (always on)
 let _mapBoundaryLayer    = null;        // single L.featureGroup for boundary polygons
 let _mapCurrentTypeId    = null;        // type selected in dropdown (null = uninitialized → Plots)
 let _drillStack          = [];          // [{ boundaryId, name, typeId }, ...]
@@ -43,6 +44,15 @@ let _hoverLayer      = null;            // featureGroup for temporary hover poly
 let _hoveredPolyKind = null;
 let _hoveredPolyId   = null;
 let _hoveredTempPoly = null;
+
+// Track settlement draw order so we can restore z-stacking after a
+// hover bringToFront — otherwise the hovered marker stays above its
+// peers even after mouseleave.
+let _settlementMarkerOrder = [];        // array of settlement ids, smallest-rank first
+
+// Persist the place-filter dropdown's open state across toolbar
+// re-renders (which otherwise wipe `<details open>` and snap shut).
+let _placesFilterOpen = false;
 
 // Sentinel id for the synthetic "Plots" dropdown option.
 const PLOTS_TYPE_SENTINEL = '__plots__';
@@ -69,9 +79,10 @@ function initMap() {
     attribution: 'Tiles © <a href="https://opengeofiction.net">OpenGeofiction</a>'
   }).addTo(_map);
 
-  _mapPlotLayer     = L.featureGroup().addTo(_map);
-  _mapBoundaryLayer = L.featureGroup().addTo(_map);
-  _hoverLayer       = L.featureGroup().addTo(_map);
+  _mapPlotLayer       = L.featureGroup().addTo(_map);
+  _mapBoundaryLayer   = L.featureGroup().addTo(_map);
+  _mapSettlementLayer = L.featureGroup().addTo(_map);
+  _hoverLayer         = L.featureGroup().addTo(_map);
 
   _map.on('click', () => {
     if (_selectedItemId !== null) _clearMapSelection();
@@ -96,6 +107,43 @@ function initMap() {
 // ============================================================
 // PLOT STYLING (shared with detail map)
 // ============================================================
+
+// ============================================================
+// SETTLEMENT MARKER STYLING
+// ============================================================
+// Radius scales by place type so cities read as more important than
+// hamlets at a glance. Fill colour follows the JOSM-style PLACE_COLORS
+// map in settlements.js. Selected settlements get a brighter accent
+// stroke and a slightly larger radius.
+
+function _settlementRadius(place) {
+  switch (place) {
+    case 'city':                     return 12;
+    case 'town':                     return 10;
+    case 'village':                  return 8;
+    case 'borough':                  return 7;
+    case 'suburb':                   return 7;
+    case 'hamlet':                   return 6;
+    case 'quarter':                  return 6;
+    case 'neighbourhood':            return 6;
+    case 'isolated_dwelling':        return 5;
+    case 'locality':                 return 5;
+    default:                         return 5;
+  }
+}
+
+function settlementMarkerStyle(settlement, selected) {
+  const fill = (typeof colorForPlaceType === 'function')
+    ? colorForPlaceType(settlement?.place)
+    : '#7f8c8d';
+  return {
+    radius:      _settlementRadius(settlement?.place) + (selected ? 2 : 0),
+    color:       selected ? '#c1272d' : '#0f1117',
+    weight:      selected ? 2.5 : 1.5,
+    fillColor:   fill,
+    fillOpacity: selected ? 1 : 0.9,
+  };
+}
 
 function plotPolygonStyle(selected) {
   // Neutral slate so plots read as data on the map without competing
@@ -167,6 +215,36 @@ function drawPreviewCandidates(candidates) {
 function destroyPreviewMap() {
   if (_previewLayer) { _previewLayer.clearLayers(); _previewLayer = null; }
   if (_previewMap) { _previewMap.remove(); _previewMap = null; }
+}
+
+// Draw settlement candidates as circle markers in the preview map
+// (Brick 7b). One marker per candidate, gold to match the settlements
+// accent. Bounds fit to the marker set.
+function drawPreviewSettlements(candidates) {
+  if (!_previewMap || !_previewLayer) return;
+  _previewLayer.clearLayers();
+  const all = L.latLngBounds([]);
+  // Sort smallest-rank first so important markers stack on top in the preview too.
+  const sorted = candidates.slice().sort((a, b) => {
+    const ra = (typeof rankForPlaceType === 'function') ? rankForPlaceType(a.place) : 0;
+    const rb = (typeof rankForPlaceType === 'function') ? rankForPlaceType(b.place) : 0;
+    return ra - rb;
+  });
+  for (const c of sorted) {
+    if (!Number.isFinite(c.lat) || !Number.isFinite(c.lng)) continue;
+    const fill = (typeof colorForPlaceType === 'function') ? colorForPlaceType(c.place) : '#7f8c8d';
+    const m = L.circleMarker([c.lat, c.lng], {
+      radius: _settlementRadius(c.place),
+      color: '#0f1117',
+      weight: 1.5,
+      fillColor: fill,
+      fillOpacity: 0.9,
+    });
+    m.bindTooltip(c.name ? c.name : `(${c.place})`);
+    _previewLayer.addLayer(m);
+    all.extend([c.lat, c.lng]);
+  }
+  if (all.isValid()) _previewMap.fitBounds(all, { padding: [20, 20] });
 }
 
 // ============================================================
@@ -303,6 +381,7 @@ function redrawMap() {
   _polyIndex.clear();
   _mapPlotLayer.clearLayers();
   _mapBoundaryLayer.clearLayers();
+  if (_mapSettlementLayer) _mapSettlementLayer.clearLayers();
   if (_hoverLayer) _hoverLayer.clearLayers();
 
   // Layer 0: dropdown's selected level (every boundary of that type, OR
@@ -332,8 +411,41 @@ function redrawMap() {
     }
   }
 
+  // Settlements live on a dedicated always-on layer so they remain
+  // visible regardless of which boundary level is selected. Sorted
+  // smallest-rank first so cities draw on top of hamlets etc.; filtered
+  // through data.settings.visiblePlaceTypes when set.
+  const visible = data.settings?.visiblePlaceTypes;
+  const isPlaceVisible = (place) => !Array.isArray(visible) || visible.includes(place);
+  const settlementsToDraw = (data.settlements || [])
+    .filter(s => isPlaceVisible(s.place))
+    .sort((a, b) => {
+      const ra = (typeof rankForPlaceType === 'function') ? rankForPlaceType(a.place) : 0;
+      const rb = (typeof rankForPlaceType === 'function') ? rankForPlaceType(b.place) : 0;
+      return ra - rb;
+    });
+  _settlementMarkerOrder = [];
+  for (const s of settlementsToDraw) {
+    _drawSettlementMarker(s);
+    _settlementMarkerOrder.push(s.id);
+  }
+
   renderMapToolbar();
   renderMapSidePanel();
+}
+
+function _drawSettlementMarker(s) {
+  if (!Number.isFinite(s.lat) || !Number.isFinite(s.lng)) return;
+  const isSelected = _selectedItemKind === 'settlement' && _selectedItemId === s.id;
+  const m = L.circleMarker([s.lat, s.lng], settlementMarkerStyle(s, isSelected));
+  m._appySettlementId = s.id;
+  if (s.name) m.bindTooltip(s.name);
+  m.on('click', (e) => {
+    L.DomEvent.stopPropagation(e);
+    _selectItem('settlement', s.id);
+  });
+  _mapSettlementLayer.addLayer(m);
+  _polyIndex.set('settlement:' + s.id, m);
 }
 
 function _renderRootLevel(drawnBoundaries) {
@@ -423,16 +535,22 @@ function _hoverMapItem(kind, id) {
   _hoveredPolyId   = id;
   const indexed = _polyIndex.get(kind + ':' + id);
   if (indexed) {
-    // Item is already on the map: boost its style in-place
     if (kind === 'boundary') {
       const b = data.boundaries.find(x => x.id === id);
       const c = colorForBoundaryType(b?.typeId);
       indexed.setStyle({ color: c, weight: 3.5, fillColor: c, fillOpacity: 0.55, lineJoin: 'round' });
-    } else {
+    } else if (kind === 'plot') {
       indexed.setStyle({ color: '#1f2937', weight: 3, fillColor: '#475569', fillOpacity: 0.45 });
+    } else if (kind === 'settlement') {
+      const s = data.settlements?.find(x => x.id === id);
+      const r = _settlementRadius(s?.place) + 3;
+      const c = (typeof colorForPlaceType === 'function') ? colorForPlaceType(s?.place) : '#7f8c8d';
+      indexed.setStyle({ radius: r, weight: 2.5, color: '#c1272d', fillColor: c, fillOpacity: 1 });
+      // Push the hovered marker above its peers so it isn't occluded.
+      if (typeof indexed.bringToFront === 'function') indexed.bringToFront();
     }
   } else if (_hoverLayer) {
-    // Item not currently drawn (different map level): draw temporarily
+    // Not currently drawn at this level: draw a temporary highlight
     if (kind === 'boundary') {
       const b = data.boundaries.find(x => x.id === id);
       if (b) {
@@ -444,7 +562,7 @@ function _hoverMapItem(kind, id) {
           _hoverLayer.addLayer(_hoveredTempPoly);
         }
       }
-    } else {
+    } else if (kind === 'plot') {
       const p = data.plots.find(x => x.id === id);
       if (p) {
         const geo = resolvePlotGeometry(p);
@@ -453,6 +571,15 @@ function _hoverMapItem(kind, id) {
             { color: '#1f2937', weight: 3, fillColor: '#475569', fillOpacity: 0.45, dashArray: '6,4' });
           _hoverLayer.addLayer(_hoveredTempPoly);
         }
+      }
+    } else if (kind === 'settlement') {
+      const s = data.settlements?.find(x => x.id === id);
+      if (s && Number.isFinite(s.lat) && Number.isFinite(s.lng)) {
+        const c = (typeof colorForPlaceType === 'function') ? colorForPlaceType(s.place) : '#7f8c8d';
+        _hoveredTempPoly = L.circleMarker([s.lat, s.lng],
+          { radius: _settlementRadius(s.place) + 3, color: '#c1272d', weight: 2.5,
+            fillColor: c, fillOpacity: 1, dashArray: '4,3' });
+        _hoverLayer.addLayer(_hoveredTempPoly);
       }
     }
   }
@@ -470,8 +597,21 @@ function _unhoverMapItem() {
       if (_hoveredPolyKind === 'boundary') {
         const b = data.boundaries.find(x => x.id === _hoveredPolyId);
         indexed.setStyle(boundaryFilledStyle(colorForBoundaryType(b?.typeId), isSelected));
-      } else {
+      } else if (_hoveredPolyKind === 'plot') {
         indexed.setStyle(plotPolygonStyle(isSelected));
+      } else if (_hoveredPolyKind === 'settlement') {
+        const s = data.settlements?.find(x => x.id === _hoveredPolyId);
+        indexed.setStyle(settlementMarkerStyle(s, isSelected));
+        // _hoverMapItem brought this marker to the SVG front, which would
+        // otherwise stick across hover sessions. Re-stack by re-fronting
+        // every settlement that should sit above it in draw order.
+        const idx = _settlementMarkerOrder.indexOf(_hoveredPolyId);
+        if (idx >= 0) {
+          for (let i = idx + 1; i < _settlementMarkerOrder.length; i++) {
+            const m = _polyIndex.get('settlement:' + _settlementMarkerOrder[i]);
+            if (m && typeof m.bringToFront === 'function') m.bringToFront();
+          }
+        }
       }
     }
   }
@@ -482,10 +622,24 @@ function _unhoverMapItem() {
 // ── Panel navigation ──
 
 // Click a parent in the membership chain → show that type at root, select it
-function _panelNavigateToParent(parentId) {
+function _panelNavigateToParent(parentId, kind) {
+  kind = kind || 'boundary';
+  _unhoverMapItem();
+  if (kind === 'plot') {
+    const p = data.plots.find(x => x.id === parentId);
+    if (!p) return;
+    _mapCurrentTypeId = PLOTS_TYPE_SENTINEL;
+    _drillStack = [];
+    _selectItem('plot', parentId);
+    const geo = resolvePlotGeometry(p);
+    if (geo.polygons.length) {
+      const bounds = L.polygon(geo.polygons).getBounds();
+      if (bounds.isValid()) _map && _map.fitBounds(bounds, { padding: [40, 40] });
+    }
+    return;
+  }
   const b = data.boundaries.find(x => x.id === parentId);
   if (!b) return;
-  _unhoverMapItem();
   _mapCurrentTypeId = b.typeId;
   _drillStack = [];
   _selectItem('boundary', parentId);
@@ -496,6 +650,18 @@ function _panelNavigateToParent(parentId) {
       if (bounds.isValid()) _map && _map.fitBounds(bounds, { padding: [40, 40] });
     }
   } catch (e) {}
+}
+
+// Click a settlement in a boundary's Settlements section → just pan and select.
+// No drill change; settlements are always visible.
+function _panelSelectSettlement(id) {
+  const s = data.settlements?.find(x => x.id === id);
+  if (!s) return;
+  _unhoverMapItem();
+  _selectItem('settlement', id);
+  if (_map && Number.isFinite(s.lat) && Number.isFinite(s.lng)) {
+    _map.setView([s.lat, s.lng], Math.max(_map.getZoom(), 9));
+  }
 }
 
 // Click a child in the members list → drill into current boundary, select child
@@ -599,15 +765,91 @@ function _renderMemberships(kind, id) {
   return html;
 }
 
+// Settlements transitively contained by a boundary, or directly attached
+// to a plot. Renders as a hover/click list — same chrome as the members
+// section, but pans+selects rather than drilling (settlements are always
+// visible).
+function _renderSettlementsSection(items) {
+  if (!items || items.length === 0) return '';
+  // Auto-collapse big lists to keep the panel snappy: rendering 500
+  // hover-bindable rows is noticeably slow.
+  const COLLAPSE_THRESHOLD = 20;
+  const collapse = items.length > COLLAPSE_THRESHOLD;
+  // Sort by rank descending so the heaviest settlements lead the list.
+  const sorted = items.slice().sort((a, b) => {
+    const ra = (typeof rankForPlaceType === 'function') ? rankForPlaceType(a.place) : 0;
+    const rb = (typeof rankForPlaceType === 'function') ? rankForPlaceType(b.place) : 0;
+    return rb - ra;
+  });
+  let rows = '';
+  for (const s of sorted) {
+    const nm = s.name ? esc(s.name) : '<em class="text-muted">Unnamed</em>';
+    const c  = (typeof colorForPlaceType === 'function') ? colorForPlaceType(s.place) : '#7f8c8d';
+    rows += `
+      <div class="map-panel-child"
+        onmouseenter="_hoverMapItem('settlement','${s.id}')"
+        onmouseleave="_unhoverMapItem()"
+        onclick="_panelSelectSettlement('${s.id}')">
+        <span class="map-panel-member-type" style="background:${c}">${esc(s.place || 'place')}</span>
+        <span class="map-panel-child-name">${nm}</span>
+      </div>`;
+  }
+  if (collapse) {
+    return `
+      <details class="map-panel-collapse">
+        <summary class="map-panel-section">Settlements (${items.length}) — click to expand</summary>
+        ${rows}
+      </details>`;
+  }
+  return `<div class="map-panel-section">Settlements (${items.length})</div>${rows}`;
+}
+
+// Settlement's parent block: direct parent + (when parent is a boundary)
+// the rest of the ancestor chain so the user sees full transitive context.
+function _renderSettlementParent(s) {
+  if (!s.parent) return `<div class="map-panel-membership-none">No parent assigned</div>`;
+  const info = (typeof getSettlementParentInfo === 'function') ? getSettlementParentInfo(s) : null;
+  if (!info) return `<div class="map-panel-membership-none">Parent missing</div>`;
+  const parentColor = s.parent.kind === 'plot'
+    ? '#475569'
+    : colorForBoundaryType(data.boundaries.find(b => b.id === s.parent.id)?.typeId);
+  const parentName = info.name ? esc(info.name) : '<em>Unnamed</em>';
+  let html = `<div class="map-panel-section">Parent</div>
+    <div class="map-panel-membership">
+      <span class="map-panel-member-label">Direct member of</span>
+      <a class="map-panel-member-link" onclick="_panelNavigateToParent('${esc(s.parent.id)}','${s.parent.kind}')">
+        <span class="map-panel-member-type" style="background:${parentColor}">${esc(info.typeLabel)}</span>
+        ${parentName}
+      </a>
+    </div>`;
+  if (s.parent.kind === 'boundary') {
+    const ancestors = _getAncestorChain('boundary', s.parent.id);
+    ancestors.forEach(b => {
+      const c = colorForBoundaryType(b.typeId);
+      const tn = getBoundaryTypeName(b.typeId);
+      html += `
+        <div class="map-panel-membership">
+          <span class="map-panel-member-label">Also within</span>
+          <a class="map-panel-member-link" onclick="_panelNavigateToParent('${esc(b.id)}')">
+            <span class="map-panel-member-type" style="background:${c}">${esc(tn)}</span>
+            ${b.name ? esc(b.name) : '<em>Unnamed</em>'}
+          </a>
+        </div>`;
+    });
+  }
+  return html;
+}
+
 function renderMapSidePanel() {
   const el = document.getElementById('map-side-panel');
   if (!el) return;
 
   // If the selected item was deleted, clear stale selection silently.
   if (_selectedItemId) {
-    const exists = _selectedItemKind === 'boundary'
-      ? data.boundaries.some(x => x.id === _selectedItemId)
-      : data.plots.some(x => x.id === _selectedItemId);
+    let exists = false;
+    if (_selectedItemKind === 'boundary')   exists = data.boundaries.some(x => x.id === _selectedItemId);
+    else if (_selectedItemKind === 'plot')  exists = data.plots.some(x => x.id === _selectedItemId);
+    else if (_selectedItemKind === 'settlement') exists = (data.settlements || []).some(x => x.id === _selectedItemId);
     if (!exists) { _selectedItemKind = null; _selectedItemId = null; }
   }
 
@@ -648,6 +890,7 @@ function renderMapSidePanel() {
             rows="3" placeholder="No notes">${esc(b.notes || '')}</textarea>
         </div>
         ${_renderChildren(b)}
+        ${_renderSettlementsSection(typeof flattenSettlementsForBoundary === 'function' ? flattenSettlementsForBoundary(b) : [])}
         ${_renderMemberships('boundary', b.id)}
         <button class="btn btn-sm btn-primary" style="width:100%;margin-top:4px"
           onclick="openBoundaryDetail('${esc(b.id)}')">Open full details</button>
@@ -674,9 +917,37 @@ function renderMapSidePanel() {
           <textarea class="input map-panel-notes" onblur="_panelSaveNotes(this.value)"
             rows="3" placeholder="No notes">${esc(p.notes || '')}</textarea>
         </div>
+        ${_renderSettlementsSection(typeof settlementsForPlot === 'function' ? settlementsForPlot(p.id) : [])}
         ${_renderMemberships('plot', p.id)}
         <button class="btn btn-sm btn-primary" style="width:100%;margin-top:4px"
           onclick="openPlotDetail('${esc(p.id)}')">Open full details</button>
+      </div>`;
+
+  } else if (_selectedItemKind === 'settlement') {
+    const s = (data.settlements || []).find(x => x.id === _selectedItemId);
+    if (!s) { el.style.display = 'none'; return; }
+    const coords = `${s.lat.toFixed(5)}, ${s.lng.toFixed(5)}`;
+    const placeColor = (typeof colorForPlaceType === 'function') ? colorForPlaceType(s.place) : '#7f8c8d';
+    html = `
+      <div class="map-panel-inner">
+        <div class="map-panel-hdr">
+          <span class="map-popup-type" style="background:${placeColor}">${esc(s.place || 'place')}</span>
+          <button class="map-panel-close" onclick="_clearMapSelection()" title="Deselect">✕</button>
+        </div>
+        <div class="map-panel-field">
+          <label class="map-panel-label">Name</label>
+          <input class="input map-panel-input" value="${esc(s.name || '')}"
+            onblur="_panelSaveName(this.value)" placeholder="Unnamed">
+        </div>
+        <div class="map-panel-meta">${coords}${s.ogfNodeId ? ` · #${esc(s.ogfNodeId)}` : ''}</div>
+        <div class="map-panel-field">
+          <label class="map-panel-label">Notes</label>
+          <textarea class="input map-panel-notes" onblur="_panelSaveNotes(this.value)"
+            rows="3" placeholder="No notes">${esc(s.notes || '')}</textarea>
+        </div>
+        ${_renderSettlementParent(s)}
+        <button class="btn btn-sm btn-primary" style="width:100%;margin-top:4px"
+          onclick="openSettlementDetail('${esc(s.id)}')">Open full details</button>
       </div>`;
   }
 
@@ -700,6 +971,12 @@ function _panelSaveName(value) {
     p.name = value.trim();
     save();
     redrawMap();
+  } else if (_selectedItemKind === 'settlement') {
+    const s = (data.settlements || []).find(x => x.id === _selectedItemId);
+    if (!s) return;
+    s.name = value.trim();
+    save();
+    redrawMap();
   }
 }
 
@@ -710,6 +987,9 @@ function _panelSaveNotes(value) {
   } else if (_selectedItemKind === 'plot') {
     const p = data.plots.find(x => x.id === _selectedItemId);
     if (p) { p.notes = value; save(); }
+  } else if (_selectedItemKind === 'settlement') {
+    const s = (data.settlements || []).find(x => x.id === _selectedItemId);
+    if (s) { s.notes = value; save(); }
   }
 }
 
@@ -819,27 +1099,117 @@ function renderMapToolbar() {
     breadcrumbHtml = `<div class="map-crumbs">${parts.join('<span class="map-crumb-sep">›</span>')}</div>`;
   }
 
-  // Dropdown: boundary types (largest first) + a synthetic "Plots" entry
-  // at the bottom. Always rendered as long as the project has plots or
-  // boundary types — when neither exists we hide it.
+  // Single toolbar row: boundary-type "Show:" select + place-filter
+  // popover. Both controls share width so they line up tidily. The
+  // place filter is rendered inside `<details>`; its body is positioned
+  // absolutely so opening it doesn't push the map down (no scroll on
+  // the Map tab).
   const types = _typesLargestFirst();
   const haveAny = types.length > 0 || data.plots.length > 0;
-  let dropdownHtml = '';
-  if (haveAny) {
-    const typeOpts = types.map(ty =>
-      `<option value="${esc(ty.id)}"${ty.id === _mapCurrentTypeId ? ' selected' : ''}>${esc(ty.name)}</option>`
-    ).join('');
-    const plotsSelected = _mapCurrentTypeId === PLOTS_TYPE_SENTINEL;
-    const plotsOpt = `<option value="${PLOTS_TYPE_SENTINEL}"${plotsSelected ? ' selected' : ''}>${t('map.layer_plots')}</option>`;
-    dropdownHtml = `
-      <div class="map-toolbar-row">
+  let rowHtml = '';
+  if (haveAny || (data.settlements || []).length > 0) {
+    let selectHtml = '';
+    if (haveAny) {
+      const typeOpts = types.map(ty =>
+        `<option value="${esc(ty.id)}"${ty.id === _mapCurrentTypeId ? ' selected' : ''}>${esc(ty.name)}</option>`
+      ).join('');
+      const plotsSelected = _mapCurrentTypeId === PLOTS_TYPE_SENTINEL;
+      const plotsOpt = `<option value="${PLOTS_TYPE_SENTINEL}"${plotsSelected ? ' selected' : ''}>${t('map.layer_plots')}</option>`;
+      selectHtml = `
         <label class="import-target-label">${t('map.show_label')}</label>
-        <select onchange="onMapTypeChange(this.value)">${typeOpts}${plotsOpt}</select>
-      </div>`;
+        <select class="map-toolbar-control" onchange="onMapTypeChange(this.value)">${typeOpts}${plotsOpt}</select>`;
+    }
+
+    let placesHtml = '';
+    if ((data.settlements || []).length > 0 && typeof PLACE_TYPES !== 'undefined') {
+      const visible = data.settings?.visiblePlaceTypes;
+      const isVis = (pt) => !Array.isArray(visible) || visible.includes(pt);
+      const counts = {};
+      for (const s of data.settlements) counts[s.place] = (counts[s.place] || 0) + 1;
+      const total = data.settlements.length;
+      const onCount = data.settlements.filter(s => isVis(s.place)).length;
+      const allOn = PLACE_TYPES.every(pt => isVis(pt));
+
+      const chips = PLACE_TYPES.map(pt => {
+        const checked = isVis(pt);
+        const c = colorForPlaceType(pt);
+        const n = counts[pt] || 0;
+        return `
+          <label class="place-chip${n === 0 ? ' place-chip-empty' : ''}" title="${n} in project">
+            <input type="checkbox" value="${esc(pt)}" ${checked ? 'checked' : ''}
+              onchange="onMapPlaceFilterChange(this)">
+            <span class="place-color-dot" style="background:${c}"></span>
+            <span>${esc(pt)}</span>
+            ${n > 0 ? `<span class="place-chip-count">${n}</span>` : ''}
+          </label>`;
+      }).join('');
+
+      // Master "All types" toggle — checked when every type is on,
+      // indeterminate when some are off, unchecked when none are.
+      // Setting `indeterminate` happens after innerHTML in a follow-up
+      // pass since HTML attributes can't express it.
+      const masterChip = `
+        <label class="place-chip place-chip-master">
+          <input type="checkbox" id="map-places-master" ${allOn ? 'checked' : ''}
+            onchange="onMapPlaceFilterMaster(this.checked)">
+          <span><strong>${t('map.places_all_types')}</strong></span>
+        </label>`;
+
+      placesHtml = `
+        <details class="map-places-filter" ${_placesFilterOpen ? 'open' : ''}
+          ontoggle="onMapPlacesFilterToggle(this.open)">
+          <summary class="map-toolbar-control">
+            <span>${t('map.places_filter', { on: onCount, total })}</span>
+            <span class="map-toolbar-caret">▾</span>
+          </summary>
+          <div class="map-places-filter-body">
+            ${masterChip}
+            <div class="place-chips" style="margin-top:6px">${chips}</div>
+          </div>
+        </details>`;
+    }
+
+    rowHtml = `<div class="map-toolbar-row">${selectHtml}${placesHtml}</div>`;
   }
 
-  el.innerHTML = breadcrumbHtml + dropdownHtml;
+  el.innerHTML = breadcrumbHtml + rowHtml;
+
+  // The "All types" master needs its indeterminate state set
+  // imperatively (HTML can't represent it).
+  const master = document.getElementById('map-places-master');
+  if (master) {
+    const visible = data.settings?.visiblePlaceTypes;
+    const isVis = (pt) => !Array.isArray(visible) || visible.includes(pt);
+    const allOn  = PLACE_TYPES.every(pt => isVis(pt));
+    const noneOn = PLACE_TYPES.every(pt => !isVis(pt));
+    master.indeterminate = !allOn && !noneOn;
+  }
 }
+
+function onMapPlaceFilterChange(checkbox) {
+  // Materialise the visibility set when the user first interacts (it
+  // may be undefined = all-on) so we can subtract from it.
+  const cur = data.settings.visiblePlaceTypes
+    ? data.settings.visiblePlaceTypes.slice()
+    : PLACE_TYPES.slice();
+  const v = checkbox.value;
+  const idx = cur.indexOf(v);
+  if (checkbox.checked && idx < 0) cur.push(v);
+  if (!checkbox.checked && idx >= 0) cur.splice(idx, 1);
+  data.settings.visiblePlaceTypes = cur;
+  save();
+  redrawMap();
+}
+
+function onMapPlaceFilterMaster(on) {
+  data.settings.visiblePlaceTypes = on ? PLACE_TYPES.slice() : [];
+  save();
+  redrawMap();
+}
+
+// Inline-handler-friendly setter — top-level `let` bindings aren't
+// reachable from `ontoggle="..."` directly in classic-script mode.
+function onMapPlacesFilterToggle(open) { _placesFilterOpen = !!open; }
 
 // Backwards-compat alias, in case anything still calls the old name.
 function redrawMapBoundaries() { redrawMap(); }

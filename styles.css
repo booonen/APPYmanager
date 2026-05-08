@@ -323,6 +323,54 @@ input[type="checkbox"]:checked::after {
 }
 .import-tag-row input[type="text"] { font-family: var(--font-mono); font-size: 12px; }
 
+.place-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.place-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px; border: 1px solid var(--border);
+  border-radius: 999px; cursor: pointer; user-select: none;
+  background: var(--bg-input); font-size: 12px; color: var(--text-dim);
+  transition: all var(--transition);
+}
+.place-chip:hover { border-color: var(--border-focus); color: var(--text); }
+.place-chip input { accent-color: var(--accent); }
+.place-chip:has(input:checked) {
+  background: var(--accent-glow); border-color: var(--accent); color: var(--accent);
+}
+.place-chip-empty { opacity: 0.45; }
+.place-chip-count {
+  font-family: var(--font-mono); font-size: 10px;
+  background: var(--bg-input); padding: 0 6px; border-radius: 999px;
+  margin-left: 2px;
+}
+.place-color-dot {
+  width: 10px; height: 10px; border-radius: 50%;
+  border: 1px solid rgba(0,0,0,0.35); flex-shrink: 0;
+}
+
+/* Map toolbar — place-type filter dropdown (Brick 7 polish) */
+.map-places-filter { padding: 4px 0; font-size: 12px; }
+.map-places-filter > summary {
+  cursor: pointer; user-select: none; display: inline-flex; align-items: center;
+  gap: 4px; color: var(--text-dim); padding: 4px 8px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg-input);
+}
+.map-places-filter > summary:hover { color: var(--text); border-color: var(--border-focus); }
+.map-places-filter[open] > summary { color: var(--text); }
+.map-places-actions {
+  display: flex; gap: 6px; margin-top: 6px;
+}
+
+/* Side-panel collapse for big lists */
+.map-panel-collapse > summary {
+  cursor: pointer; user-select: none; list-style: none;
+}
+.map-panel-collapse > summary::-webkit-details-marker { display: none; }
+.map-panel-collapse > summary::before {
+  content: '▸ '; color: var(--text-muted); font-size: 10px;
+}
+.map-panel-collapse[open] > summary::before { content: '▾ '; }
+
 .import-result-list {
   list-style: none; padding: 0; margin: 8px 0 0; max-height: 220px; overflow-y: auto;
   font-size: 12px;
@@ -397,10 +445,23 @@ input[type="checkbox"]:checked::after {
 
 /* ──────────────────────────────────────────────────────────────
    MAP LAYOUT — map + side panel flex row (v0.1.11)
+   The map tab is a no-scroll layout: page header + toolbar at the
+   top, then `.map-with-panel` flexes to fill the remainder. The
+   toolbar's place-filter dropdown is a popover (see .map-places-filter
+   below) so opening it never grows the toolbar.
    ────────────────────────────────────────────────────────────── */
+#panel-map.active {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+#panel-map .page-header { flex-shrink: 0; }
+#panel-map #map-toolbar  { flex-shrink: 0; }
 .map-with-panel {
   display: flex; gap: 12px;
-  height: calc(100vh - 240px); min-height: 360px;
+  flex: 1;
+  min-height: 0;
 }
 .map-with-panel #map {
   flex: 1; min-width: 0;
@@ -483,7 +544,55 @@ input[type="checkbox"]:checked::after {
   display: flex; align-items: center; gap: 8px;
   padding: 4px 0;
 }
-.map-toolbar-row select { max-width: 280px; }
+
+/* Both the boundary "Show:" select and the place filter trigger share
+   a uniform size so the toolbar reads as one row of equal-weight
+   controls. */
+.map-toolbar-control {
+  width: 220px;
+  height: 32px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-input);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 13px;
+  cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: space-between;
+  gap: 6px;
+  box-sizing: border-box;
+}
+select.map-toolbar-control:hover,
+summary.map-toolbar-control:hover {
+  border-color: var(--border-focus);
+}
+.map-toolbar-caret { color: var(--text-muted); font-size: 10px; }
+
+/* Place filter — `<details>` whose body floats over the map so opening
+   it never resizes anything below. */
+.map-places-filter { position: relative; }
+.map-places-filter > summary { list-style: none; user-select: none; }
+.map-places-filter > summary::-webkit-details-marker { display: none; }
+.map-places-filter > .map-places-filter-body {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 1000;
+  min-width: 240px;
+  max-width: 360px;
+  padding: 10px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+}
+.place-chip-master {
+  width: 100%;
+  justify-content: flex-start;
+  border-style: dashed;
+  margin-bottom: 4px;
+}
 
 /* Leaflet popup — dark-theme override + APPY popup body styling. */
 .leaflet-popup-content-wrapper {

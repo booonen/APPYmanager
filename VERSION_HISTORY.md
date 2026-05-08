@@ -1,3 +1,162 @@
+## 0.2.7 — Settlement auto-assign: name-match boundary preferred
+- `autoAssignSettlementParent(lat, lng, name)` gains a name-matching
+  pass that runs before the existing smallest-region logic. Walks
+  containing boundaries largest-type-first and returns the first
+  whose `name` equals the settlement's `name` (case-insensitive,
+  trimmed). When several levels match (e.g. Country, Province, and
+  Municipality all named "Foo"), the largest wins so the settlement
+  anchors to the most encompassing matching entity.
+- Falls back to the existing logic (smallest containing plot, then
+  smallest containing boundary) for nameless candidates and for
+  settlements with no matching curated boundary.
+- All three call sites (preview, reconcile, manual auto-assign) now
+  forward the settlement's name.
+
+## 0.2.6 — Brick 7d: Settlements table + edit modal (Brick 7 done)
+- Settlements tab now has a sortable, searchable table mirroring the
+  Plots tab. Sort columns: Name (alpha), Place (rank, so cities lead),
+  Parent (display string), OGF Node ID (numeric). Search matches name,
+  place, parent display, or ogfNodeId.
+- Row click opens the new settlement detail modal:
+  - Editable Name + Notes (auto-save on blur).
+  - Place type dropdown (auto-save on change; recolours the marker).
+  - Parent row with Change… / Auto-assign / Clear actions. Auto-assign
+    runs `autoAssignSettlementParent`; Clear nulls the parent (next
+    reconcile may re-claim it).
+  - Read-only coords, OGF Node ID, settlement ID.
+  - Delete button with `appConfirm`, drops the record, refreshes
+    the table and map.
+- Parent picker (sub-modal): search-filtered list of all plots +
+  boundaries, current pick highlighted. Click commits and re-opens
+  the detail modal.
+- Settlement side panel grows the missing "Open full details" button
+  linking to the new detail modal.
+
+## 0.2.5 — Map tab polish: no-scroll layout + filter UX
+- Map tab is now a true no-scroll layout. `#panel-map.active` flexes
+  vertically with `overflow: hidden`; page header and toolbar take
+  their natural heights and `.map-with-panel` flexes to fill the rest.
+  `min-height: 0` on the map row lets it shrink rather than push the
+  page below the viewport.
+- The place filter is now a popover: its body is `position: absolute`
+  below the trigger, so opening it never grows the toolbar or pushes
+  the map down.
+- Boundary "Show:" select and the place-filter trigger now share the
+  uniform `.map-toolbar-control` class — both 220 × 32 px, same
+  padding/border/colours — and sit on the same toolbar row.
+- "All types" master checkbox added at the top of the chip strip.
+  Tri-state: checked when every type is on, indeterminate when some
+  are off, unchecked when none are. Toggling it flips the whole set.
+  Replaces the previous All/None button pair.
+- Filter dropdown stays open across selection changes. Tracked open
+  state in `_placesFilterOpen` and reapplied on each toolbar render
+  (otherwise the toolbar's innerHTML rebuild snapped `<details>` shut
+  on every chip click).
+- Hover z-order properly resets. We track settlement draw order in
+  `_settlementMarkerOrder` and on unhover re-front every higher-rank
+  marker so the previously hovered one returns to its proper layer.
+
+## 0.2.4 — Settlement marker polish: JOSM colours, draw order, filter
+- New `PLACE_COLORS` map in `js/settlements.js` — JOSM-style hues per
+  `place=*`: city purple, town dark-orange, village orange, suburb
+  yellow-orange, hamlet yellow, borough dark-green, quarter pink,
+  neighbourhood tan, isolated_dwelling light-green, locality grey.
+  Used by markers, side-panel chips, list-view chips, import preview,
+  and the place-filter dropdown.
+- `PLACE_RANK` controls draw order: settlements rendered smallest-rank
+  first so cities sit above hamlets and so on. Same sort applies to
+  the import preview map and the side-panel members lists.
+- Bigger marker radii overall (city 12, town 10, village 8, … locality
+  5). Selected and hover styles also bumped.
+- New place-type filter in the Map toolbar: collapsible chip strip
+  ("Places: 8/10 ▾") with a coloured dot + per-type count, plus
+  All/None shortcuts. State persists under
+  `data.settings.visiblePlaceTypes` (undefined = all visible).
+- Hovering a settlement in the side panel calls `bringToFront()` on
+  its marker so dense clusters stop occluding the highlight.
+- Settlements section in the side panel auto-collapses when more than
+  20 items would be rendered, avoiding lag on country-wide selections.
+
+## 0.2.3 — Settlement parent reconciliation
+- `reconcileSettlementParents()` in `js/settlements.js` sweeps the
+  settlement list and (a) drops dangling parent references whose plot
+  or boundary has been deleted, (b) re-runs `autoAssignSettlementParent`
+  on any settlement at `parent: null`. Returns `true` when at least one
+  parent changed.
+- Hooked into `invalidateBoundaryGeometry` so it fires after every
+  plot/boundary commit + delete. A settlement imported before its
+  covering plot now auto-anchors as soon as that plot lands rather
+  than sticking at "no parent (uncovered)" forever.
+- Also runs once on app load (with `save()` if anything changed) so
+  saves carrying stale parent state from before this fix get cleaned
+  up the first time the file is opened in v0.2.3+.
+
+## 0.2.2 — Brick 7c: Settlements on the map + side-panel integration
+- New `_mapSettlementLayer` always-on featureGroup. Markers are gold
+  circles sized by `place=*` (city = 7 px, town = 6, village = 5,
+  hamlet/quarter = 4, others = 3). Visible regardless of which boundary
+  type is selected; remain on top during drill.
+- Click a marker → side panel selects the settlement. Selected markers
+  get a heavier accent stroke and a slightly larger radius. `_polyIndex`
+  now also holds markers (under `'settlement:<id>'`) so hover/unhover
+  works the same way as for polygons.
+- New side-panel branch for settlements: editable name + notes,
+  coordinates and OGF node id readout, and a Parent section that
+  walks the ancestor chain (direct parent → "Also within" each higher
+  boundary). Clicking the parent navigates the map; clicking a higher
+  ancestor jumps the dropdown to that type and selects it.
+- `_panelNavigateToParent(id, kind)` now accepts a `kind` parameter so
+  settlements with a plot parent navigate to the Plots view; default
+  remains 'boundary' for the existing call sites.
+- Boundary side panel grows a "Settlements (N)" section listing
+  every transitively-contained settlement (`flattenSettlementsForBoundary`).
+  Hover highlights on the map (boosting the marker style in-place);
+  click pans to the settlement and selects it without changing drill.
+- Plot side panel grows a Settlements section showing settlements
+  directly attached to that plot.
+- Hover/unhover handle markers as well as polygons; temporary
+  out-of-view highlights work for settlements too.
+
+## 0.2.1 — Brick 7b: Settlements import flow
+- Three-mode Overpass import for settlements, mirroring Brick 2's plot
+  flow:
+  - **Search** — area-tag rows (seeded from `data.settings.defaultSearchArea`)
+    plus a `place=*` chip strip; common types (city, town, village)
+    default on, the rest are opt-in.
+  - **By ID** — paste a single OGF node id.
+  - **Custom** — full Overpass QL passthrough (re-using `buildCustomQuery`
+    so `[out:json]` injection works the same way as plot import).
+- New helpers in `js/overpass.js`: `buildSettlementSearchQuery`,
+  `buildSettlementByIdQuery`, `parseSettlementImport` (drops anything
+  without a `place` tag, picks `name:<lang>` first, falls back to `name`).
+- `autoAssignSettlementParent(lat, lng)` in `js/settlements.js` picks
+  the most-specific containing region: plot first, then boundaries
+  smallest-type-first via point-in-polygon. Runs at preview time so the
+  user sees what each candidate will attach to before commit.
+- Inset preview map shows candidate dots with name tooltips
+  (`drawPreviewSettlements` in `js/map.js`).
+- Dedup at preview time against existing `ogfNodeId`. The user sees
+  separate counts for "found", "already imported", and "non-place node
+  skipped".
+- Settlements tab shows a read-only list (Name, Place chip, Parent, OGF
+  Node ID) so imports can be verified without map markers — those land
+  in 7c. Sortable/searchable table + edit modal land in 7d.
+- l10n keys for all new strings; `EMPTY_DATA` migration unchanged.
+
+## 0.2.0 — Brick 7a: Settlements scaffolding
+- New `data.settlements` array (with `EMPTY_DATA` migration so existing
+  saves pick up `[]` on next load — no schema bump needed).
+- `js/settlements.js` defines the record shape and CRUD primitives:
+  `createSettlement`, `deleteSettlement`, `findSettlementByOgfNodeId`,
+  `getSettlementParentInfo`, `flattenSettlementsForBoundary`,
+  `settlementsForPlot`, plus the `PLACE_TYPES` preset list for the
+  upcoming import preset selector.
+- Sidebar gets a Settlements item under Geography (between Boundaries
+  and Map). Empty `panel-settlements` tab with placeholder import
+  button (disabled — full import flow lands in 7b).
+- Dashboard shows a Settlements stat card.
+- Bumped to v0.2.0 — Phase 2.5 begins.
+
 ## 0.1.11 — Map side panel, single drill chain, scoped viewport fit
 - **Side panel replaces popups.** Single-clicking a boundary or plot on
   the map no longer opens a Leaflet popup. Instead a 280 px side panel

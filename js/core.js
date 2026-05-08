@@ -10,6 +10,7 @@
 //   plots          — atomic geographic units, reference osm.ways for geometry (Brick 2+)
 //   boundaries     — higher-level regions, each = set of plots OR sub-boundaries (Brick 6+)
 //   boundaryTypes  — strict hierarchy of boundary type definitions (Brick 4+)
+//   settlements    — OGF place=* point references with single parent (Brick 7+)
 //   propertySchemas — declarations for numeric / categoric / percentage properties (Brick 8+)
 //   settings       — project-level config (name, language, ...)
 let data = {
@@ -17,6 +18,7 @@ let data = {
   plots: [],
   boundaries: [],
   boundaryTypes: [],
+  settlements: [],
   propertySchemas: [],
   settings: {}
 };
