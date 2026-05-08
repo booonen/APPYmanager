@@ -45,6 +45,15 @@ let _hoveredPolyKind = null;
 let _hoveredPolyId   = null;
 let _hoveredTempPoly = null;
 
+// Track settlement draw order so we can restore z-stacking after a
+// hover bringToFront — otherwise the hovered marker stays above its
+// peers even after mouseleave.
+let _settlementMarkerOrder = [];        // array of settlement ids, smallest-rank first
+
+// Persist the place-filter dropdown's open state across toolbar
+// re-renders (which otherwise wipe `<details open>` and snap shut).
+let _placesFilterOpen = false;
+
 // Sentinel id for the synthetic "Plots" dropdown option.
 const PLOTS_TYPE_SENTINEL = '__plots__';
 
@@ -415,7 +424,11 @@ function redrawMap() {
       const rb = (typeof rankForPlaceType === 'function') ? rankForPlaceType(b.place) : 0;
       return ra - rb;
     });
-  for (const s of settlementsToDraw) _drawSettlementMarker(s);
+  _settlementMarkerOrder = [];
+  for (const s of settlementsToDraw) {
+    _drawSettlementMarker(s);
+    _settlementMarkerOrder.push(s.id);
+  }
 
   renderMapToolbar();
   renderMapSidePanel();
@@ -589,6 +602,16 @@ function _unhoverMapItem() {
       } else if (_hoveredPolyKind === 'settlement') {
         const s = data.settlements?.find(x => x.id === _hoveredPolyId);
         indexed.setStyle(settlementMarkerStyle(s, isSelected));
+        // _hoverMapItem brought this marker to the SVG front, which would
+        // otherwise stick across hover sessions. Re-stack by re-fronting
+        // every settlement that should sit above it in draw order.
+        const idx = _settlementMarkerOrder.indexOf(_hoveredPolyId);
+        if (idx >= 0) {
+          for (let i = idx + 1; i < _settlementMarkerOrder.length; i++) {
+            const m = _polyIndex.get('settlement:' + _settlementMarkerOrder[i]);
+            if (m && typeof m.bringToFront === 'function') m.bringToFront();
+          }
+        }
       }
     }
   }
@@ -1074,66 +1097,96 @@ function renderMapToolbar() {
     breadcrumbHtml = `<div class="map-crumbs">${parts.join('<span class="map-crumb-sep">›</span>')}</div>`;
   }
 
-  // Dropdown: boundary types (largest first) + a synthetic "Plots" entry
-  // at the bottom. Always rendered as long as the project has plots or
-  // boundary types — when neither exists we hide it.
+  // Single toolbar row: boundary-type "Show:" select + place-filter
+  // popover. Both controls share width so they line up tidily. The
+  // place filter is rendered inside `<details>`; its body is positioned
+  // absolutely so opening it doesn't push the map down (no scroll on
+  // the Map tab).
   const types = _typesLargestFirst();
   const haveAny = types.length > 0 || data.plots.length > 0;
-  let dropdownHtml = '';
-  if (haveAny) {
-    const typeOpts = types.map(ty =>
-      `<option value="${esc(ty.id)}"${ty.id === _mapCurrentTypeId ? ' selected' : ''}>${esc(ty.name)}</option>`
-    ).join('');
-    const plotsSelected = _mapCurrentTypeId === PLOTS_TYPE_SENTINEL;
-    const plotsOpt = `<option value="${PLOTS_TYPE_SENTINEL}"${plotsSelected ? ' selected' : ''}>${t('map.layer_plots')}</option>`;
-    dropdownHtml = `
-      <div class="map-toolbar-row">
+  let rowHtml = '';
+  if (haveAny || (data.settlements || []).length > 0) {
+    let selectHtml = '';
+    if (haveAny) {
+      const typeOpts = types.map(ty =>
+        `<option value="${esc(ty.id)}"${ty.id === _mapCurrentTypeId ? ' selected' : ''}>${esc(ty.name)}</option>`
+      ).join('');
+      const plotsSelected = _mapCurrentTypeId === PLOTS_TYPE_SENTINEL;
+      const plotsOpt = `<option value="${PLOTS_TYPE_SENTINEL}"${plotsSelected ? ' selected' : ''}>${t('map.layer_plots')}</option>`;
+      selectHtml = `
         <label class="import-target-label">${t('map.show_label')}</label>
-        <select onchange="onMapTypeChange(this.value)">${typeOpts}${plotsOpt}</select>
-      </div>`;
+        <select class="map-toolbar-control" onchange="onMapTypeChange(this.value)">${typeOpts}${plotsOpt}</select>`;
+    }
+
+    let placesHtml = '';
+    if ((data.settlements || []).length > 0 && typeof PLACE_TYPES !== 'undefined') {
+      const visible = data.settings?.visiblePlaceTypes;
+      const isVis = (pt) => !Array.isArray(visible) || visible.includes(pt);
+      const counts = {};
+      for (const s of data.settlements) counts[s.place] = (counts[s.place] || 0) + 1;
+      const total = data.settlements.length;
+      const onCount = data.settlements.filter(s => isVis(s.place)).length;
+      const allOn = PLACE_TYPES.every(pt => isVis(pt));
+
+      const chips = PLACE_TYPES.map(pt => {
+        const checked = isVis(pt);
+        const c = colorForPlaceType(pt);
+        const n = counts[pt] || 0;
+        return `
+          <label class="place-chip${n === 0 ? ' place-chip-empty' : ''}" title="${n} in project">
+            <input type="checkbox" value="${esc(pt)}" ${checked ? 'checked' : ''}
+              onchange="onMapPlaceFilterChange(this)">
+            <span class="place-color-dot" style="background:${c}"></span>
+            <span>${esc(pt)}</span>
+            ${n > 0 ? `<span class="place-chip-count">${n}</span>` : ''}
+          </label>`;
+      }).join('');
+
+      // Master "All types" toggle — checked when every type is on,
+      // indeterminate when some are off, unchecked when none are.
+      // Setting `indeterminate` happens after innerHTML in a follow-up
+      // pass since HTML attributes can't express it.
+      const masterChip = `
+        <label class="place-chip place-chip-master">
+          <input type="checkbox" id="map-places-master" ${allOn ? 'checked' : ''}
+            onchange="onMapPlaceFilterMaster(this.checked)">
+          <span><strong>${t('map.places_all_types')}</strong></span>
+        </label>`;
+
+      placesHtml = `
+        <details class="map-places-filter" ${_placesFilterOpen ? 'open' : ''}
+          ontoggle="onMapPlacesFilterToggle(this.open)">
+          <summary class="map-toolbar-control">
+            <span>${t('map.places_filter', { on: onCount, total })}</span>
+            <span class="map-toolbar-caret">▾</span>
+          </summary>
+          <div class="map-places-filter-body">
+            ${masterChip}
+            <div class="place-chips" style="margin-top:6px">${chips}</div>
+          </div>
+        </details>`;
+    }
+
+    rowHtml = `<div class="map-toolbar-row">${selectHtml}${placesHtml}</div>`;
   }
 
-  // Place-type filter: collapsible chip strip in a <details>. Visible
-  // when at least one settlement exists. Stores state under
-  // data.settings.visiblePlaceTypes — undefined = all visible.
-  let placesHtml = '';
-  if ((data.settlements || []).length > 0 && typeof PLACE_TYPES !== 'undefined') {
+  el.innerHTML = breadcrumbHtml + rowHtml;
+
+  // The "All types" master needs its indeterminate state set
+  // imperatively (HTML can't represent it).
+  const master = document.getElementById('map-places-master');
+  if (master) {
     const visible = data.settings?.visiblePlaceTypes;
     const isVis = (pt) => !Array.isArray(visible) || visible.includes(pt);
-    const counts = {};
-    for (const s of data.settlements) counts[s.place] = (counts[s.place] || 0) + 1;
-    const total = data.settlements.length;
-    const onCount = data.settlements.filter(s => isVis(s.place)).length;
-
-    const chips = PLACE_TYPES.map(pt => {
-      const checked = isVis(pt);
-      const c = colorForPlaceType(pt);
-      const n = counts[pt] || 0;
-      return `
-        <label class="place-chip${n === 0 ? ' place-chip-empty' : ''}" title="${n} in project">
-          <input type="checkbox" value="${esc(pt)}" ${checked ? 'checked' : ''}
-            onchange="onMapPlaceFilterChange(this)">
-          <span class="place-color-dot" style="background:${c}"></span>
-          <span>${esc(pt)}</span>
-          ${n > 0 ? `<span class="place-chip-count">${n}</span>` : ''}
-        </label>`;
-    }).join('');
-
-    placesHtml = `
-      <details class="map-places-filter">
-        <summary>${t('map.places_filter', { on: onCount, total })}</summary>
-        <div class="place-chips" style="margin-top:6px">${chips}</div>
-        <div class="map-places-actions">
-          <button class="btn btn-sm" onclick="onMapPlaceFilterAll(true)">${t('map.places_all')}</button>
-          <button class="btn btn-sm" onclick="onMapPlaceFilterAll(false)">${t('map.places_none')}</button>
-        </div>
-      </details>`;
+    const allOn  = PLACE_TYPES.every(pt => isVis(pt));
+    const noneOn = PLACE_TYPES.every(pt => !isVis(pt));
+    master.indeterminate = !allOn && !noneOn;
   }
-
-  el.innerHTML = breadcrumbHtml + dropdownHtml + placesHtml;
 }
 
 function onMapPlaceFilterChange(checkbox) {
+  // Materialise the visibility set when the user first interacts (it
+  // may be undefined = all-on) so we can subtract from it.
   const cur = data.settings.visiblePlaceTypes
     ? data.settings.visiblePlaceTypes.slice()
     : PLACE_TYPES.slice();
@@ -1146,11 +1199,15 @@ function onMapPlaceFilterChange(checkbox) {
   redrawMap();
 }
 
-function onMapPlaceFilterAll(on) {
+function onMapPlaceFilterMaster(on) {
   data.settings.visiblePlaceTypes = on ? PLACE_TYPES.slice() : [];
   save();
   redrawMap();
 }
+
+// Inline-handler-friendly setter — top-level `let` bindings aren't
+// reachable from `ontoggle="..."` directly in classic-script mode.
+function onMapPlacesFilterToggle(open) { _placesFilterOpen = !!open; }
 
 // Backwards-compat alias, in case anything still calls the old name.
 function redrawMapBoundaries() { redrawMap(); }

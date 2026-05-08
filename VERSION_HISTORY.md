@@ -1,3 +1,27 @@
+## 0.2.5 — Map tab polish: no-scroll layout + filter UX
+- Map tab is now a true no-scroll layout. `#panel-map.active` flexes
+  vertically with `overflow: hidden`; page header and toolbar take
+  their natural heights and `.map-with-panel` flexes to fill the rest.
+  `min-height: 0` on the map row lets it shrink rather than push the
+  page below the viewport.
+- The place filter is now a popover: its body is `position: absolute`
+  below the trigger, so opening it never grows the toolbar or pushes
+  the map down.
+- Boundary "Show:" select and the place-filter trigger now share the
+  uniform `.map-toolbar-control` class — both 220 × 32 px, same
+  padding/border/colours — and sit on the same toolbar row.
+- "All types" master checkbox added at the top of the chip strip.
+  Tri-state: checked when every type is on, indeterminate when some
+  are off, unchecked when none are. Toggling it flips the whole set.
+  Replaces the previous All/None button pair.
+- Filter dropdown stays open across selection changes. Tracked open
+  state in `_placesFilterOpen` and reapplied on each toolbar render
+  (otherwise the toolbar's innerHTML rebuild snapped `<details>` shut
+  on every chip click).
+- Hover z-order properly resets. We track settlement draw order in
+  `_settlementMarkerOrder` and on unhover re-front every higher-rank
+  marker so the previously hovered one returns to its proper layer.
+
 ## 0.2.4 — Settlement marker polish: JOSM colours, draw order, filter
 - New `PLACE_COLORS` map in `js/settlements.js` — JOSM-style hues per
   `place=*`: city purple, town dark-orange, village orange, suburb
