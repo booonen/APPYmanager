@@ -946,6 +946,8 @@ function renderMapSidePanel() {
             rows="3" placeholder="No notes">${esc(s.notes || '')}</textarea>
         </div>
         ${_renderSettlementParent(s)}
+        <button class="btn btn-sm btn-primary" style="width:100%;margin-top:4px"
+          onclick="openSettlementDetail('${esc(s.id)}')">Open full details</button>
       </div>`;
   }
 

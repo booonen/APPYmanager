@@ -1,3 +1,23 @@
+## 0.2.6 — Brick 7d: Settlements table + edit modal (Brick 7 done)
+- Settlements tab now has a sortable, searchable table mirroring the
+  Plots tab. Sort columns: Name (alpha), Place (rank, so cities lead),
+  Parent (display string), OGF Node ID (numeric). Search matches name,
+  place, parent display, or ogfNodeId.
+- Row click opens the new settlement detail modal:
+  - Editable Name + Notes (auto-save on blur).
+  - Place type dropdown (auto-save on change; recolours the marker).
+  - Parent row with Change… / Auto-assign / Clear actions. Auto-assign
+    runs `autoAssignSettlementParent`; Clear nulls the parent (next
+    reconcile may re-claim it).
+  - Read-only coords, OGF Node ID, settlement ID.
+  - Delete button with `appConfirm`, drops the record, refreshes
+    the table and map.
+- Parent picker (sub-modal): search-filtered list of all plots +
+  boundaries, current pick highlighted. Click commits and re-opens
+  the detail modal.
+- Settlement side panel grows the missing "Open full details" button
+  linking to the new detail modal.
+
 ## 0.2.5 — Map tab polish: no-scroll layout + filter UX
 - Map tab is now a true no-scroll layout. `#panel-map.active` flexes
   vertically with `overflow: hidden`; page header and toolbar take
