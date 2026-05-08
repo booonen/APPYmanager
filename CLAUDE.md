@@ -406,14 +406,48 @@ they come up; the plan is a living document.
   from independently-drawn OGF borders. Also: `parseImport` now prefers
   `name:<lang>` tags over `name=*` when a localised tag is present, using
   the current `_lang` value.
-- **Brick 6a** ✓ (PR open on `feature/brick-6a-boundaries`) — boundary entities,
-  table-driven. New `js/boundaries.js` data layer + Boundaries sidebar tab.
-  Searchable/sortable list (Name / Type / Members / Area). Detail modal with
-  editable name+notes, members list with Remove, type-locked-after-creation.
-  Member picker modal: search-filtered, grouped by section (Plots first, then
-  each boundary type in the type-chain below the parent). Enforces transitive
-  containment (entire primitiveId chain is eligible, not just immediate primitive)
-  and exclusivity (already-claimed items render disabled with a `claimed` tag).
+- **Brick 6a** ✓ (merged to main) — boundary entities, table-driven.
+  `js/boundaries.js` data layer + Boundaries sidebar tab. Searchable/sortable
+  list (Name / Type / Members / Area). Detail modal with editable name+notes,
+  members list with Remove, type-locked-after-creation. Member picker modal:
+  search-filtered, grouped by section (Plots first, then each boundary type
+  in the type-chain below the parent). Enforces transitive containment +
+  exclusivity. **v0.1.2 follow-ups:** (1) "Create as: Plot | Boundary [type]"
+  selector in the import modal — when Boundary is chosen, each imported OGF
+  relation is wrapped in a Boundary of the chosen type with its sub-plots as
+  members; subdivision rewrites boundary plot-references to the new sub-plots.
+  (2) Member promotion (inbetweener): claimed items render promotable when
+  the claimer's type chain allows wedging the new boundary; on commit the
+  item moves and the new boundary is inserted between claimer and item.
   No map rendering yet — that's Brick 6b.
-- **Brick 6b** (next) — map layer toggle per boundary type, dissolved geometry
-  via Turf union, single-click popup, double-click drill-through to sub-boundaries.
+- **Brick 6b** ✓ (superseded by 6c) — first cut of boundary map rendering
+  used a multi-layer chip strip with stroke-only fills. Replaced in 6c
+  by the hierarchical dropdown view; `resolveBoundaryGeometry` (the
+  cached turf.union folder in boundaries.js) survived from 6b.
+- **Brick 6c** ✓ (PR open on `feature/brick-6a-boundaries`) — hierarchical
+  map view + import absorption. The Map tab uses a single dropdown that
+  picks one boundary type to display (largest first by `primitiveId`
+  depth, plus a synthetic "Plots" option at the bottom for the flat
+  plot view). At root the map renders every boundary of the chosen
+  type filled in the type's color, like plots are rendered. Drilling
+  via double-click STACKS additional levels on top: the dropdown's
+  level stays visible underneath, the drilled-into boundary's direct
+  members render on top, and each subsequent dblclick adds another
+  level (so 3+ depth-levels can coexist on the map). Single-click on
+  any polygon spawns a Leaflet popup with name / type chip / area /
+  "Open details" button (the button promotes to the full detail
+  modal); a 240 ms debounce defers the popup so dblclick on a
+  boundary can cancel it cleanly. Breadcrumb above the dropdown
+  returns to any ancestor view. On import-as-boundary,
+  `resolveBoundaryMembersForPlots` (boundaries.js) performs greedy
+  largest-first absorption: an imported Province whose plots are
+  fully covered by existing Municipalities becomes a Boundary whose
+  members are those Municipalities, not the raw plots. Subdivide
+  step 5 then runs each proposed member through `promoteMember`,
+  filtering out members whose claimer can't transitively contain the
+  new boundary's type — this is what makes the locality-inside-
+  municipality import work (locality boundary claims the new sub-plot
+  from its parent municipality).
+- **Brick 7** (next) — Settlements (Phase 2.5). Import OGF `place=*` nodes
+  via Overpass; one parent per settlement (plot or boundary); markers,
+  list view, edit/delete. Not load-bearing for aggregation.

@@ -625,6 +625,7 @@ function removeBoundaryMember(kind, memberId) {
   const b = data.boundaries.find(x => x.id === _boundaryDetailId);
   if (!b) return;
   b.members = (b.members || []).filter(m => !(m.kind === kind && m.id === memberId));
+  invalidateBoundaryGeometry();
   save();
   openBoundaryDetail(_boundaryDetailId); // re-render in place
   _renderBoundariesBody();
@@ -637,6 +638,7 @@ function onBoundaryDetailDelete() {
   const displayName = b.name || t('boundaries.unnamed');
   appConfirm(t('boundaries.confirm_delete', { name: displayName }), () => {
     data.boundaries = data.boundaries.filter(x => x.id !== _boundaryDetailId);
+    invalidateBoundaryGeometry();
     save();
     closeBoundaryDetail();
     refreshAll();
@@ -738,21 +740,35 @@ function _renderPickerList() {
 
 function _pickerRow(e) {
   const key = e.kind + ':' + e.id;
-  const disabled = e.claimedElsewhere && !e.currentMember;
-  const checked  = e.currentMember || _pickerSelected.has(key);
-  const claimedTag = disabled
-    ? ` <span class="boundary-picker-claimed">${t('boundary_picker.claimed_label')}</span>`
-    : '';
+  // Three states for a claimed item:
+  //   currentMember: in this boundary already (checked, locked)
+  //   promotable:    in another boundary, but a wedge is geometrically valid (checkable)
+  //   blocked:       in another boundary, no valid wedge (disabled)
+  const blocked    = e.claimedElsewhere && !e.currentMember && !e.promotable;
+  const promotable = e.claimedElsewhere && !e.currentMember && e.promotable;
+  const checked    = e.currentMember || _pickerSelected.has(key);
   const nameDisplay = e.name
     ? esc(e.name)
     : `<span class="text-muted">${e.kind === 'plot' ? t('plots.unnamed') : t('boundaries.unnamed')}</span>`;
-  return `<label class="boundary-picker-row${disabled ? ' disabled' : ''}${e.currentMember ? ' current' : ''}">
+
+  let tag = '';
+  if (blocked)    tag = ` <span class="boundary-picker-claimed">${t('boundary_picker.claimed_label')}</span>`;
+  if (promotable) tag = ` <span class="boundary-picker-promote">${t('boundary_picker.promote_from', { name: esc(e.claimingBoundaryName || e.claimingBoundaryType || '') })}</span>`;
+
+  const cls = [
+    'boundary-picker-row',
+    blocked    ? 'disabled'   : '',
+    promotable ? 'promotable' : '',
+    e.currentMember ? 'current' : '',
+  ].filter(Boolean).join(' ');
+
+  return `<label class="${cls}">
     <input type="checkbox"
       data-key="${esc(key)}"
       ${checked ? 'checked' : ''}
-      ${disabled || e.currentMember ? 'disabled' : ''}
+      ${blocked || e.currentMember ? 'disabled' : ''}
       onchange="onPickerToggle('${esc(key)}', this.checked)">
-    <span>${nameDisplay}${claimedTag}</span>
+    <span>${nameDisplay}${tag}</span>
   </label>`;
 }
 
@@ -778,18 +794,30 @@ function commitMembersPicker() {
   if (!_boundaryDetailId) return;
   const b = data.boundaries.find(x => x.id === _boundaryDetailId);
   if (!b) { closeModal(); return; }
-  let added = 0;
+  let added = 0, promoted = 0;
+  b.members = b.members || [];
   for (const key of _pickerSelected) {
     const [kind, id] = key.split(':');
-    if (!(b.members || []).some(m => m.kind === kind && m.id === id)) {
-      b.members = b.members || [];
-      b.members.push({ kind, id });
-      added++;
+    if (b.members.some(m => m.kind === kind && m.id === id)) continue;
+    // If this item is already claimed by another boundary, attempt promotion
+    // (wedge `b` between the claimer and the item).
+    const claimer = findClaimingBoundary(kind, id, b.id);
+    if (claimer) {
+      const ok = promoteMember(kind, id, b);
+      if (!ok) continue; // shouldn't happen — UI only checked promotable rows
+      promoted++;
     }
+    b.members.push({ kind, id });
+    added++;
   }
   if (added > 0) {
+    invalidateBoundaryGeometry();
     save();
-    toast(t('boundary_picker.added_toast', { n: added }), 'success');
+    if (promoted > 0) {
+      toast(t('boundary_picker.added_with_promote_toast', { added, promoted }), 'success');
+    } else {
+      toast(t('boundary_picker.added_toast', { n: added }), 'success');
+    }
   }
   _pickerSelected.clear();
   openBoundaryDetail(_boundaryDetailId);
@@ -809,6 +837,15 @@ function renderSettings() {
     `<option value="${l.code}"${l.code === _lang ? ' selected' : ''}>${esc(l.name)}</option>`
   ).join('');
   const snapVal = getSetting('snapToleranceM', 10);
+
+  const defaultArea = getSetting('defaultSearchArea', []);
+  const areaRows = defaultArea.map((r, i) => `
+    <div class="import-tag-row" data-dsa-idx="${i}">
+      <input type="text" placeholder="${t('import.key_placeholder')}" value="${esc(r.key || '')}" data-field="key" onchange="onDefaultSearchAreaChange()">
+      <input type="text" placeholder="${t('import.value_placeholder')}" value="${esc(r.value || '')}" data-field="value" onchange="onDefaultSearchAreaChange()">
+      <button class="btn btn-sm" onclick="removeDefaultSearchAreaRow(${i})">✕</button>
+    </div>`).join('');
+
   el.innerHTML = `
     <div class="ie-card">
       <h3>${t('settings.language')}</h3>
@@ -826,6 +863,17 @@ function renderSettings() {
         <span class="text-dim">${t('settings.snap_tolerance_unit')}</span>
       </div>
     </div>
+    <div class="ie-card">
+      <h3>${t('settings.default_search_area')}</h3>
+      <p>${t('settings.default_search_area_desc')}</p>
+      <div id="settings-dsa-rows" class="import-rows" style="margin-bottom:8px">${areaRows}</div>
+      <button class="btn btn-sm" onclick="addDefaultSearchAreaRow()">+ ${t('import.add_row')}</button>
+    </div>
+    <div class="ie-card" style="border-color:var(--danger,#7a1a1a)">
+      <h3 style="color:var(--accent)">${t('settings.flush_title')}</h3>
+      <p>${t('settings.flush_desc')}</p>
+      <button class="btn btn-danger" onclick="flushSaveFile()">${t('settings.flush_btn')}</button>
+    </div>
   `;
 }
 
@@ -834,6 +882,58 @@ function onSnapToleranceChange(val) {
   data.settings = data.settings || {};
   data.settings.snapToleranceM = n;
   save();
+}
+
+function _readDefaultSearchAreaRows() {
+  const rows = document.getElementById('settings-dsa-rows')?.querySelectorAll('.import-tag-row') || [];
+  const out = [];
+  rows.forEach(r => {
+    const key   = r.querySelector('[data-field="key"]')?.value.trim() || '';
+    const value = r.querySelector('[data-field="value"]')?.value.trim() || '';
+    if (key || value) out.push({ key, value });
+  });
+  return out;
+}
+
+function onDefaultSearchAreaChange() {
+  data.settings = data.settings || {};
+  data.settings.defaultSearchArea = _readDefaultSearchAreaRows();
+  save();
+}
+
+function addDefaultSearchAreaRow() {
+  const container = document.getElementById('settings-dsa-rows');
+  if (!container) return;
+  const idx = container.querySelectorAll('.import-tag-row').length;
+  const row = document.createElement('div');
+  row.className = 'import-tag-row';
+  row.dataset.dsaIdx = idx;
+  row.innerHTML = `
+    <input type="text" placeholder="${t('import.key_placeholder')}" data-field="key" onchange="onDefaultSearchAreaChange()">
+    <input type="text" placeholder="${t('import.value_placeholder')}" data-field="value" onchange="onDefaultSearchAreaChange()">
+    <button class="btn btn-sm" onclick="this.parentElement.remove(); onDefaultSearchAreaChange()">✕</button>
+  `;
+  container.appendChild(row);
+}
+
+function removeDefaultSearchAreaRow(idx) {
+  const container = document.getElementById('settings-dsa-rows');
+  if (!container) return;
+  const rows = container.querySelectorAll('.import-tag-row');
+  if (rows[idx]) rows[idx].remove();
+  onDefaultSearchAreaChange();
+}
+
+function flushSaveFile() {
+  appConfirm(t('settings.flush_confirm'), () => {
+    data.plots = [];
+    data.boundaries = [];
+    data.osm = { nodes: {}, ways: {}, _nextLocalId: 0 };
+    invalidateBoundaryGeometry();
+    save();
+    refreshAll();
+    toast(t('settings.flush_toast'), 'success');
+  });
 }
 
 function renderImportExport() {
@@ -876,7 +976,22 @@ function openImportModal() {
   _importPreview = null;
   destroyPreviewMap();
 
+  // Unified "Create as" dropdown: Plot first, then all boundary types.
+  const btypeOpts = data.boundaryTypes.slice()
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map(ty => `<option value="${esc(ty.id)}">${esc(ty.name)}</option>`)
+    .join('');
+  const noTypes = data.boundaryTypes.length === 0;
+
   openModal(t('import.title'), `
+    <div class="import-target-row">
+      <label class="import-target-label">${t('import.create_as')}</label>
+      <select id="import-target-select" onchange="onImportTargetChange()">
+        <option value="plot">${t('import.target_plot')}</option>
+        ${btypeOpts}
+      </select>
+      ${noTypes ? `<span class="text-dim" style="font-size:11px;margin-left:4px">${t('import.target_boundary_no_types')}</span>` : ''}
+    </div>
     <div class="import-tabs">
       <button class="import-tab active" data-mode="search" onclick="switchImportMode('search')">${t('import.tab_search')}</button>
       <button class="import-tab" data-mode="byid" onclick="switchImportMode('byid')">${t('import.tab_byid')}</button>
@@ -920,14 +1035,60 @@ function openImportModal() {
     <button class="btn btn-primary" id="import-action-btn" onclick="runImportPreview()">${t('import.import_btn')}</button>
   `);
 
-  // Empty seed rows so the user sees the structure but doesn't
-  // accidentally fire a world-spanning admin_level=2 search on first click.
-  addImportRow('area');
+  // Seed area rows from default search area setting (or one empty row).
+  const defaultArea = getSetting('defaultSearchArea', []);
+  if (defaultArea.length > 0) {
+    for (const row of defaultArea) addImportRow('area', row);
+  } else {
+    addImportRow('area');
+  }
   addImportRow('import');
 
   // Make the modal a bit taller so the inset preview map gets room.
   const modalEl = document.getElementById('modal');
   if (modalEl) modalEl.style.width = '720px';
+}
+
+function onImportTargetChange() {
+  // A target switch can flip whether anything is committable (e.g. wrap-only
+  // re-imports become committable as boundaries). Refresh the commit area.
+  _refreshImportCommitContainer();
+}
+
+function getImportTarget() {
+  const val = document.getElementById('import-target-select')?.value || 'plot';
+  if (val !== 'plot') return { kind: 'boundary', typeId: val };
+  return { kind: 'plot' };
+}
+
+// Decide whether the current plan + selected target can produce any commit-time action.
+// Returns { canCommit, label } where canCommit=false ⇒ show "nothing new" message instead.
+function _evaluateImportCommit(plan, target) {
+  const candidatesTouched = plan.free.length + plan.wraps.length
+    + new Set(plan.splits.flatMap(s => s.pieces.map(p => p.candidate))).size;
+  if (plan.newPlotCount > 0) {
+    return { canCommit: true, label: t('import.commit_btn', { n: plan.newPlotCount }) };
+  }
+  // newPlotCount === 0 — only meaningful if we're wrapping into boundaries.
+  if (target.kind === 'boundary' && candidatesTouched > 0) {
+    return { canCommit: true, label: t('import.commit_boundary_only', { n: candidatesTouched }) };
+  }
+  return { canCommit: false, label: '' };
+}
+
+function _refreshImportCommitContainer() {
+  const el = document.getElementById('import-commit-container');
+  if (!el) return;
+  if (!_importPreview || !_importPreview._plan) { el.innerHTML = ''; return; }
+  const target = getImportTarget();
+  const { canCommit, label } = _evaluateImportCommit(_importPreview._plan, target);
+  if (canCommit) {
+    el.innerHTML = `<div class="flex" style="justify-content:flex-end">
+      <button class="btn btn-primary" onclick="runImportCommit()">${esc(label)}</button>
+    </div>`;
+  } else {
+    el.innerHTML = `<div class="text-dim" style="font-size:12px;text-align:center;padding:8px 0">${t('import.nothing_new')}</div>`;
+  }
 }
 
 function switchImportMode(mode) {
@@ -1068,6 +1229,27 @@ async function runImportPreview() {
     listHtml += `</ul>`;
   }
 
+  if (plan.wraps && plan.wraps.length > 0) {
+    listHtml += `<div class="subdivide-section-label">${t('import.wrap_section', { n: plan.wraps.length })}</div>`;
+    listHtml += `<ul class="import-result-list">`;
+    for (const w of plan.wraps) {
+      const wrapName = w.candidate.name
+        ? esc(w.candidate.name)
+        : `<span class="text-muted">${t('plots.unnamed')}</span>`;
+      listHtml += `<li><span class="import-result-mark ok">⊕</span> ${wrapName}${w.candidate.ogfRelationId ? ` <span class="text-muted mono">#${w.candidate.ogfRelationId}</span>` : ''} ${t('import.wraps_existing')}`;
+      listHtml += `<ul class="subdivide-children">`;
+      for (const wp of w.wrappedPlots) {
+        const wpName = wp.name ? esc(wp.name) : `<span class="text-muted">${t('plots.unnamed')}</span>`;
+        listHtml += `<li><span class="import-result-mark muted">↳</span> ${wpName} <span class="text-dim" style="font-size:11px">${t('import.kept_as_is')}</span></li>`;
+      }
+      if (w.gapFeature) {
+        listHtml += `<li><span class="import-result-mark muted">⌁</span> <em>${esc(w.candidate.name || '')} ${t('import.remainder')}</em></li>`;
+      }
+      listHtml += `</ul></li>`;
+    }
+    listHtml += `</ul>`;
+  }
+
   if (plan.free.length > 0) {
     listHtml += `<div class="subdivide-section-label">${t('import.subdivide_free_section')}</div>`;
     listHtml += `<ul class="import-result-list">`;
@@ -1077,38 +1259,45 @@ async function runImportPreview() {
     listHtml += `</ul>`;
   }
 
-  const commitBtn = plan.newPlotCount > 0
-    ? `<div class="flex" style="justify-content:flex-end;margin-top:12px">
-         <button class="btn btn-primary" onclick="runImportCommit()">${t('import.commit_btn', { n: plan.newPlotCount })}</button>
-       </div>`
-    : '';
-
   setImportPreviewHTML(`
     ${header}
     ${listHtml}
     <div id="import-preview-map" style="height:240px;margin-top:10px;border-radius:var(--radius);border:1px solid var(--border);overflow:hidden"></div>
-    ${commitBtn}
+    <div id="import-commit-container" style="margin-top:12px"></div>
   `);
 
   ensurePreviewMap('import-preview-map');
   drawPreviewCandidates(parsed.candidates);
+  _refreshImportCommitContainer();
 }
 
 function runImportCommit() {
   if (!_importPreview || !_importPreview._plan) return;
   const { _plan, nodes, ways } = _importPreview;
-  if (_plan.newPlotCount === 0) return;
+  const target = getImportTarget();
+  // The button is hidden when there's nothing to commit (see _evaluateImportCommit),
+  // so reaching here implies either new plots OR a wrap into a new boundary.
+  const { canCommit } = _evaluateImportCommit(_plan, target);
+  if (!canCommit) return;
 
-  executeSubdivisionPlan(_plan, nodes, ways);
+  executeSubdivisionPlan(_plan, nodes, ways, target);
+  invalidateBoundaryGeometry();
 
   const splitCount = _plan.splits.length;
+  const wrapCount  = (_plan.wraps || []).length;
   const freeCount  = _plan.free.length;
+  const splitCreated = _plan.splits.reduce((s, sp) => s + sp.pieces.length + (sp.remainder ? 1 : 0), 0);
 
-  if (splitCount > 0) {
-    toast(t('import.subdivided_toast', { split: splitCount, created: _plan.newPlotCount - freeCount }), 'success');
-    if (freeCount > 0) toast(t('import.imported_toast', { n: freeCount }), 'success');
-  } else {
-    toast(t('import.imported_toast', { n: freeCount }), 'success');
+  if (splitCount > 0) toast(t('import.subdivided_toast', { split: splitCount, created: splitCreated }), 'success');
+  if (wrapCount  > 0) toast(t('import.wrapped_toast',    { n: wrapCount }), 'success');
+  if (freeCount  > 0) toast(t('import.imported_toast',   { n: freeCount }), 'success');
+
+  if (target.kind === 'boundary') {
+    const typeName = getBoundaryTypeName(target.typeId);
+    const candCount = _plan.free.length
+      + (_plan.wraps || []).length
+      + new Set(_plan.splits.flatMap(s => s.pieces.map(p => p.candidate))).size;
+    toast(t('import.wrapped_as_boundary_toast', { n: candCount, type: typeName }), 'success');
   }
 
   save();
@@ -1219,6 +1408,7 @@ function onPlotDetailDelete() {
     const idx = data.plots.findIndex(p => p.id === _detailPlotId);
     if (idx < 0) return;
     data.plots.splice(idx, 1);
+    invalidateBoundaryGeometry();
     save();
     closePlotDetail();
     refreshAll();

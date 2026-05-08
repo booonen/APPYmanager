@@ -86,7 +86,11 @@ function switchTab(tab) {
     plots: renderPlots,
     'boundary-types': renderBoundaryTypes,
     boundaries: renderBoundaries,
-    map: () => { if (!_map) initMap(); else { _map.invalidateSize(); redrawMapPlots(); } },
+    map: () => {
+      if (!_map) { initMap(); return; }
+      _map.invalidateSize();
+      redrawMap();
+    },
     settings: renderSettings,
     'import-export': renderImportExport
   };

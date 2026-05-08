@@ -1,3 +1,202 @@
+## 0.1.11 — Map side panel, single drill chain, scoped viewport fit
+- **Side panel replaces popups.** Single-clicking a boundary or plot on
+  the map no longer opens a Leaflet popup. Instead a 280 px side panel
+  slides open to the right of the map. The panel shows the type chip,
+  editable name, area, editable notes, and an "Open full details" button.
+  The selected polygon is highlighted (heavier stroke + stronger fill).
+  Click ✕ or click an empty area of the map to deselect.
+- **Membership chain in the panel.** The panel shows every ancestor of
+  the selected item: "Direct member of [Province X]" for the immediate
+  parent, then "Also within [Country Y]" for each ancestor above that.
+  Clicking any ancestor name opens its detail modal. Items with no
+  parent show "No parent boundary".
+- **Single drill chain.** Double-clicking a boundary that is NOT a
+  direct child of the current drill-stack top now resets the chain
+  rather than appending an unrelated entry. Drilling from root always
+  starts a fresh chain; drilling a child extends it. This prevents
+  stray multi-branch stacks.
+- **Viewport fit scoped to drilled boundary.** Drilling into a boundary
+  now fits the viewport to *that boundary's own geometry* only, rather
+  than all loaded objects. Navigating back via the breadcrumb fits to
+  the ancestor boundary's geometry; returning to root fits all layers.
+- **Inline name/notes editing.** Name and notes in the side panel are
+  editable and auto-saved on blur, updating map tooltips and the drill-
+  stack breadcrumb label without opening a modal.
+
+## 0.1.10 — Brick 6c polish: stacked drill, popups, plots view, absorption fix
+- **Stacked drill levels.** Drilling no longer hides the rest of the
+  map: the dropdown's selected type stays rendered at the bottom and
+  each drill step adds the next level on top. You can now see the
+  whole hierarchy three (or more) levels deep at once.
+- **"Plots" is back as a dropdown option.** Picks the original flat
+  plot view from any project state; bypassed entirely when a project
+  has no boundary types yet.
+- **Click → popup, not modal.** Single-click on any polygon now opens
+  a small Leaflet popup with the name, a type chip, the area, and an
+  "Open details" button that promotes you into the full detail modal.
+  Double-click on a boundary still drills (the popup is dismissed
+  cleanly). Dark-themed popup wrapper override added to styles.css.
+- **Absorption fix for the locality scenario.** When an import
+  subdivides existing municipality plots, the locality boundary used
+  to come out empty: `resolveBoundaryMembersForPlots` was skipping
+  plots already claimed by the municipality. Now it includes them
+  and the post-create promotion loop wedges each new locality
+  between its parent municipality and the sub-plot — locality gains
+  the plot, municipality gains the locality (replacing the bare
+  sub-plot reference). Promotion failures (sister-type claims) drop
+  the member rather than leak a double-claim.
+
+## 0.1.9 — Brick 6c: hierarchical map view + import absorption
+- **Map view rebuilt around the hierarchy.** Replaced the multi-layer
+  chip strip with a single dropdown picking which boundary type to
+  display. Default = the largest type (root of the primitiveId chain).
+  At top level the map shows every boundary of that type, rendered
+  filled in the type's color (the same visual treatment as plots).
+- **Drill steps one level down.** Double-clicking a boundary descends
+  into its *direct members* — sub-boundaries get their own type-color
+  fill, plots in the neutral plot style. Single-click on any polygon
+  opens its detail modal. Breadcrumb above the dropdown shows the
+  drill path back to "All [type]".
+- **Plots in drill view open the plot detail.** The previous
+  click-to-highlight behaviour is gone (the modal is the inspection
+  surface across the app).
+- **Import-as-boundary now absorbs intermediate boundaries.** When a
+  newly-imported boundary's plot set is fully covered by existing
+  intermediate-type boundaries, those intermediates become its members
+  instead of the raw plots. Greedy largest-first absorption: a Province
+  imported on top of two existing Municipalities ends up as
+  `[Mun1, Mun2]` rather than `[P1..Pn]`. Existing `promoteMember`
+  follow-up wedges the new boundary between any prior claimer
+  (e.g. a Country) and each absorbed member, preserving exclusivity.
+
+## 0.1.8 — Brick 6b: boundary map layers, toggle strip, drill-through
+- **Dissolved boundary geometry via Turf**: `resolveBoundaryGeometry`
+  (in `js/boundaries.js`) flattens a boundary to its transitive plot
+  set, builds a GeoJSON Feature per plot, and folds `turf.union` over
+  them. Output is converted back to Leaflet `[lat,lon][][][]`
+  multipolygon shape. Result cached per boundary id; mutation sites
+  (member add/remove, plot delete, subdivision commit, boundary delete,
+  flush) call `invalidateBoundaryGeometry()`.
+- **Per-type Leaflet layers**: each boundary type gets its own
+  `L.featureGroup`, stroke-only (`fill: false`) so plots stay readable
+  underneath. Color cycles a small palette by type index, computed
+  deterministically.
+- **Toggle strip + breadcrumb**: a single-line chip strip above the map
+  with one chip per layer (Plots first, then each boundary type sorted
+  alphabetically). Chips show an ◯ when off and a ● in the type's color
+  when on. Strip uses `overflow-x: auto` so it stays single-line for
+  any number of types. A breadcrumb appears above the strip when
+  drilled in, with clickable ancestors back to "All".
+- **Click vs. double-click**:
+  - Single-click on a boundary opens its detail modal (240 ms
+    debounce so it can be cancelled by a double-click).
+  - Double-click drills into the boundary: the map filters to plots
+    and sub-boundaries transitively contained by it; the breadcrumb
+    deepens. Default Leaflet dblclick-zoom is disabled on the map so
+    this doesn't fight zoom.
+- New CSS: `.map-chip-strip`, `.map-chip`, `.map-crumbs`,
+  `.map-crumb-link/current/sep`. New l10n keys: `map.layer_plots`,
+  `map.crumb_root`.
+
+## 0.1.7 — Settings: default search area + flush; unified "Create as" dropdown
+- **Unified "Create as" dropdown** in the Import modal: replaced the
+  radio + separate type select with a single `<select>` whose first
+  option is "Plot" followed by all boundary types as peers. Cleaner UI,
+  same behaviour.
+- **Default search area** setting (per save file): a key-value row editor
+  in Settings (`data.settings.defaultSearchArea`). Rows saved here are
+  pre-filled as the Search area in the Import modal when it opens,
+  saving repetitive typing for your country filter.
+- **Flush save file** setting: a confirmation-gated destructive action in
+  Settings that wipes `data.plots`, `data.boundaries`, and `data.osm`
+  while leaving boundary types and all other settings intact. Intended
+  for testing.
+
+## 0.1.6 — Fix bordering imports treated as overlapping
+- Plots that just *border* an existing plot (share an edge but have no
+  actual area overlap) were being misclassified as overlapping by the
+  vertex-in-polygon prefilter `plotsOverlap` — a vertex sitting exactly
+  on the parent's edge can classify as "inside" depending on
+  floating-point details. The candidate then went through the wrap /
+  partial classification, where `turf.difference` correctly reported no
+  real overlap, so the candidate was lost (no free, no split, no wrap)
+  and the user saw "Nothing new to import".
+- Fix: in the per-plot classification loop, also check the real
+  overlap area via `turf.area(parent) − turf.area(parent − candidate)`.
+  When the real overlap is below the noise floor (1 m²), skip that
+  plot — it lets the candidate fall through to `free` if no other
+  plots actually overlap it. Bordering imports now create new plots
+  as expected.
+
+## 0.1.5 — Import commit button: never silently disappear
+- Re-importing a relation that's already a plot would classify it as a
+  pure wrap with no gap. `newPlotCount` then evaluated to 0 and the
+  Commit button vanished without explanation. Two fixes:
+  - The button is now rendered inside its own `import-commit-container`
+    that re-renders when the import target radio (Plot / Boundary) flips.
+  - When `newPlotCount === 0` AND target is Boundary, the button stays
+    visible with a "Commit ({n} boundary)" label — wrapping existing
+    plots into a new boundary record is a valid commit-time action even
+    when no new plots are created.
+  - When neither is true (target = Plot, only wraps with no gap), an
+    explicit "Nothing new to import" message replaces the missing button
+    so the user knows why nothing's actionable.
+
+## 0.1.4 — Fix membership rewriting on cross-parent splits
+- When a single imported relation is split across two existing plots
+  (e.g. a city straddling two provinces), each parent plot's owning
+  boundary should keep ownership of *its own* sub-pieces plus its own
+  remainder. The previous logic indexed replacements by candidate, so
+  a parent boundary inherited its sibling's pieces and lost its own
+  remainder. Fix: build the parent→replacement map directly during the
+  per-parent split loop, listing only that parent's own pieces +
+  remainder. Each parent boundary now ends up with exactly the new
+  plots that cover the area its old parent plot covered.
+
+## 0.1.3 — Bottom-up import (wrap mode)
+- Subdivision now detects when an incoming candidate fully **contains**
+  an existing plot, instead of being contained by one. Previously this
+  case was handled as a regular subdivision, which resulted in the
+  existing plot being "subdivided" by a shape larger than itself —
+  producing a duplicate plot with the candidate's name and silently
+  destroying the original. The frequent symptom: importing a Country
+  after Provinces would rename every Province to "Country".
+- New **wrap** classification in `computeSubdivisionPlan`. For each
+  candidate, overlapping plots are split into `wrapped` (fully inside)
+  and `partial` (still subdivides). Wrapped plots are kept as-is; the
+  candidate's gap (area not covered by any overlapping plot) becomes a
+  flagged remainder plot when ≥ 1 m². Mixed candidates (some wrapped,
+  some partial) get both treatments simultaneously.
+- New plan field `plan.wraps`. The import preview gets a "Will wrap N
+  existing plot(s)" section listing the candidate, its wrapped plots
+  ("kept"), and any gap remainder.
+- Importing **as boundary** automatically picks up wrapped plots as
+  members — so importing provinces first then a Country boundary now
+  builds the right hierarchy in one step.
+
+## 0.1.2 — Brick 6a polish: import-as-boundary + member promotion
+- **Import as boundary** — the import modal now has a "Create as: Plot |
+  Boundary [Type]" selector at the top. Plot is the default (existing
+  behaviour). When Boundary is chosen, every imported OGF relation also
+  becomes a Boundary record of the chosen type, with all sub-plots that
+  came from that relation as direct members. The boundary's name is
+  inherited from the relation's `name:<lang>` (or `name=*`) tag.
+- **Plot reference rewriting** — when subdivision replaces a parent plot
+  with sub-plots, any boundary that had the parent as a direct member is
+  rewritten to reference all the new sub-plots that cover the same area.
+  No silent data loss when subdividing already-grouped plots.
+- **Member promotion (inbetweener)** — the picker no longer hard-blocks
+  items already claimed by another boundary. If the claiming boundary's
+  type may transitively contain the new boundary's type, the row renders
+  in green with a "in: X — will move" tag. On commit, the item is moved
+  from the claimer to the new boundary, and the new boundary is added to
+  the claimer (wedged between). Items that fail the chain-validity check
+  remain blocked with the existing "claimed" badge.
+- New `boundaries.js` helpers: `canTypeContain`, `findClaimingBoundary`,
+  `promoteMember`. New `import.create_as` / `target_*` /
+  `wrapped_as_boundary_toast` strings, and a green
+  `boundary-picker-promote` chip.
+
 ## 0.1.1 — Brick 6a: boundary entities (table-driven core)
 - New **`js/boundaries.js`** data layer: `createBoundary`, type-chain
   walkers (`_typeChainBelow`, `_typeChainReachesPlots`),
