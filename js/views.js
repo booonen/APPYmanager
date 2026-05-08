@@ -834,6 +834,15 @@ function renderSettings() {
     `<option value="${l.code}"${l.code === _lang ? ' selected' : ''}>${esc(l.name)}</option>`
   ).join('');
   const snapVal = getSetting('snapToleranceM', 10);
+
+  const defaultArea = getSetting('defaultSearchArea', []);
+  const areaRows = defaultArea.map((r, i) => `
+    <div class="import-tag-row" data-dsa-idx="${i}">
+      <input type="text" placeholder="${t('import.key_placeholder')}" value="${esc(r.key || '')}" data-field="key" onchange="onDefaultSearchAreaChange()">
+      <input type="text" placeholder="${t('import.value_placeholder')}" value="${esc(r.value || '')}" data-field="value" onchange="onDefaultSearchAreaChange()">
+      <button class="btn btn-sm" onclick="removeDefaultSearchAreaRow(${i})">✕</button>
+    </div>`).join('');
+
   el.innerHTML = `
     <div class="ie-card">
       <h3>${t('settings.language')}</h3>
@@ -851,6 +860,17 @@ function renderSettings() {
         <span class="text-dim">${t('settings.snap_tolerance_unit')}</span>
       </div>
     </div>
+    <div class="ie-card">
+      <h3>${t('settings.default_search_area')}</h3>
+      <p>${t('settings.default_search_area_desc')}</p>
+      <div id="settings-dsa-rows" class="import-rows" style="margin-bottom:8px">${areaRows}</div>
+      <button class="btn btn-sm" onclick="addDefaultSearchAreaRow()">+ ${t('import.add_row')}</button>
+    </div>
+    <div class="ie-card" style="border-color:var(--danger,#7a1a1a)">
+      <h3 style="color:var(--accent)">${t('settings.flush_title')}</h3>
+      <p>${t('settings.flush_desc')}</p>
+      <button class="btn btn-danger" onclick="flushSaveFile()">${t('settings.flush_btn')}</button>
+    </div>
   `;
 }
 
@@ -859,6 +879,57 @@ function onSnapToleranceChange(val) {
   data.settings = data.settings || {};
   data.settings.snapToleranceM = n;
   save();
+}
+
+function _readDefaultSearchAreaRows() {
+  const rows = document.getElementById('settings-dsa-rows')?.querySelectorAll('.import-tag-row') || [];
+  const out = [];
+  rows.forEach(r => {
+    const key   = r.querySelector('[data-field="key"]')?.value.trim() || '';
+    const value = r.querySelector('[data-field="value"]')?.value.trim() || '';
+    if (key || value) out.push({ key, value });
+  });
+  return out;
+}
+
+function onDefaultSearchAreaChange() {
+  data.settings = data.settings || {};
+  data.settings.defaultSearchArea = _readDefaultSearchAreaRows();
+  save();
+}
+
+function addDefaultSearchAreaRow() {
+  const container = document.getElementById('settings-dsa-rows');
+  if (!container) return;
+  const idx = container.querySelectorAll('.import-tag-row').length;
+  const row = document.createElement('div');
+  row.className = 'import-tag-row';
+  row.dataset.dsaIdx = idx;
+  row.innerHTML = `
+    <input type="text" placeholder="${t('import.key_placeholder')}" data-field="key" onchange="onDefaultSearchAreaChange()">
+    <input type="text" placeholder="${t('import.value_placeholder')}" data-field="value" onchange="onDefaultSearchAreaChange()">
+    <button class="btn btn-sm" onclick="this.parentElement.remove(); onDefaultSearchAreaChange()">✕</button>
+  `;
+  container.appendChild(row);
+}
+
+function removeDefaultSearchAreaRow(idx) {
+  const container = document.getElementById('settings-dsa-rows');
+  if (!container) return;
+  const rows = container.querySelectorAll('.import-tag-row');
+  if (rows[idx]) rows[idx].remove();
+  onDefaultSearchAreaChange();
+}
+
+function flushSaveFile() {
+  appConfirm(t('settings.flush_confirm'), () => {
+    data.plots = [];
+    data.boundaries = [];
+    data.osm = { nodes: {}, ways: {}, _nextLocalId: 0 };
+    save();
+    refreshAll();
+    toast(t('settings.flush_toast'), 'success');
+  });
 }
 
 function renderImportExport() {
@@ -901,7 +972,7 @@ function openImportModal() {
   _importPreview = null;
   destroyPreviewMap();
 
-  // Boundary type options for the optional "Create as: Boundary" target.
+  // Unified "Create as" dropdown: Plot first, then all boundary types.
   const btypeOpts = data.boundaryTypes.slice()
     .sort((a, b) => a.name.localeCompare(b.name))
     .map(ty => `<option value="${esc(ty.id)}">${esc(ty.name)}</option>`)
@@ -911,18 +982,11 @@ function openImportModal() {
   openModal(t('import.title'), `
     <div class="import-target-row">
       <label class="import-target-label">${t('import.create_as')}</label>
-      <label class="import-target-radio">
-        <input type="radio" name="import-target" value="plot" checked onchange="onImportTargetChange()">
-        ${t('import.target_plot')}
-      </label>
-      <label class="import-target-radio${noTypes ? ' disabled' : ''}">
-        <input type="radio" name="import-target" value="boundary" ${noTypes ? 'disabled' : ''} onchange="onImportTargetChange()">
-        ${t('import.target_boundary')}
-      </label>
-      <select id="import-target-typeid" disabled style="margin-left:6px">
-        ${btypeOpts || '<option value="">—</option>'}
+      <select id="import-target-select" onchange="onImportTargetChange()">
+        <option value="plot">${t('import.target_plot')}</option>
+        ${btypeOpts}
       </select>
-      ${noTypes ? `<span class="text-dim" style="font-size:11px;margin-left:8px">${t('import.target_boundary_no_types')}</span>` : ''}
+      ${noTypes ? `<span class="text-dim" style="font-size:11px;margin-left:4px">${t('import.target_boundary_no_types')}</span>` : ''}
     </div>
     <div class="import-tabs">
       <button class="import-tab active" data-mode="search" onclick="switchImportMode('search')">${t('import.tab_search')}</button>
@@ -967,9 +1031,13 @@ function openImportModal() {
     <button class="btn btn-primary" id="import-action-btn" onclick="runImportPreview()">${t('import.import_btn')}</button>
   `);
 
-  // Empty seed rows so the user sees the structure but doesn't
-  // accidentally fire a world-spanning admin_level=2 search on first click.
-  addImportRow('area');
+  // Seed area rows from default search area setting (or one empty row).
+  const defaultArea = getSetting('defaultSearchArea', []);
+  if (defaultArea.length > 0) {
+    for (const row of defaultArea) addImportRow('area', row);
+  } else {
+    addImportRow('area');
+  }
   addImportRow('import');
 
   // Make the modal a bit taller so the inset preview map gets room.
@@ -978,20 +1046,14 @@ function openImportModal() {
 }
 
 function onImportTargetChange() {
-  const target = document.querySelector('input[name="import-target"]:checked')?.value || 'plot';
-  const sel = document.getElementById('import-target-typeid');
-  if (sel) sel.disabled = (target !== 'boundary');
   // A target switch can flip whether anything is committable (e.g. wrap-only
   // re-imports become committable as boundaries). Refresh the commit area.
   _refreshImportCommitContainer();
 }
 
 function getImportTarget() {
-  const target = document.querySelector('input[name="import-target"]:checked')?.value || 'plot';
-  if (target === 'boundary') {
-    const typeId = document.getElementById('import-target-typeid')?.value || '';
-    if (typeId) return { kind: 'boundary', typeId };
-  }
+  const val = document.getElementById('import-target-select')?.value || 'plot';
+  if (val !== 'plot') return { kind: 'boundary', typeId: val };
   return { kind: 'plot' };
 }
 

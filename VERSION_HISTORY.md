@@ -1,3 +1,17 @@
+## 0.1.7 — Settings: default search area + flush; unified "Create as" dropdown
+- **Unified "Create as" dropdown** in the Import modal: replaced the
+  radio + separate type select with a single `<select>` whose first
+  option is "Plot" followed by all boundary types as peers. Cleaner UI,
+  same behaviour.
+- **Default search area** setting (per save file): a key-value row editor
+  in Settings (`data.settings.defaultSearchArea`). Rows saved here are
+  pre-filled as the Search area in the Import modal when it opens,
+  saving repetitive typing for your country filter.
+- **Flush save file** setting: a confirmation-gated destructive action in
+  Settings that wipes `data.plots`, `data.boundaries`, and `data.osm`
+  while leaving boundary types and all other settings intact. Intended
+  for testing.
+
 ## 0.1.6 — Fix bordering imports treated as overlapping
 - Plots that just *border* an existing plot (share an edge but have no
   actual area overlap) were being misclassified as overlapping by the

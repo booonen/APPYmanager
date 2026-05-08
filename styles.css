@@ -394,10 +394,6 @@ input[type="checkbox"]:checked::after {
   background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius-sm);
 }
 .import-target-label { font-size: 12px; font-weight: 600; color: var(--text-dim); }
-.import-target-radio { font-size: 13px; display: flex; align-items: center; gap: 4px; cursor: pointer; }
-.import-target-radio.disabled { opacity: 0.5; cursor: not-allowed; }
-.import-target-radio input[type="radio"] { cursor: pointer; }
-.import-target-radio.disabled input[type="radio"] { cursor: not-allowed; }
 
 .boundary-picker-row.promotable { background: rgba(85, 192, 122, 0.06); }
 .boundary-picker-row.promotable:hover { background: rgba(85, 192, 122, 0.14); }

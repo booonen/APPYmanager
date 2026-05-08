@@ -86,7 +86,14 @@ registerLanguage('en', 'English', {
     "language_desc": "Interface language.",
     "snap_tolerance": "Snap tolerance",
     "snap_tolerance_desc": "When subdividing plots, candidate boundary vertices within this distance of an existing plot vertex are snapped onto it. Eliminates hairline gaps from OGF relations that share a border but were drawn from different sources. Set to 0 to disable.",
-    "snap_tolerance_unit": "m"
+    "snap_tolerance_unit": "m",
+    "default_search_area": "Default search area",
+    "default_search_area_desc": "Key-value filter rows pre-filled in the Import modal's \"Search area\" section. Useful for scoping all searches to your country by default (e.g. name=Freedemia, admin_level=2).",
+    "flush_title": "Flush save file",
+    "flush_desc": "Remove all plots and boundaries from this save file, keeping boundary types and settings intact. Useful for testing.",
+    "flush_btn": "Flush plots & boundaries",
+    "flush_confirm": "Remove all plots and boundaries?\nBoundary types and settings will be kept.\nThis cannot be undone.",
+    "flush_toast": "Plots and boundaries cleared"
   },
   "stat": {
     "plots": "Plots",
