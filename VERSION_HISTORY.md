@@ -1,3 +1,29 @@
+## 0.2.2 — Brick 7c: Settlements on the map + side-panel integration
+- New `_mapSettlementLayer` always-on featureGroup. Markers are gold
+  circles sized by `place=*` (city = 7 px, town = 6, village = 5,
+  hamlet/quarter = 4, others = 3). Visible regardless of which boundary
+  type is selected; remain on top during drill.
+- Click a marker → side panel selects the settlement. Selected markers
+  get a heavier accent stroke and a slightly larger radius. `_polyIndex`
+  now also holds markers (under `'settlement:<id>'`) so hover/unhover
+  works the same way as for polygons.
+- New side-panel branch for settlements: editable name + notes,
+  coordinates and OGF node id readout, and a Parent section that
+  walks the ancestor chain (direct parent → "Also within" each higher
+  boundary). Clicking the parent navigates the map; clicking a higher
+  ancestor jumps the dropdown to that type and selects it.
+- `_panelNavigateToParent(id, kind)` now accepts a `kind` parameter so
+  settlements with a plot parent navigate to the Plots view; default
+  remains 'boundary' for the existing call sites.
+- Boundary side panel grows a "Settlements (N)" section listing
+  every transitively-contained settlement (`flattenSettlementsForBoundary`).
+  Hover highlights on the map (boosting the marker style in-place);
+  click pans to the settlement and selects it without changing drill.
+- Plot side panel grows a Settlements section showing settlements
+  directly attached to that plot.
+- Hover/unhover handle markers as well as polygons; temporary
+  out-of-view highlights work for settlements too.
+
 ## 0.2.1 — Brick 7b: Settlements import flow
 - Three-mode Overpass import for settlements, mirroring Brick 2's plot
   flow:

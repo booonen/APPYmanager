@@ -31,6 +31,7 @@ const BOUNDARY_TYPE_PALETTE = [
   '#6f86d6', '#48b287', '#d97757', '#9b6dd0',
   '#d4a13d', '#3aa2c7', '#c763a3', '#7c8c5b'
 ];
+let _mapSettlementLayer  = null;        // L.featureGroup for settlement markers (always on)
 let _mapBoundaryLayer    = null;        // single L.featureGroup for boundary polygons
 let _mapCurrentTypeId    = null;        // type selected in dropdown (null = uninitialized → Plots)
 let _drillStack          = [];          // [{ boundaryId, name, typeId }, ...]
@@ -69,9 +70,10 @@ function initMap() {
     attribution: 'Tiles © <a href="https://opengeofiction.net">OpenGeofiction</a>'
   }).addTo(_map);
 
-  _mapPlotLayer     = L.featureGroup().addTo(_map);
-  _mapBoundaryLayer = L.featureGroup().addTo(_map);
-  _hoverLayer       = L.featureGroup().addTo(_map);
+  _mapPlotLayer       = L.featureGroup().addTo(_map);
+  _mapBoundaryLayer   = L.featureGroup().addTo(_map);
+  _mapSettlementLayer = L.featureGroup().addTo(_map);
+  _hoverLayer         = L.featureGroup().addTo(_map);
 
   _map.on('click', () => {
     if (_selectedItemId !== null) _clearMapSelection();
@@ -96,6 +98,39 @@ function initMap() {
 // ============================================================
 // PLOT STYLING (shared with detail map)
 // ============================================================
+
+// ============================================================
+// SETTLEMENT MARKER STYLING
+// ============================================================
+// Radius scales by place type so cities read as more important than
+// hamlets at a glance. Selected settlements get a thicker stroke and
+// a heavier fill.
+
+const SETTLEMENT_FILL = '#e0a855'; // gold (matches preview-map markers)
+
+function _settlementRadius(place) {
+  switch (place) {
+    case 'city':                     return 7;
+    case 'town':                     return 6;
+    case 'village':                  return 5;
+    case 'suburb':
+    case 'borough':                  return 5;
+    case 'hamlet':
+    case 'quarter':
+    case 'neighbourhood':            return 4;
+    default:                         return 3;
+  }
+}
+
+function settlementMarkerStyle(settlement, selected) {
+  return {
+    radius:      _settlementRadius(settlement?.place) + (selected ? 2 : 0),
+    color:       selected ? '#c1272d' : '#0f1117',
+    weight:      selected ? 2.5 : 1.5,
+    fillColor:   SETTLEMENT_FILL,
+    fillOpacity: selected ? 1 : 0.9,
+  };
+}
 
 function plotPolygonStyle(selected) {
   // Neutral slate so plots read as data on the map without competing
@@ -326,6 +361,7 @@ function redrawMap() {
   _polyIndex.clear();
   _mapPlotLayer.clearLayers();
   _mapBoundaryLayer.clearLayers();
+  if (_mapSettlementLayer) _mapSettlementLayer.clearLayers();
   if (_hoverLayer) _hoverLayer.clearLayers();
 
   // Layer 0: dropdown's selected level (every boundary of that type, OR
@@ -355,8 +391,28 @@ function redrawMap() {
     }
   }
 
+  // Settlements live on a dedicated always-on layer so they remain
+  // visible regardless of which boundary level is selected.
+  for (const s of (data.settlements || [])) {
+    _drawSettlementMarker(s);
+  }
+
   renderMapToolbar();
   renderMapSidePanel();
+}
+
+function _drawSettlementMarker(s) {
+  if (!Number.isFinite(s.lat) || !Number.isFinite(s.lng)) return;
+  const isSelected = _selectedItemKind === 'settlement' && _selectedItemId === s.id;
+  const m = L.circleMarker([s.lat, s.lng], settlementMarkerStyle(s, isSelected));
+  m._appySettlementId = s.id;
+  if (s.name) m.bindTooltip(s.name);
+  m.on('click', (e) => {
+    L.DomEvent.stopPropagation(e);
+    _selectItem('settlement', s.id);
+  });
+  _mapSettlementLayer.addLayer(m);
+  _polyIndex.set('settlement:' + s.id, m);
 }
 
 function _renderRootLevel(drawnBoundaries) {
@@ -446,16 +502,19 @@ function _hoverMapItem(kind, id) {
   _hoveredPolyId   = id;
   const indexed = _polyIndex.get(kind + ':' + id);
   if (indexed) {
-    // Item is already on the map: boost its style in-place
     if (kind === 'boundary') {
       const b = data.boundaries.find(x => x.id === id);
       const c = colorForBoundaryType(b?.typeId);
       indexed.setStyle({ color: c, weight: 3.5, fillColor: c, fillOpacity: 0.55, lineJoin: 'round' });
-    } else {
+    } else if (kind === 'plot') {
       indexed.setStyle({ color: '#1f2937', weight: 3, fillColor: '#475569', fillOpacity: 0.45 });
+    } else if (kind === 'settlement') {
+      const s = data.settlements?.find(x => x.id === id);
+      const r = _settlementRadius(s?.place) + 3;
+      indexed.setStyle({ radius: r, weight: 2.5, color: '#c1272d', fillColor: SETTLEMENT_FILL, fillOpacity: 1 });
     }
   } else if (_hoverLayer) {
-    // Item not currently drawn (different map level): draw temporarily
+    // Not currently drawn at this level: draw a temporary highlight
     if (kind === 'boundary') {
       const b = data.boundaries.find(x => x.id === id);
       if (b) {
@@ -467,7 +526,7 @@ function _hoverMapItem(kind, id) {
           _hoverLayer.addLayer(_hoveredTempPoly);
         }
       }
-    } else {
+    } else if (kind === 'plot') {
       const p = data.plots.find(x => x.id === id);
       if (p) {
         const geo = resolvePlotGeometry(p);
@@ -476,6 +535,14 @@ function _hoverMapItem(kind, id) {
             { color: '#1f2937', weight: 3, fillColor: '#475569', fillOpacity: 0.45, dashArray: '6,4' });
           _hoverLayer.addLayer(_hoveredTempPoly);
         }
+      }
+    } else if (kind === 'settlement') {
+      const s = data.settlements?.find(x => x.id === id);
+      if (s && Number.isFinite(s.lat) && Number.isFinite(s.lng)) {
+        _hoveredTempPoly = L.circleMarker([s.lat, s.lng],
+          { radius: _settlementRadius(s.place) + 3, color: '#c1272d', weight: 2.5,
+            fillColor: SETTLEMENT_FILL, fillOpacity: 1, dashArray: '4,3' });
+        _hoverLayer.addLayer(_hoveredTempPoly);
       }
     }
   }
@@ -493,8 +560,11 @@ function _unhoverMapItem() {
       if (_hoveredPolyKind === 'boundary') {
         const b = data.boundaries.find(x => x.id === _hoveredPolyId);
         indexed.setStyle(boundaryFilledStyle(colorForBoundaryType(b?.typeId), isSelected));
-      } else {
+      } else if (_hoveredPolyKind === 'plot') {
         indexed.setStyle(plotPolygonStyle(isSelected));
+      } else if (_hoveredPolyKind === 'settlement') {
+        const s = data.settlements?.find(x => x.id === _hoveredPolyId);
+        indexed.setStyle(settlementMarkerStyle(s, isSelected));
       }
     }
   }
@@ -505,10 +575,24 @@ function _unhoverMapItem() {
 // ── Panel navigation ──
 
 // Click a parent in the membership chain → show that type at root, select it
-function _panelNavigateToParent(parentId) {
+function _panelNavigateToParent(parentId, kind) {
+  kind = kind || 'boundary';
+  _unhoverMapItem();
+  if (kind === 'plot') {
+    const p = data.plots.find(x => x.id === parentId);
+    if (!p) return;
+    _mapCurrentTypeId = PLOTS_TYPE_SENTINEL;
+    _drillStack = [];
+    _selectItem('plot', parentId);
+    const geo = resolvePlotGeometry(p);
+    if (geo.polygons.length) {
+      const bounds = L.polygon(geo.polygons).getBounds();
+      if (bounds.isValid()) _map && _map.fitBounds(bounds, { padding: [40, 40] });
+    }
+    return;
+  }
   const b = data.boundaries.find(x => x.id === parentId);
   if (!b) return;
-  _unhoverMapItem();
   _mapCurrentTypeId = b.typeId;
   _drillStack = [];
   _selectItem('boundary', parentId);
@@ -519,6 +603,18 @@ function _panelNavigateToParent(parentId) {
       if (bounds.isValid()) _map && _map.fitBounds(bounds, { padding: [40, 40] });
     }
   } catch (e) {}
+}
+
+// Click a settlement in a boundary's Settlements section → just pan and select.
+// No drill change; settlements are always visible.
+function _panelSelectSettlement(id) {
+  const s = data.settlements?.find(x => x.id === id);
+  if (!s) return;
+  _unhoverMapItem();
+  _selectItem('settlement', id);
+  if (_map && Number.isFinite(s.lat) && Number.isFinite(s.lng)) {
+    _map.setView([s.lat, s.lng], Math.max(_map.getZoom(), 9));
+  }
 }
 
 // Click a child in the members list → drill into current boundary, select child
@@ -622,15 +718,73 @@ function _renderMemberships(kind, id) {
   return html;
 }
 
+// Settlements transitively contained by a boundary, or directly attached
+// to a plot. Renders as a hover/click list — same chrome as the members
+// section, but pans+selects rather than drilling (settlements are always
+// visible).
+function _renderSettlementsSection(items) {
+  if (!items || items.length === 0) return '';
+  let html = `<div class="map-panel-section">Settlements (${items.length})</div>`;
+  for (const s of items) {
+    const nm = s.name ? esc(s.name) : '<em class="text-muted">Unnamed</em>';
+    html += `
+      <div class="map-panel-child"
+        onmouseenter="_hoverMapItem('settlement','${s.id}')"
+        onmouseleave="_unhoverMapItem()"
+        onclick="_panelSelectSettlement('${s.id}')">
+        <span class="map-panel-member-type" style="background:${SETTLEMENT_FILL}">${esc(s.place || 'place')}</span>
+        <span class="map-panel-child-name">${nm}</span>
+      </div>`;
+  }
+  return html;
+}
+
+// Settlement's parent block: direct parent + (when parent is a boundary)
+// the rest of the ancestor chain so the user sees full transitive context.
+function _renderSettlementParent(s) {
+  if (!s.parent) return `<div class="map-panel-membership-none">No parent assigned</div>`;
+  const info = (typeof getSettlementParentInfo === 'function') ? getSettlementParentInfo(s) : null;
+  if (!info) return `<div class="map-panel-membership-none">Parent missing</div>`;
+  const parentColor = s.parent.kind === 'plot'
+    ? '#475569'
+    : colorForBoundaryType(data.boundaries.find(b => b.id === s.parent.id)?.typeId);
+  const parentName = info.name ? esc(info.name) : '<em>Unnamed</em>';
+  let html = `<div class="map-panel-section">Parent</div>
+    <div class="map-panel-membership">
+      <span class="map-panel-member-label">Direct member of</span>
+      <a class="map-panel-member-link" onclick="_panelNavigateToParent('${esc(s.parent.id)}','${s.parent.kind}')">
+        <span class="map-panel-member-type" style="background:${parentColor}">${esc(info.typeLabel)}</span>
+        ${parentName}
+      </a>
+    </div>`;
+  if (s.parent.kind === 'boundary') {
+    const ancestors = _getAncestorChain('boundary', s.parent.id);
+    ancestors.forEach(b => {
+      const c = colorForBoundaryType(b.typeId);
+      const tn = getBoundaryTypeName(b.typeId);
+      html += `
+        <div class="map-panel-membership">
+          <span class="map-panel-member-label">Also within</span>
+          <a class="map-panel-member-link" onclick="_panelNavigateToParent('${esc(b.id)}')">
+            <span class="map-panel-member-type" style="background:${c}">${esc(tn)}</span>
+            ${b.name ? esc(b.name) : '<em>Unnamed</em>'}
+          </a>
+        </div>`;
+    });
+  }
+  return html;
+}
+
 function renderMapSidePanel() {
   const el = document.getElementById('map-side-panel');
   if (!el) return;
 
   // If the selected item was deleted, clear stale selection silently.
   if (_selectedItemId) {
-    const exists = _selectedItemKind === 'boundary'
-      ? data.boundaries.some(x => x.id === _selectedItemId)
-      : data.plots.some(x => x.id === _selectedItemId);
+    let exists = false;
+    if (_selectedItemKind === 'boundary')   exists = data.boundaries.some(x => x.id === _selectedItemId);
+    else if (_selectedItemKind === 'plot')  exists = data.plots.some(x => x.id === _selectedItemId);
+    else if (_selectedItemKind === 'settlement') exists = (data.settlements || []).some(x => x.id === _selectedItemId);
     if (!exists) { _selectedItemKind = null; _selectedItemId = null; }
   }
 
@@ -671,6 +825,7 @@ function renderMapSidePanel() {
             rows="3" placeholder="No notes">${esc(b.notes || '')}</textarea>
         </div>
         ${_renderChildren(b)}
+        ${_renderSettlementsSection(typeof flattenSettlementsForBoundary === 'function' ? flattenSettlementsForBoundary(b) : [])}
         ${_renderMemberships('boundary', b.id)}
         <button class="btn btn-sm btn-primary" style="width:100%;margin-top:4px"
           onclick="openBoundaryDetail('${esc(b.id)}')">Open full details</button>
@@ -697,9 +852,34 @@ function renderMapSidePanel() {
           <textarea class="input map-panel-notes" onblur="_panelSaveNotes(this.value)"
             rows="3" placeholder="No notes">${esc(p.notes || '')}</textarea>
         </div>
+        ${_renderSettlementsSection(typeof settlementsForPlot === 'function' ? settlementsForPlot(p.id) : [])}
         ${_renderMemberships('plot', p.id)}
         <button class="btn btn-sm btn-primary" style="width:100%;margin-top:4px"
           onclick="openPlotDetail('${esc(p.id)}')">Open full details</button>
+      </div>`;
+
+  } else if (_selectedItemKind === 'settlement') {
+    const s = (data.settlements || []).find(x => x.id === _selectedItemId);
+    if (!s) { el.style.display = 'none'; return; }
+    const coords = `${s.lat.toFixed(5)}, ${s.lng.toFixed(5)}`;
+    html = `
+      <div class="map-panel-inner">
+        <div class="map-panel-hdr">
+          <span class="map-popup-type" style="background:${SETTLEMENT_FILL}">${esc(s.place || 'place')}</span>
+          <button class="map-panel-close" onclick="_clearMapSelection()" title="Deselect">✕</button>
+        </div>
+        <div class="map-panel-field">
+          <label class="map-panel-label">Name</label>
+          <input class="input map-panel-input" value="${esc(s.name || '')}"
+            onblur="_panelSaveName(this.value)" placeholder="Unnamed">
+        </div>
+        <div class="map-panel-meta">${coords}${s.ogfNodeId ? ` · #${esc(s.ogfNodeId)}` : ''}</div>
+        <div class="map-panel-field">
+          <label class="map-panel-label">Notes</label>
+          <textarea class="input map-panel-notes" onblur="_panelSaveNotes(this.value)"
+            rows="3" placeholder="No notes">${esc(s.notes || '')}</textarea>
+        </div>
+        ${_renderSettlementParent(s)}
       </div>`;
   }
 
@@ -723,6 +903,12 @@ function _panelSaveName(value) {
     p.name = value.trim();
     save();
     redrawMap();
+  } else if (_selectedItemKind === 'settlement') {
+    const s = (data.settlements || []).find(x => x.id === _selectedItemId);
+    if (!s) return;
+    s.name = value.trim();
+    save();
+    redrawMap();
   }
 }
 
@@ -733,6 +919,9 @@ function _panelSaveNotes(value) {
   } else if (_selectedItemKind === 'plot') {
     const p = data.plots.find(x => x.id === _selectedItemId);
     if (p) { p.notes = value; save(); }
+  } else if (_selectedItemKind === 'settlement') {
+    const s = (data.settlements || []).find(x => x.id === _selectedItemId);
+    if (s) { s.notes = value; save(); }
   }
 }
 
