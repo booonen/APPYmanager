@@ -1,3 +1,17 @@
+## 0.2.3 — Settlement parent reconciliation
+- `reconcileSettlementParents()` in `js/settlements.js` sweeps the
+  settlement list and (a) drops dangling parent references whose plot
+  or boundary has been deleted, (b) re-runs `autoAssignSettlementParent`
+  on any settlement at `parent: null`. Returns `true` when at least one
+  parent changed.
+- Hooked into `invalidateBoundaryGeometry` so it fires after every
+  plot/boundary commit + delete. A settlement imported before its
+  covering plot now auto-anchors as soon as that plot lands rather
+  than sticking at "no parent (uncovered)" forever.
+- Also runs once on app load (with `save()` if anything changed) so
+  saves carrying stale parent state from before this fix get cleaned
+  up the first time the file is opened in v0.2.3+.
+
 ## 0.2.2 — Brick 7c: Settlements on the map + side-panel integration
 - New `_mapSettlementLayer` always-on featureGroup. Markers are gold
   circles sized by `place=*` (city = 7 px, town = 6, village = 5,

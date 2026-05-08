@@ -35,7 +35,7 @@
       <div class="nav-item" data-tab="settings" onclick="switchTab('settings')"><span class="nav-icon">⚙</span> <span data-t="nav.settings">Settings</span></div>
       <div class="nav-item" data-tab="import-export" onclick="switchTab('import-export')"><span class="nav-icon">⇅</span> <span data-t="nav.import_export">Import / Export</span></div>
       <div class="spacer"></div>
-      <div style="padding:8px 16px;font-size:10px;color:var(--text-muted);font-family:var(--font-mono);opacity:0.6">v0.2.2</div>
+      <div style="padding:8px 16px;font-size:10px;color:var(--text-muted);font-family:var(--font-mono);opacity:0.6">v0.2.3</div>
     </nav>
     <div class="content">
 
@@ -125,6 +125,10 @@
   await load();
   _lang = data.settings?.language || 'en';
   l10nHydrate();
+  // Sweep once on load: fixes any settlement whose parent went stale
+  // between sessions, and re-anchors uncovered settlements now that
+  // their covering plot/boundary may exist in the loaded save.
+  if (typeof reconcileSettlementParents === 'function' && reconcileSettlementParents()) save();
   refreshAll();
   renderDashboard();
   updateSystemName();

@@ -141,3 +141,49 @@ function autoAssignSettlementParent(lat, lng) {
   }
   return null;
 }
+
+// ============================================================
+// PARENT RECONCILIATION
+// ============================================================
+// Two situations need fixing whenever the geometry landscape changes:
+//   1. Settlements imported before any covering plot/boundary exists
+//      sit at parent=null; once the covering region lands, they should
+//      auto-attach (otherwise they linger as "no parent (uncovered)"
+//      forever after a later plot import).
+//   2. A plot or boundary deletion can leave a settlement pointing at
+//      a dangling id; the parent reference must be cleaned up and a
+//      replacement attempted from whatever still covers the point.
+//
+// Hooked into invalidateBoundaryGeometry so it runs after every
+// mutation that could change containment. Returns true when at least
+// one settlement's parent changed so the caller can decide to persist.
+
+function reconcileSettlementParents() {
+  if (typeof turf === 'undefined') return false;
+  const settlements = data.settlements || [];
+  let changed = false;
+
+  for (const s of settlements) {
+    const before = s.parent ? `${s.parent.kind}:${s.parent.id}` : '';
+
+    // Drop dangling references first.
+    if (s.parent) {
+      const stillExists = s.parent.kind === 'plot'
+        ? data.plots.some(p => p.id === s.parent.id)
+        : data.boundaries.some(b => b.id === s.parent.id);
+      if (!stillExists) s.parent = null;
+    }
+
+    // Auto-assign null parents (whether they were imported uncovered
+    // or just orphaned above).
+    if (!s.parent) {
+      const newParent = autoAssignSettlementParent(s.lat, s.lng);
+      if (newParent) s.parent = newParent;
+    }
+
+    const after = s.parent ? `${s.parent.kind}:${s.parent.id}` : '';
+    if (before !== after) changed = true;
+  }
+
+  return changed;
+}

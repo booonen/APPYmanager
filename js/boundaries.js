@@ -322,6 +322,11 @@ let _precomputeDebounce  = null;
 function invalidateBoundaryGeometry(boundaryId) {
   if (boundaryId) _boundaryGeomCache.delete(boundaryId);
   else _boundaryGeomCache.clear();
+  // Containment changed: re-anchor any settlement whose parent is now
+  // null (e.g. imported before its covering plot existed) or dangling
+  // (e.g. its parent plot was just deleted). Cheap — point-in-polygon
+  // per unparented settlement.
+  if (typeof reconcileSettlementParents === 'function') reconcileSettlementParents();
   // Cancel any in-progress precompute and reschedule after mutations settle.
   _precomputeInProgress = false;
   clearTimeout(_precomputeDebounce);
