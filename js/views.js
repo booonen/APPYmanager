@@ -2159,3 +2159,372 @@ function closePlotDetail() {
   destroyDetailMap();
   closeModal();
 }
+
+// ============================================================
+// PROPERTIES — schema editor (Brick 8)
+// ============================================================
+// Three kinds: numeric (sum / weighted-average), categorical (no rollup
+// by default; opt-in distribution aggregation), percentage (of another
+// property). Plot-level value entry arrives in Brick 9; aggregation in
+// Brick 10. This brick is the schema layer only.
+
+let _propertyEditId = null;
+
+function renderProperties() {
+  const el = document.getElementById('properties-content');
+  if (!el) return;
+
+  bootstrapPropertySchemas();
+
+  const all = (data.propertySchemas || []).slice().sort((a, b) =>
+    (a.name || '').localeCompare(b.name || '')
+  );
+
+  const top = `
+    <div class="flex" style="justify-content:space-between;align-items:center;margin-bottom:12px">
+      <button class="btn btn-primary" onclick="openAddPropertyModal()">+ ${t('properties.add_btn')}</button>
+      <span class="text-dim" style="font-size:12px">${t('properties.count', { n: all.length })}</span>
+    </div>`;
+
+  if (all.length === 0) {
+    el.innerHTML = top + `
+      <div class="empty-state">
+        <div class="empty-icon">◊</div>
+        <h3>${t('properties.empty_title')}</h3>
+        <p>${t('properties.empty_body')}</p>
+        <button class="btn btn-primary" onclick="openAddPropertyModal()">+ ${t('properties.add_btn')}</button>
+      </div>`;
+    return;
+  }
+
+  el.innerHTML = top + `
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>${t('properties.col_name')}</th>
+          <th>${t('properties.col_kind')}</th>
+          <th>${t('properties.col_behaviour')}</th>
+          <th>${t('properties.col_unit')}</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        ${all.map(_renderPropertyRow).join('')}
+      </tbody>
+    </table>`;
+}
+
+function _renderPropertyRow(schema) {
+  const kindLabel = t('properties.kind_' + schema.kind) || schema.kind;
+  const beh = describePropertyBehaviour(schema);
+  let behLabel;
+  if (beh.code === 'sum')                  behLabel = t('properties.beh_sum');
+  else if (beh.code === 'weighted_average') behLabel = beh.refName
+                                                ? t('properties.beh_weighted_by', { name: esc(beh.refName) })
+                                                : `<span class="text-muted">${t('properties.beh_weighted_unset')}</span>`;
+  else if (beh.code === 'distribution')     behLabel = t('properties.beh_distribution');
+  else if (beh.code === 'no_rollup')        behLabel = t('properties.beh_no_rollup');
+  else if (beh.code === 'percentage_of')    behLabel = beh.refName
+                                                ? t('properties.beh_percent_of', { name: esc(beh.refName) })
+                                                : `<span class="text-muted">${t('properties.beh_percent_unset')}</span>`;
+  else                                      behLabel = '<span class="text-muted">—</span>';
+
+  return `<tr>
+    <td><strong>${esc(schema.name)}</strong></td>
+    <td>${esc(kindLabel)}</td>
+    <td>${behLabel}</td>
+    <td class="text-dim">${schema.unit ? esc(schema.unit) : '<span class="text-muted">—</span>'}</td>
+    <td class="actions-cell" style="white-space:nowrap;text-align:right">
+      <button class="btn btn-sm" onclick="openEditPropertyModal('${esc(schema.id)}')">${t('properties.edit_btn')}</button>
+      <button class="btn btn-sm btn-danger" onclick="deleteProperty('${esc(schema.id)}')">${t('properties.delete_btn')}</button>
+    </td>
+  </tr>`;
+}
+
+function openAddPropertyModal() {
+  _propertyEditId = null;
+  _openPropertyModal(t('properties.modal_add_title'), null);
+}
+
+function openEditPropertyModal(id) {
+  const schema = findPropertySchema(id);
+  if (!schema) return;
+  _propertyEditId = id;
+  _openPropertyModal(t('properties.modal_edit_title'), schema);
+}
+
+function _openPropertyModal(title, schema) {
+  const isEdit = !!schema;
+  const name = schema?.name || '';
+  const unit = schema?.unit || '';
+  const notes = schema?.notes || '';
+  const kind = schema?.kind || 'numeric';
+  const aggregation = schema?.aggregation || 'sum';
+  const weightId = schema?.weightPropertyId || '';
+  const denominatorId = schema?.denominatorPropertyId || '';
+  const rollup = !!schema?.rollupDistribution;
+
+  // Kind dropdown is locked on edit (data-integrity hedge for Brick 9).
+  // Add: dropdown is enabled and onchange swaps the kind-specific block.
+  const kindSelectHtml = isEdit
+    ? `<select id="property-kind" disabled>
+         ${PROPERTY_KINDS.map(k => `<option value="${k}"${k === kind ? ' selected' : ''}>${esc(t('properties.kind_' + k))}</option>`).join('')}
+       </select>
+       <p class="text-dim" style="font-size:11px;margin-top:4px">${t('properties.kind_locked_help')}</p>`
+    : `<select id="property-kind" onchange="onPropertyKindChange(this.value)">
+         ${PROPERTY_KINDS.map(k => `<option value="${k}"${k === kind ? ' selected' : ''}>${esc(t('properties.kind_' + k))}</option>`).join('')}
+       </select>`;
+
+  openModal(title, `
+    <div class="form-group">
+      <label>${t('properties.name_label')}</label>
+      <input type="text" id="property-name" value="${esc(name)}"
+        placeholder="${t('properties.name_placeholder')}" autocomplete="off">
+    </div>
+    <div class="form-group">
+      <label>${t('properties.unit_label')}</label>
+      <p class="text-dim" style="font-size:12px;margin-bottom:6px">${t('properties.unit_help')}</p>
+      <input type="text" id="property-unit" value="${esc(unit)}"
+        placeholder="${t('properties.unit_placeholder')}" autocomplete="off" style="max-width:160px">
+    </div>
+    <div class="form-group">
+      <label>${t('properties.kind_label')}</label>
+      <p class="text-dim" style="font-size:12px;margin-bottom:6px">${t('properties.kind_help')}</p>
+      ${kindSelectHtml}
+    </div>
+    <div id="property-kind-fields">
+      ${_renderPropertyKindFields(kind, { aggregation, weightId, denominatorId, rollup })}
+    </div>
+    <div class="form-group">
+      <label>${t('properties.notes_label')}</label>
+      <textarea id="property-notes" rows="2"
+        placeholder="${t('properties.notes_placeholder')}">${esc(notes)}</textarea>
+    </div>
+  `, `
+    <button class="btn" onclick="closeModal()">${t('btn.cancel')}</button>
+    <button class="btn btn-primary" onclick="saveProperty()">${t('btn.save')}</button>
+  `);
+
+  const modalEl = document.getElementById('modal');
+  if (modalEl) modalEl.style.width = '560px';
+  setTimeout(() => document.getElementById('property-name')?.focus(), 50);
+}
+
+function _renderPropertyKindFields(kind, opts) {
+  // opts: { aggregation, weightId, denominatorId, rollup }
+  const numericOpts = getNumericPropertyOptions(_propertyEditId);
+  if (kind === 'numeric') {
+    const aggSel = `
+      <select id="property-aggregation" onchange="onPropertyAggregationChange(this.value)">
+        ${NUMERIC_AGGREGATIONS.map(a => `<option value="${a}"${a === opts.aggregation ? ' selected' : ''}>${esc(t('properties.agg_' + a))}</option>`).join('')}
+      </select>`;
+    const showWeight = opts.aggregation === 'weighted_average';
+    const weightSelect = `
+      <div class="form-group" id="property-weight-group" style="${showWeight ? '' : 'display:none'}">
+        <label>${t('properties.weight_label')}</label>
+        <p class="text-dim" style="font-size:12px;margin-bottom:6px">${t('properties.weight_help')}</p>
+        ${_propertyRefSelect('property-weight', numericOpts, opts.weightId, t('properties.ref_pick_placeholder'))}
+      </div>`;
+    return `
+      <div class="form-group">
+        <label>${t('properties.aggregation_label')}</label>
+        <p class="text-dim" style="font-size:12px;margin-bottom:6px">${t('properties.aggregation_help')}</p>
+        ${aggSel}
+      </div>
+      ${weightSelect}`;
+  }
+  if (kind === 'categorical') {
+    return `
+      <div class="form-group">
+        <label style="display:inline-flex;align-items:center;gap:8px;cursor:pointer">
+          <input type="checkbox" id="property-rollup-distribution"${opts.rollup ? ' checked' : ''} style="margin:0">
+          <span>${t('properties.rollup_distribution_label')}</span>
+        </label>
+        <p class="text-dim" style="font-size:12px;margin-top:4px">${t('properties.rollup_distribution_help')}</p>
+      </div>`;
+  }
+  if (kind === 'percentage') {
+    return `
+      <div class="form-group">
+        <label>${t('properties.denominator_label')}</label>
+        <p class="text-dim" style="font-size:12px;margin-bottom:6px">${t('properties.denominator_help')}</p>
+        ${_propertyRefSelect('property-denominator', numericOpts, opts.denominatorId, t('properties.ref_pick_placeholder'))}
+      </div>`;
+  }
+  return '';
+}
+
+function _propertyRefSelect(id, numericOpts, currentValue, placeholderLabel) {
+  if (numericOpts.length === 0) {
+    return `<select id="${id}" disabled>
+        <option value="">${esc(t('properties.ref_no_numerics'))}</option>
+      </select>`;
+  }
+  const options = numericOpts
+    .slice()
+    .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+    .map(p => `<option value="${esc(p.id)}"${p.id === currentValue ? ' selected' : ''}>${esc(p.name)}</option>`)
+    .join('');
+  return `<select id="${id}">
+      <option value=""${!currentValue ? ' selected' : ''}>${esc(placeholderLabel)}</option>
+      ${options}
+    </select>`;
+}
+
+function onPropertyKindChange(kind) {
+  const container = document.getElementById('property-kind-fields');
+  if (!container) return;
+  // When the user toggles kinds we discard any in-progress fields for the
+  // previous kind (their state lives in DOM only). That's fine: switching
+  // kind in the add modal is a rare action and the alternative would be
+  // building a parallel state object just to round-trip values you may
+  // not want.
+  container.innerHTML = _renderPropertyKindFields(kind, {
+    aggregation: 'sum',
+    weightId: '',
+    denominatorId: '',
+    rollup: false,
+  });
+}
+
+function onPropertyAggregationChange(aggregation) {
+  const grp = document.getElementById('property-weight-group');
+  if (!grp) return;
+  grp.style.display = aggregation === 'weighted_average' ? '' : 'none';
+}
+
+function saveProperty() {
+  const nameEl = document.getElementById('property-name');
+  const unitEl = document.getElementById('property-unit');
+  const kindEl = document.getElementById('property-kind');
+  const notesEl = document.getElementById('property-notes');
+  if (!nameEl || !kindEl) return;
+
+  const name = nameEl.value.trim();
+  const unit = (unitEl?.value || '').trim();
+  const kind = kindEl.value;
+  const notes = (notesEl?.value || '').trim();
+
+  if (!name) {
+    toast(t('properties.error_name_empty'), 'error');
+    return;
+  }
+  if (!PROPERTY_KINDS.includes(kind)) {
+    toast(t('properties.error_kind_invalid'), 'error');
+    return;
+  }
+  const dup = (data.propertySchemas || []).find(p =>
+    p.name.toLowerCase() === name.toLowerCase() && p.id !== _propertyEditId
+  );
+  if (dup) {
+    toast(t('properties.error_name_duplicate', { name }), 'error');
+    return;
+  }
+
+  // Kind-specific field collection + validation.
+  let aggregation = null;
+  let weightPropertyId = null;
+  let denominatorPropertyId = null;
+  let rollupDistribution = false;
+
+  if (kind === 'numeric') {
+    aggregation = document.getElementById('property-aggregation')?.value || 'sum';
+    if (!NUMERIC_AGGREGATIONS.includes(aggregation)) {
+      toast(t('properties.error_aggregation_invalid'), 'error');
+      return;
+    }
+    if (aggregation === 'weighted_average') {
+      weightPropertyId = document.getElementById('property-weight')?.value || null;
+      if (!weightPropertyId) {
+        toast(t('properties.error_weight_required'), 'error');
+        return;
+      }
+      if (weightPropertyId === _propertyEditId) {
+        toast(t('properties.error_weight_self'), 'error');
+        return;
+      }
+      const weightProp = findPropertySchema(weightPropertyId);
+      if (!weightProp || weightProp.kind !== 'numeric') {
+        toast(t('properties.error_weight_not_numeric'), 'error');
+        return;
+      }
+      if (_hasPropertyRefCycle(_propertyEditId, weightPropertyId)) {
+        toast(t('properties.error_cycle'), 'error');
+        return;
+      }
+    }
+  } else if (kind === 'categorical') {
+    rollupDistribution = !!document.getElementById('property-rollup-distribution')?.checked;
+  } else if (kind === 'percentage') {
+    denominatorPropertyId = document.getElementById('property-denominator')?.value || null;
+    if (!denominatorPropertyId) {
+      toast(t('properties.error_denominator_required'), 'error');
+      return;
+    }
+    if (denominatorPropertyId === _propertyEditId) {
+      toast(t('properties.error_denominator_self'), 'error');
+      return;
+    }
+    const denomProp = findPropertySchema(denominatorPropertyId);
+    if (!denomProp || denomProp.kind !== 'numeric') {
+      toast(t('properties.error_denominator_not_numeric'), 'error');
+      return;
+    }
+    if (_hasPropertyRefCycle(_propertyEditId, denominatorPropertyId)) {
+      toast(t('properties.error_cycle'), 'error');
+      return;
+    }
+  }
+
+  if (_propertyEditId) {
+    const schema = findPropertySchema(_propertyEditId);
+    if (schema) {
+      schema.name = name;
+      schema.unit = unit;
+      schema.notes = notes;
+      // Kind is locked on edit; we leave schema.kind alone.
+      if (schema.kind === 'numeric') {
+        schema.aggregation = aggregation;
+        schema.weightPropertyId = aggregation === 'weighted_average' ? weightPropertyId : null;
+      } else if (schema.kind === 'categorical') {
+        schema.rollupDistribution = rollupDistribution;
+      } else if (schema.kind === 'percentage') {
+        schema.denominatorPropertyId = denominatorPropertyId;
+      }
+    }
+  } else {
+    createPropertySchema({
+      name, unit, kind, notes,
+      aggregation, weightPropertyId,
+      rollupDistribution,
+      denominatorPropertyId,
+    });
+  }
+
+  save();
+  closeModal();
+  renderProperties();
+  renderDashboard();
+  toast(_propertyEditId ? t('properties.updated_toast', { name }) : t('properties.created_toast', { name }), 'success');
+  _propertyEditId = null;
+}
+
+function deleteProperty(id) {
+  const schema = findPropertySchema(id);
+  if (!schema) return;
+  const dependents = findPropertyDependents(id);
+  if (dependents.length > 0) {
+    toast(t('properties.error_has_dependents', {
+      name: schema.name,
+      deps: dependents.map(d => d.name).join(', ')
+    }), 'error');
+    return;
+  }
+  appConfirm(t('properties.confirm_delete', { name: schema.name }), () => {
+    deletePropertySchema(id);
+    save();
+    toast(t('properties.deleted_toast', { name: schema.name }), 'success');
+    renderProperties();
+    renderDashboard();
+  });
+}

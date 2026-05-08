@@ -448,6 +448,26 @@ they come up; the plan is a living document.
   new boundary's type — this is what makes the locality-inside-
   municipality import work (locality boundary claims the new sub-plot
   from its parent municipality).
-- **Brick 7** (next) — Settlements (Phase 2.5). Import OGF `place=*` nodes
+- **Brick 7** ✓ (merged to main) — Settlements. Import OGF `place=*` nodes
   via Overpass; one parent per settlement (plot or boundary); markers,
-  list view, edit/delete. Not load-bearing for aggregation.
+  list view, edit/delete. Brick 7d added a sortable/searchable table +
+  detail modal (auto-save, parent picker, auto-assign, delete). v0.2.7
+  polish: `autoAssignSettlementParent` first looks for a same-named
+  containing boundary (largest-first), falling back to the existing
+  smallest-region logic — fixes the canonical OGF case where a
+  `place=city` node and its `boundary=administrative` polygon share a
+  name. Not load-bearing for aggregation.
+- **Brick 8** ✓ (PR open on `claude/brick-8-start-qJz0D`) — property
+  schema editor. New `js/properties.js` data layer + Properties sidebar
+  tab. Three kinds: numeric (sum / weighted-average + weight property
+  ref), categorical (opt-in distribution roll-up), percentage (with a
+  numeric denominator ref). Add/Edit modal with kind-conditional
+  fields; kind locked on edit (Brick 9 hedge). Validation: unique
+  case-insensitive name, refs must be numeric, no self-ref, no cycles
+  in the combined weight/denominator graph. Delete blocked if any
+  other schema references the target as weight or denominator (the
+  toast names dependents). `bootstrapPropertySchemas()` seeds two
+  starter properties on first visit: Population (numeric/sum) and
+  Predominant language (categorical/no-rollup) — chosen lean so the
+  list isn't empty but every other property is user-defined. No plot
+  values yet (Brick 9), no boundary aggregation yet (Brick 10).

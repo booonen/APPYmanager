@@ -1,3 +1,39 @@
+## 0.3.0 — Brick 8: Property schema editor
+- New "Properties" tab in the Geography section (after Settlements,
+  before Map). Lists every property schema with Name / Kind /
+  Behaviour / Unit columns plus per-row Edit and Delete.
+- `js/properties.js` data layer:
+  - `propertySchema` record: `{ id, name, unit, kind, notes,
+    aggregation, weightPropertyId, rollupDistribution,
+    denominatorPropertyId }`. Three kinds: numeric, categorical,
+    percentage.
+  - `bootstrapPropertySchemas()` seeds two starter properties on first
+    visit: **Population** (numeric, sum, unit "people") and
+    **Predominant language** (categorical, no rollup).
+  - `createPropertySchema`, `deletePropertySchema`,
+    `findPropertySchema`, `findPropertyDependents`,
+    `getNumericPropertyOptions`, `describePropertyBehaviour`,
+    `_hasPropertyRefCycle`.
+- Add/Edit modal with kind-conditional fields:
+  - **Numeric**: aggregation = sum or weighted-average; if weighted,
+    pick a numeric weight property.
+  - **Categorical**: opt-in "Roll up as distribution on boundaries"
+    checkbox (off by default — matches CLAUDE.md decision).
+  - **Percentage**: pick a numeric denominator property.
+- Validation enforced on save:
+  - Name required and unique (case-insensitive).
+  - Weight / denominator must be an existing numeric property.
+  - No self-reference; no cycles in the combined weight/denominator
+    dependency graph (`_hasPropertyRefCycle`).
+- Kind is locked on edit (data-integrity hedge — Brick 9 plot values
+  shouldn't have to handle a numeric→categorical schema flip mid-flight).
+- Delete is blocked when another schema references the target as
+  weight or denominator; the toast names the dependents so the user
+  can fix them first.
+- Dashboard already had a Properties stat tile via
+  `data.propertySchemas.length`; bootstrap now actually populates it
+  on first visit.
+
 ## 0.2.7 — Settlement auto-assign: name-match boundary preferred
 - `autoAssignSettlementParent(lat, lng, name)` gains a name-matching
   pass that runs before the existing smallest-region logic. Walks
