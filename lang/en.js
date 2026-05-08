@@ -97,8 +97,11 @@ registerLanguage('en', 'English', {
   },
   "map": {
     "show_label": "Show:",
+    "layer_plots": "Plots",
     "crumb_root": "All",
-    "crumb_all_of": "All {type}"
+    "crumb_all_of": "All {type}",
+    "popup_open": "Open details",
+    "popup_kind_plot": "Plot"
   },
   "stat": {
     "plots": "Plots",

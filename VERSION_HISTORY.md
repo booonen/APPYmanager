@@ -1,3 +1,26 @@
+## 0.1.10 — Brick 6c polish: stacked drill, popups, plots view, absorption fix
+- **Stacked drill levels.** Drilling no longer hides the rest of the
+  map: the dropdown's selected type stays rendered at the bottom and
+  each drill step adds the next level on top. You can now see the
+  whole hierarchy three (or more) levels deep at once.
+- **"Plots" is back as a dropdown option.** Picks the original flat
+  plot view from any project state; bypassed entirely when a project
+  has no boundary types yet.
+- **Click → popup, not modal.** Single-click on any polygon now opens
+  a small Leaflet popup with the name, a type chip, the area, and an
+  "Open details" button that promotes you into the full detail modal.
+  Double-click on a boundary still drills (the popup is dismissed
+  cleanly). Dark-themed popup wrapper override added to styles.css.
+- **Absorption fix for the locality scenario.** When an import
+  subdivides existing municipality plots, the locality boundary used
+  to come out empty: `resolveBoundaryMembersForPlots` was skipping
+  plots already claimed by the municipality. Now it includes them
+  and the post-create promotion loop wedges each new locality
+  between its parent municipality and the sub-plot — locality gains
+  the plot, municipality gains the locality (replacing the bare
+  sub-plot reference). Promotion failures (sister-type claims) drop
+  the member rather than leak a double-claim.
+
 ## 0.1.9 — Brick 6c: hierarchical map view + import absorption
 - **Map view rebuilt around the hierarchy.** Replaced the multi-layer
   chip strip with a single dropdown picking which boundary type to

@@ -247,7 +247,6 @@ function resolveBoundaryMembersForPlots(plotIds, targetTypeId) {
   }
 
   for (const pid of remaining) {
-    if (findClaimingBoundary('plot', pid, null)) continue;
     members.push({ kind: 'plot', id: pid });
   }
   return members;

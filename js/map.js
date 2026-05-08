@@ -275,11 +275,17 @@ function _normalizeMapState() {
     if (data.boundaries.some(b => b.id === top.boundaryId)) break;
     _drillStack.pop();
   }
-  // Default the dropdown selection to the largest type.
-  if (_mapCurrentTypeId === null || !data.boundaryTypes.some(t => t.id === _mapCurrentTypeId)) {
-    _mapCurrentTypeId = _largestBoundaryTypeId();
+  // Default the dropdown to the largest boundary type, or to "Plots" when
+  // no boundary types exist yet.
+  const isKnownType = _mapCurrentTypeId === PLOTS_TYPE_SENTINEL
+    || data.boundaryTypes.some(t => t.id === _mapCurrentTypeId);
+  if (!isKnownType) {
+    _mapCurrentTypeId = _largestBoundaryTypeId() || PLOTS_TYPE_SENTINEL;
   }
 }
+
+// Sentinel id for the synthetic "Plots" dropdown option.
+const PLOTS_TYPE_SENTINEL = '__plots__';
 
 function redrawMap() {
   if (!_map || !_mapPlotLayer || !_mapBoundaryLayer) return;
@@ -287,15 +293,41 @@ function redrawMap() {
   _mapPlotLayer.clearLayers();
   _mapBoundaryLayer.clearLayers();
 
-  if (_drillStack.length === 0) _renderRootView();
-  else                          _renderDrillView();
+  // Layer 0: dropdown's selected level (every boundary of that type, OR
+  // every plot when the synthetic "Plots" option is picked).
+  const drawnBoundaries = new Set();
+  _renderRootLevel(drawnBoundaries);
+
+  // Layers 1..N: drill stack stacked on top. Each drilled boundary
+  // contributes its direct members — sub-boundaries in their own type
+  // color, plots in the neutral plot style. Going deeper just keeps
+  // adding levels; the parent boundaries stay visible underneath.
+  for (const entry of _drillStack) {
+    const parent = data.boundaries.find(b => b.id === entry.boundaryId);
+    if (!parent) continue;
+    for (const m of (parent.members || [])) {
+      if (m.kind === 'plot') {
+        const plot = data.plots.find(p => p.id === m.id);
+        if (plot) _drawPlotPoly(plot);
+      } else if (m.kind === 'boundary') {
+        if (drawnBoundaries.has(m.id)) continue;
+        const sub = data.boundaries.find(x => x.id === m.id);
+        if (sub) {
+          _drawBoundaryPoly(sub, colorForBoundaryType(sub.typeId));
+          drawnBoundaries.add(sub.id);
+        }
+      }
+    }
+  }
 
   renderMapToolbar();
 }
 
-function _renderRootView() {
-  if (data.boundaryTypes.length === 0 || !_mapCurrentTypeId) {
-    // Fallback: show all plots, no boundary type to display.
+function _renderRootLevel(drawnBoundaries) {
+  // No boundary types defined, or "Plots" picked from dropdown → flat plot view.
+  if (_mapCurrentTypeId === PLOTS_TYPE_SENTINEL
+      || data.boundaryTypes.length === 0
+      || !_mapCurrentTypeId) {
     for (const plot of data.plots) _drawPlotPoly(plot);
     return;
   }
@@ -303,22 +335,7 @@ function _renderRootView() {
   for (const b of data.boundaries) {
     if (b.typeId !== _mapCurrentTypeId) continue;
     _drawBoundaryPoly(b, color);
-  }
-}
-
-function _renderDrillView() {
-  const top    = _drillStack[_drillStack.length - 1];
-  const parent = data.boundaries.find(b => b.id === top.boundaryId);
-  if (!parent) return;
-
-  for (const m of (parent.members || [])) {
-    if (m.kind === 'plot') {
-      const plot = data.plots.find(p => p.id === m.id);
-      if (plot) _drawPlotPoly(plot);
-    } else if (m.kind === 'boundary') {
-      const sub = data.boundaries.find(b => b.id === m.id);
-      if (sub) _drawBoundaryPoly(sub, colorForBoundaryType(sub.typeId));
-    }
+    drawnBoundaries.add(b.id);
   }
 }
 
@@ -328,7 +345,10 @@ function _drawPlotPoly(plot) {
   const poly = L.polygon(geo.polygons, plotPolygonStyle(false));
   poly._appyPlotId = plot.id;
   if (plot.name) poly.bindTooltip(plot.name);
-  poly.on('click', (e) => onPlotPolyClick(e, plot.id));
+  poly.on('click', (e) => {
+    L.DomEvent.stopPropagation(e);
+    _showPlotPopup(e.latlng, plot);
+  });
   _mapPlotLayer.addLayer(poly);
 }
 
@@ -338,18 +358,20 @@ function _drawBoundaryPoly(b, color) {
   const poly = L.polygon(geom.polygons, boundaryFilledStyle(color));
   poly._appyBoundaryId = b.id;
   poly.bindTooltip(b.name || `(${getBoundaryTypeName(b.typeId)})`);
-  poly.on('click',    (e) => onBoundaryPolyClick(e, b.id));
+  poly.on('click',    (e) => onBoundaryPolyClick(e, b));
   poly.on('dblclick', (e) => onBoundaryPolyDblClick(e, b.id));
   _mapBoundaryLayer.addLayer(poly);
 }
 
-function onBoundaryPolyClick(e, boundaryId) {
+function onBoundaryPolyClick(e, b) {
   L.DomEvent.stopPropagation(e);
-  // Defer single-click so an in-flight dblclick can cancel it.
+  // Defer single-click so an in-flight dblclick can cancel it (drilling
+  // shouldn't briefly flash the popup).
   if (_boundaryClickTimer) return;
+  const latlng = e.latlng;
   _boundaryClickTimer = setTimeout(() => {
     _boundaryClickTimer = null;
-    if (typeof openBoundaryDetail === 'function') openBoundaryDetail(boundaryId);
+    _showBoundaryPopup(latlng, b);
   }, 240);
 }
 
@@ -357,7 +379,52 @@ function onBoundaryPolyDblClick(e, boundaryId) {
   L.DomEvent.stopPropagation(e);
   L.DomEvent.preventDefault(e);
   if (_boundaryClickTimer) { clearTimeout(_boundaryClickTimer); _boundaryClickTimer = null; }
+  if (_map) _map.closePopup();
   drillIntoBoundary(boundaryId);
+}
+
+// ============================================================
+// MAP POPUPS — quick-look tooltip with name/type/area + open-detail
+// ============================================================
+// Click on any polygon spawns a Leaflet popup with name, type chip,
+// area, and an "Open details" button. The button opens the same
+// detail modal the table-views use; the popup is a lightweight
+// navigation surface for the map itself.
+
+function _showBoundaryPopup(latlng, b) {
+  const typeName = getBoundaryTypeName(b.typeId);
+  const color = colorForBoundaryType(b.typeId);
+  const html = `
+    <div class="map-popup">
+      <div class="map-popup-name">${b.name ? esc(b.name) : `<em class="text-muted">${t('boundaries.unnamed')}</em>`}</div>
+      <div class="map-popup-meta">
+        <span class="map-popup-type" style="background:${color}">${esc(typeName) || '—'}</span>
+        <span class="map-popup-area">${formatArea(boundaryArea(b))}</span>
+      </div>
+      <button class="btn btn-sm btn-primary map-popup-btn"
+        onclick="_map.closePopup(); openBoundaryDetail('${esc(b.id)}')">
+        ${t('map.popup_open')}
+      </button>
+    </div>`;
+  L.popup({ autoClose: true, closeOnClick: true, closeButton: true })
+    .setLatLng(latlng).setContent(html).openOn(_map);
+}
+
+function _showPlotPopup(latlng, plot) {
+  const html = `
+    <div class="map-popup">
+      <div class="map-popup-name">${plot.name ? esc(plot.name) : `<em class="text-muted">${t('plots.unnamed')}</em>`}</div>
+      <div class="map-popup-meta">
+        <span class="map-popup-type map-popup-type-plot">${t('map.popup_kind_plot')}</span>
+        <span class="map-popup-area">${formatArea(plotArea(plot))}</span>
+      </div>
+      <button class="btn btn-sm btn-primary map-popup-btn"
+        onclick="_map.closePopup(); openPlotDetail('${esc(plot.id)}')">
+        ${t('map.popup_open')}
+      </button>
+    </div>`;
+  L.popup({ autoClose: true, closeOnClick: true, closeButton: true })
+    .setLatLng(latlng).setContent(html).openOn(_map);
 }
 
 function drillIntoBoundary(boundaryId) {
@@ -423,17 +490,22 @@ function renderMapToolbar() {
     breadcrumbHtml = `<div class="map-crumbs">${parts.join('<span class="map-crumb-sep">›</span>')}</div>`;
   }
 
-  // Dropdown: boundary types, largest first. Hidden when there are none.
-  let dropdownHtml = '';
+  // Dropdown: boundary types (largest first) + a synthetic "Plots" entry
+  // at the bottom. Always rendered as long as the project has plots or
+  // boundary types — when neither exists we hide it.
   const types = _typesLargestFirst();
-  if (types.length > 0) {
-    const opts = types.map(ty =>
+  const haveAny = types.length > 0 || data.plots.length > 0;
+  let dropdownHtml = '';
+  if (haveAny) {
+    const typeOpts = types.map(ty =>
       `<option value="${esc(ty.id)}"${ty.id === _mapCurrentTypeId ? ' selected' : ''}>${esc(ty.name)}</option>`
     ).join('');
+    const plotsSelected = _mapCurrentTypeId === PLOTS_TYPE_SENTINEL;
+    const plotsOpt = `<option value="${PLOTS_TYPE_SENTINEL}"${plotsSelected ? ' selected' : ''}>${t('map.layer_plots')}</option>`;
     dropdownHtml = `
       <div class="map-toolbar-row">
         <label class="import-target-label">${t('map.show_label')}</label>
-        <select onchange="onMapTypeChange(this.value)">${opts}</select>
+        <select onchange="onMapTypeChange(this.value)">${typeOpts}${plotsOpt}</select>
       </div>`;
   }
 

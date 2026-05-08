@@ -416,6 +416,44 @@ input[type="checkbox"]:checked::after {
 }
 .map-toolbar-row select { max-width: 280px; }
 
+/* Leaflet popup — dark-theme override + APPY popup body styling. */
+.leaflet-popup-content-wrapper {
+  background: var(--bg-raised);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+}
+.leaflet-popup-tip {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+}
+.leaflet-popup-close-button {
+  color: var(--text-dim) !important;
+}
+.leaflet-popup-close-button:hover {
+  color: var(--text) !important;
+}
+.leaflet-popup-content { margin: 10px 12px; min-width: 180px; }
+
+.map-popup { font-size: 13px; line-height: 1.4; }
+.map-popup-name {
+  font-weight: 600; font-size: 14px; color: var(--text);
+  margin-bottom: 6px;
+}
+.map-popup-meta {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12px; color: var(--text-dim); margin-bottom: 8px;
+}
+.map-popup-type {
+  display: inline-block;
+  font-size: 11px; padding: 1px 8px;
+  border-radius: 999px; color: #fff; font-weight: 500;
+}
+.map-popup-type-plot { background: #475569; }
+.map-popup-area { font-family: var(--font-mono); }
+.map-popup-btn { width: 100%; }
+
 .boundary-picker-row.promotable { background: rgba(85, 192, 122, 0.06); }
 .boundary-picker-row.promotable:hover { background: rgba(85, 192, 122, 0.14); }
 .boundary-picker-promote {

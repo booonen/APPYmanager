@@ -427,20 +427,27 @@ they come up; the plan is a living document.
 - **Brick 6c** ✓ (PR open on `feature/brick-6a-boundaries`) — hierarchical
   map view + import absorption. The Map tab uses a single dropdown that
   picks one boundary type to display (largest first by `primitiveId`
-  depth). At top level it renders every boundary of that type filled
-  in the type's color, like plots are rendered. Double-click drills
-  into a boundary's *direct members* — sub-boundaries render in their
-  own type color, plots in neutral style — repeating descends one
-  level per dblclick. Single-click on any polygon opens its detail
-  modal (boundaries get a 240 ms debounce so dblclick can cancel).
-  Breadcrumb above the dropdown returns to any ancestor view. On
-  import-as-boundary, `resolveBoundaryMembersForPlots` (boundaries.js)
-  performs greedy largest-first absorption: an imported Province whose
-  plots are fully covered by existing Municipalities becomes a Boundary
-  whose members are those Municipalities, not the raw plots. The
-  existing `promoteMember` flow then wedges the new boundary between
-  any prior claimer (e.g. a Country owning the Municipalities) and
-  each absorbed member, preserving exclusivity.
+  depth, plus a synthetic "Plots" option at the bottom for the flat
+  plot view). At root the map renders every boundary of the chosen
+  type filled in the type's color, like plots are rendered. Drilling
+  via double-click STACKS additional levels on top: the dropdown's
+  level stays visible underneath, the drilled-into boundary's direct
+  members render on top, and each subsequent dblclick adds another
+  level (so 3+ depth-levels can coexist on the map). Single-click on
+  any polygon spawns a Leaflet popup with name / type chip / area /
+  "Open details" button (the button promotes to the full detail
+  modal); a 240 ms debounce defers the popup so dblclick on a
+  boundary can cancel it cleanly. Breadcrumb above the dropdown
+  returns to any ancestor view. On import-as-boundary,
+  `resolveBoundaryMembersForPlots` (boundaries.js) performs greedy
+  largest-first absorption: an imported Province whose plots are
+  fully covered by existing Municipalities becomes a Boundary whose
+  members are those Municipalities, not the raw plots. Subdivide
+  step 5 then runs each proposed member through `promoteMember`,
+  filtering out members whose claimer can't transitively contain the
+  new boundary's type — this is what makes the locality-inside-
+  municipality import work (locality boundary claims the new sub-plot
+  from its parent municipality).
 - **Brick 7** (next) — Settlements (Phase 2.5). Import OGF `place=*` nodes
   via Overpass; one parent per settlement (plot or boundary); markers,
   list view, edit/delete. Not load-bearing for aggregation.

@@ -422,15 +422,26 @@ function executeSubdivisionPlan(plan, nodes, ways, target) {
   if (target.kind === 'boundary' && target.typeId) {
     for (const [candidate, plotIds] of candidateToPlotIds) {
       if (plotIds.length === 0) continue;
-      const members = resolveBoundaryMembersForPlots(plotIds, target.typeId);
+      const proposed = resolveBoundaryMembersForPlots(plotIds, target.typeId);
       const newB = createBoundary({
         name:    candidate.name || '',
         typeId:  target.typeId,
-        members,
+        members: proposed.slice(),
       });
-      for (const m of members) {
-        promoteMember(m.kind, m.id, newB);
-      }
+      // Each proposed member may currently be claimed by another boundary.
+      // For locality-imports inside an existing municipality this is the
+      // norm: subdivision step 4 rewrote the municipality's plot refs to
+      // the new sub-plots, so each new sub-plot is claimed by its parent
+      // municipality. promoteMember wedges newB between the claimer and
+      // the member (claimer drops the member, gains newB; member stays
+      // in newB). If promotion fails (claimer's type can't contain
+      // newB's type), drop the member from newB rather than leak a
+      // double-claim and break exclusivity.
+      newB.members = newB.members.filter(m => {
+        const claimer = findClaimingBoundary(m.kind, m.id, newB.id);
+        if (!claimer) return true;
+        return promoteMember(m.kind, m.id, newB);
+      });
     }
   }
 }
