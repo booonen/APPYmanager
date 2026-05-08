@@ -104,7 +104,10 @@ registerLanguage('en', 'English', {
     "crumb_root": "All",
     "crumb_all_of": "All {type}",
     "popup_open": "Open details",
-    "popup_kind_plot": "Plot"
+    "popup_kind_plot": "Plot",
+    "places_filter": "Places: {on}/{total} ▾",
+    "places_all": "All",
+    "places_none": "None"
   },
   "stat": {
     "plots": "Plots",

@@ -1,3 +1,24 @@
+## 0.2.4 — Settlement marker polish: JOSM colours, draw order, filter
+- New `PLACE_COLORS` map in `js/settlements.js` — JOSM-style hues per
+  `place=*`: city purple, town dark-orange, village orange, suburb
+  yellow-orange, hamlet yellow, borough dark-green, quarter pink,
+  neighbourhood tan, isolated_dwelling light-green, locality grey.
+  Used by markers, side-panel chips, list-view chips, import preview,
+  and the place-filter dropdown.
+- `PLACE_RANK` controls draw order: settlements rendered smallest-rank
+  first so cities sit above hamlets and so on. Same sort applies to
+  the import preview map and the side-panel members lists.
+- Bigger marker radii overall (city 12, town 10, village 8, … locality
+  5). Selected and hover styles also bumped.
+- New place-type filter in the Map toolbar: collapsible chip strip
+  ("Places: 8/10 ▾") with a coloured dot + per-type count, plus
+  All/None shortcuts. State persists under
+  `data.settings.visiblePlaceTypes` (undefined = all visible).
+- Hovering a settlement in the side panel calls `bringToFront()` on
+  its marker so dense clusters stop occluding the highlight.
+- Settlements section in the side panel auto-collapses when more than
+  20 items would be rendered, avoiding lag on country-wide selections.
+
 ## 0.2.3 — Settlement parent reconciliation
 - `reconcileSettlementParents()` in `js/settlements.js` sweeps the
   settlement list and (a) drops dangling parent references whose plot

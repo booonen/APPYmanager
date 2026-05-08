@@ -31,6 +31,45 @@ const PLACE_TYPES = [
 // initial imports tight.
 const PLACE_TYPES_DEFAULT_CHECKED = ['city', 'town', 'village'];
 
+// JOSM-style colour per place=*. Used everywhere a settlement chip or
+// marker is rendered (map markers, preview map, side-panel chips, list
+// view, import preview, place-filter dropdown).
+const PLACE_COLORS = {
+  city:              '#9b59b6', // purple
+  town:              '#d35400', // dark orange
+  village:           '#e67e22', // orange
+  suburb:            '#f39c12', // yellow-orange
+  hamlet:            '#f1c40f', // yellow
+  borough:           '#27ae60', // dark green
+  quarter:           '#e91e63', // pink
+  neighbourhood:     '#c8a165', // tan
+  isolated_dwelling: '#9ccc65', // light green
+  locality:          '#7f8c8d', // grey
+};
+
+// Render-order rank: higher = drawn later = on top. Mirrors the rough
+// OSM importance ladder so cities sit above hamlets etc.
+const PLACE_RANK = {
+  city:              10,
+  town:               9,
+  village:            8,
+  borough:            7,
+  suburb:             6,
+  hamlet:             5,
+  quarter:            4,
+  neighbourhood:      3,
+  isolated_dwelling:  2,
+  locality:           1,
+};
+
+function colorForPlaceType(place) {
+  return PLACE_COLORS[place] || '#7f8c8d';
+}
+
+function rankForPlaceType(place) {
+  return PLACE_RANK[place] || 0;
+}
+
 function createSettlement({ name, lat, lng, ogfNodeId, place, parent, notes, flags }) {
   const s = {
     id:        uid(),

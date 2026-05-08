@@ -103,31 +103,35 @@ function initMap() {
 // SETTLEMENT MARKER STYLING
 // ============================================================
 // Radius scales by place type so cities read as more important than
-// hamlets at a glance. Selected settlements get a thicker stroke and
-// a heavier fill.
-
-const SETTLEMENT_FILL = '#e0a855'; // gold (matches preview-map markers)
+// hamlets at a glance. Fill colour follows the JOSM-style PLACE_COLORS
+// map in settlements.js. Selected settlements get a brighter accent
+// stroke and a slightly larger radius.
 
 function _settlementRadius(place) {
   switch (place) {
-    case 'city':                     return 7;
-    case 'town':                     return 6;
-    case 'village':                  return 5;
-    case 'suburb':
-    case 'borough':                  return 5;
-    case 'hamlet':
-    case 'quarter':
-    case 'neighbourhood':            return 4;
-    default:                         return 3;
+    case 'city':                     return 12;
+    case 'town':                     return 10;
+    case 'village':                  return 8;
+    case 'borough':                  return 7;
+    case 'suburb':                   return 7;
+    case 'hamlet':                   return 6;
+    case 'quarter':                  return 6;
+    case 'neighbourhood':            return 6;
+    case 'isolated_dwelling':        return 5;
+    case 'locality':                 return 5;
+    default:                         return 5;
   }
 }
 
 function settlementMarkerStyle(settlement, selected) {
+  const fill = (typeof colorForPlaceType === 'function')
+    ? colorForPlaceType(settlement?.place)
+    : '#7f8c8d';
   return {
     radius:      _settlementRadius(settlement?.place) + (selected ? 2 : 0),
     color:       selected ? '#c1272d' : '#0f1117',
     weight:      selected ? 2.5 : 1.5,
-    fillColor:   SETTLEMENT_FILL,
+    fillColor:   fill,
     fillOpacity: selected ? 1 : 0.9,
   };
 }
@@ -211,13 +215,20 @@ function drawPreviewSettlements(candidates) {
   if (!_previewMap || !_previewLayer) return;
   _previewLayer.clearLayers();
   const all = L.latLngBounds([]);
-  for (const c of candidates) {
+  // Sort smallest-rank first so important markers stack on top in the preview too.
+  const sorted = candidates.slice().sort((a, b) => {
+    const ra = (typeof rankForPlaceType === 'function') ? rankForPlaceType(a.place) : 0;
+    const rb = (typeof rankForPlaceType === 'function') ? rankForPlaceType(b.place) : 0;
+    return ra - rb;
+  });
+  for (const c of sorted) {
     if (!Number.isFinite(c.lat) || !Number.isFinite(c.lng)) continue;
+    const fill = (typeof colorForPlaceType === 'function') ? colorForPlaceType(c.place) : '#7f8c8d';
     const m = L.circleMarker([c.lat, c.lng], {
-      radius: 6,
+      radius: _settlementRadius(c.place),
       color: '#0f1117',
       weight: 1.5,
-      fillColor: '#e0a855',
+      fillColor: fill,
       fillOpacity: 0.9,
     });
     m.bindTooltip(c.name ? c.name : `(${c.place})`);
@@ -392,10 +403,19 @@ function redrawMap() {
   }
 
   // Settlements live on a dedicated always-on layer so they remain
-  // visible regardless of which boundary level is selected.
-  for (const s of (data.settlements || [])) {
-    _drawSettlementMarker(s);
-  }
+  // visible regardless of which boundary level is selected. Sorted
+  // smallest-rank first so cities draw on top of hamlets etc.; filtered
+  // through data.settings.visiblePlaceTypes when set.
+  const visible = data.settings?.visiblePlaceTypes;
+  const isPlaceVisible = (place) => !Array.isArray(visible) || visible.includes(place);
+  const settlementsToDraw = (data.settlements || [])
+    .filter(s => isPlaceVisible(s.place))
+    .sort((a, b) => {
+      const ra = (typeof rankForPlaceType === 'function') ? rankForPlaceType(a.place) : 0;
+      const rb = (typeof rankForPlaceType === 'function') ? rankForPlaceType(b.place) : 0;
+      return ra - rb;
+    });
+  for (const s of settlementsToDraw) _drawSettlementMarker(s);
 
   renderMapToolbar();
   renderMapSidePanel();
@@ -511,7 +531,10 @@ function _hoverMapItem(kind, id) {
     } else if (kind === 'settlement') {
       const s = data.settlements?.find(x => x.id === id);
       const r = _settlementRadius(s?.place) + 3;
-      indexed.setStyle({ radius: r, weight: 2.5, color: '#c1272d', fillColor: SETTLEMENT_FILL, fillOpacity: 1 });
+      const c = (typeof colorForPlaceType === 'function') ? colorForPlaceType(s?.place) : '#7f8c8d';
+      indexed.setStyle({ radius: r, weight: 2.5, color: '#c1272d', fillColor: c, fillOpacity: 1 });
+      // Push the hovered marker above its peers so it isn't occluded.
+      if (typeof indexed.bringToFront === 'function') indexed.bringToFront();
     }
   } else if (_hoverLayer) {
     // Not currently drawn at this level: draw a temporary highlight
@@ -539,9 +562,10 @@ function _hoverMapItem(kind, id) {
     } else if (kind === 'settlement') {
       const s = data.settlements?.find(x => x.id === id);
       if (s && Number.isFinite(s.lat) && Number.isFinite(s.lng)) {
+        const c = (typeof colorForPlaceType === 'function') ? colorForPlaceType(s.place) : '#7f8c8d';
         _hoveredTempPoly = L.circleMarker([s.lat, s.lng],
           { radius: _settlementRadius(s.place) + 3, color: '#c1272d', weight: 2.5,
-            fillColor: SETTLEMENT_FILL, fillOpacity: 1, dashArray: '4,3' });
+            fillColor: c, fillOpacity: 1, dashArray: '4,3' });
         _hoverLayer.addLayer(_hoveredTempPoly);
       }
     }
@@ -724,19 +748,37 @@ function _renderMemberships(kind, id) {
 // visible).
 function _renderSettlementsSection(items) {
   if (!items || items.length === 0) return '';
-  let html = `<div class="map-panel-section">Settlements (${items.length})</div>`;
-  for (const s of items) {
+  // Auto-collapse big lists to keep the panel snappy: rendering 500
+  // hover-bindable rows is noticeably slow.
+  const COLLAPSE_THRESHOLD = 20;
+  const collapse = items.length > COLLAPSE_THRESHOLD;
+  // Sort by rank descending so the heaviest settlements lead the list.
+  const sorted = items.slice().sort((a, b) => {
+    const ra = (typeof rankForPlaceType === 'function') ? rankForPlaceType(a.place) : 0;
+    const rb = (typeof rankForPlaceType === 'function') ? rankForPlaceType(b.place) : 0;
+    return rb - ra;
+  });
+  let rows = '';
+  for (const s of sorted) {
     const nm = s.name ? esc(s.name) : '<em class="text-muted">Unnamed</em>';
-    html += `
+    const c  = (typeof colorForPlaceType === 'function') ? colorForPlaceType(s.place) : '#7f8c8d';
+    rows += `
       <div class="map-panel-child"
         onmouseenter="_hoverMapItem('settlement','${s.id}')"
         onmouseleave="_unhoverMapItem()"
         onclick="_panelSelectSettlement('${s.id}')">
-        <span class="map-panel-member-type" style="background:${SETTLEMENT_FILL}">${esc(s.place || 'place')}</span>
+        <span class="map-panel-member-type" style="background:${c}">${esc(s.place || 'place')}</span>
         <span class="map-panel-child-name">${nm}</span>
       </div>`;
   }
-  return html;
+  if (collapse) {
+    return `
+      <details class="map-panel-collapse">
+        <summary class="map-panel-section">Settlements (${items.length}) — click to expand</summary>
+        ${rows}
+      </details>`;
+  }
+  return `<div class="map-panel-section">Settlements (${items.length})</div>${rows}`;
 }
 
 // Settlement's parent block: direct parent + (when parent is a boundary)
@@ -862,10 +904,11 @@ function renderMapSidePanel() {
     const s = (data.settlements || []).find(x => x.id === _selectedItemId);
     if (!s) { el.style.display = 'none'; return; }
     const coords = `${s.lat.toFixed(5)}, ${s.lng.toFixed(5)}`;
+    const placeColor = (typeof colorForPlaceType === 'function') ? colorForPlaceType(s.place) : '#7f8c8d';
     html = `
       <div class="map-panel-inner">
         <div class="map-panel-hdr">
-          <span class="map-popup-type" style="background:${SETTLEMENT_FILL}">${esc(s.place || 'place')}</span>
+          <span class="map-popup-type" style="background:${placeColor}">${esc(s.place || 'place')}</span>
           <button class="map-panel-close" onclick="_clearMapSelection()" title="Deselect">✕</button>
         </div>
         <div class="map-panel-field">
@@ -1050,7 +1093,63 @@ function renderMapToolbar() {
       </div>`;
   }
 
-  el.innerHTML = breadcrumbHtml + dropdownHtml;
+  // Place-type filter: collapsible chip strip in a <details>. Visible
+  // when at least one settlement exists. Stores state under
+  // data.settings.visiblePlaceTypes — undefined = all visible.
+  let placesHtml = '';
+  if ((data.settlements || []).length > 0 && typeof PLACE_TYPES !== 'undefined') {
+    const visible = data.settings?.visiblePlaceTypes;
+    const isVis = (pt) => !Array.isArray(visible) || visible.includes(pt);
+    const counts = {};
+    for (const s of data.settlements) counts[s.place] = (counts[s.place] || 0) + 1;
+    const total = data.settlements.length;
+    const onCount = data.settlements.filter(s => isVis(s.place)).length;
+
+    const chips = PLACE_TYPES.map(pt => {
+      const checked = isVis(pt);
+      const c = colorForPlaceType(pt);
+      const n = counts[pt] || 0;
+      return `
+        <label class="place-chip${n === 0 ? ' place-chip-empty' : ''}" title="${n} in project">
+          <input type="checkbox" value="${esc(pt)}" ${checked ? 'checked' : ''}
+            onchange="onMapPlaceFilterChange(this)">
+          <span class="place-color-dot" style="background:${c}"></span>
+          <span>${esc(pt)}</span>
+          ${n > 0 ? `<span class="place-chip-count">${n}</span>` : ''}
+        </label>`;
+    }).join('');
+
+    placesHtml = `
+      <details class="map-places-filter">
+        <summary>${t('map.places_filter', { on: onCount, total })}</summary>
+        <div class="place-chips" style="margin-top:6px">${chips}</div>
+        <div class="map-places-actions">
+          <button class="btn btn-sm" onclick="onMapPlaceFilterAll(true)">${t('map.places_all')}</button>
+          <button class="btn btn-sm" onclick="onMapPlaceFilterAll(false)">${t('map.places_none')}</button>
+        </div>
+      </details>`;
+  }
+
+  el.innerHTML = breadcrumbHtml + dropdownHtml + placesHtml;
+}
+
+function onMapPlaceFilterChange(checkbox) {
+  const cur = data.settings.visiblePlaceTypes
+    ? data.settings.visiblePlaceTypes.slice()
+    : PLACE_TYPES.slice();
+  const v = checkbox.value;
+  const idx = cur.indexOf(v);
+  if (checkbox.checked && idx < 0) cur.push(v);
+  if (!checkbox.checked && idx >= 0) cur.splice(idx, 1);
+  data.settings.visiblePlaceTypes = cur;
+  save();
+  redrawMap();
+}
+
+function onMapPlaceFilterAll(on) {
+  data.settings.visiblePlaceTypes = on ? PLACE_TYPES.slice() : [];
+  save();
+  redrawMap();
 }
 
 // Backwards-compat alias, in case anything still calls the old name.

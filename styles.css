@@ -336,6 +336,40 @@ input[type="checkbox"]:checked::after {
 .place-chip:has(input:checked) {
   background: var(--accent-glow); border-color: var(--accent); color: var(--accent);
 }
+.place-chip-empty { opacity: 0.45; }
+.place-chip-count {
+  font-family: var(--font-mono); font-size: 10px;
+  background: var(--bg-input); padding: 0 6px; border-radius: 999px;
+  margin-left: 2px;
+}
+.place-color-dot {
+  width: 10px; height: 10px; border-radius: 50%;
+  border: 1px solid rgba(0,0,0,0.35); flex-shrink: 0;
+}
+
+/* Map toolbar — place-type filter dropdown (Brick 7 polish) */
+.map-places-filter { padding: 4px 0; font-size: 12px; }
+.map-places-filter > summary {
+  cursor: pointer; user-select: none; display: inline-flex; align-items: center;
+  gap: 4px; color: var(--text-dim); padding: 4px 8px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg-input);
+}
+.map-places-filter > summary:hover { color: var(--text); border-color: var(--border-focus); }
+.map-places-filter[open] > summary { color: var(--text); }
+.map-places-actions {
+  display: flex; gap: 6px; margin-top: 6px;
+}
+
+/* Side-panel collapse for big lists */
+.map-panel-collapse > summary {
+  cursor: pointer; user-select: none; list-style: none;
+}
+.map-panel-collapse > summary::-webkit-details-marker { display: none; }
+.map-panel-collapse > summary::before {
+  content: '▸ '; color: var(--text-muted); font-size: 10px;
+}
+.map-panel-collapse[open] > summary::before { content: '▾ '; }
 
 .import-result-list {
   list-style: none; padding: 0; margin: 8px 0 0; max-height: 220px; overflow-y: auto;

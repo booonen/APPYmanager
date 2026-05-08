@@ -514,7 +514,7 @@ function renderSettlements() {
     rows += `
       <tr>
         <td>${s.name ? esc(s.name) : `<em class="text-muted">${t('plots.unnamed')}</em>`}</td>
-        <td><span class="map-popup-type" style="background:#e0a855">${esc(s.place || '')}</span></td>
+        <td><span class="map-popup-type" style="background:${colorForPlaceType(s.place)}">${esc(s.place || '')}</span></td>
         <td>${parentLabel}</td>
         <td class="text-mono text-dim" style="font-size:11px">${esc(s.ogfNodeId || '')}</td>
       </tr>`;
@@ -770,7 +770,7 @@ async function runSettlementImportPreview() {
     const nameHtml = c.name ? esc(c.name) : `<em class="text-muted">${t('plots.unnamed')}</em>`;
     listHtml += `
       <li>
-        <span class="map-popup-type" style="background:#e0a855;margin-right:6px">${esc(c.place)}</span>
+        <span class="map-popup-type" style="background:${colorForPlaceType(c.place)};margin-right:6px">${esc(c.place)}</span>
         <strong>${nameHtml}</strong>
         <span class="text-dim" style="font-size:11px"> · #${esc(c.ogfNodeId)}</span>
         <div class="text-dim" style="font-size:12px;margin-top:2px">→ ${parentInfo}</div>
