@@ -557,17 +557,20 @@ function drillIntoBoundary(boundaryId) {
   const b = data.boundaries.find(x => x.id === boundaryId);
   if (!b) return;
 
-  // Single drill chain: only extend the stack if this boundary is a direct
-  // member of the current top. If it's at root level or unrelated, start
-  // a fresh chain.
-  if (_drillStack.length > 0) {
-    const top  = _drillStack[_drillStack.length - 1];
-    const topB = data.boundaries.find(x => x.id === top.boundaryId);
-    const isDirectChild = topB && (topB.members || []).some(
-      m => m.kind === 'boundary' && m.id === boundaryId
-    );
-    if (!isDirectChild) _drillStack = [];
+  // Find the deepest stack entry whose boundary directly contains this one.
+  // Truncate to that entry (preserving its ancestors) then push, so sibling-
+  // drilling keeps the common ancestry visible (e.g. drilling Province B when
+  // Province A is open leaves Country's layer intact).
+  // If no stack entry contains the new boundary, start fresh.
+  let insertAt = -1;
+  for (let i = _drillStack.length - 1; i >= 0; i--) {
+    const entryB = data.boundaries.find(x => x.id === _drillStack[i].boundaryId);
+    if (entryB && (entryB.members || []).some(m => m.kind === 'boundary' && m.id === boundaryId)) {
+      insertAt = i;
+      break;
+    }
   }
+  _drillStack = insertAt >= 0 ? _drillStack.slice(0, insertAt + 1) : [];
 
   _drillStack.push({
     boundaryId: b.id,
