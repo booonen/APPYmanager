@@ -32,9 +32,17 @@ const BOUNDARY_TYPE_PALETTE = [
   '#d4a13d', '#3aa2c7', '#c763a3', '#7c8c5b'
 ];
 let _mapBoundaryLayer    = null;        // single L.featureGroup for boundary polygons
-let _mapCurrentTypeId    = null;        // type selected in dropdown (null = uninitialized → largest)
+let _mapCurrentTypeId    = null;        // type selected in dropdown (null = uninitialized → Plots)
 let _drillStack          = [];          // [{ boundaryId, name, typeId }, ...]
 let _boundaryClickTimer  = null;        // single-click vs double-click guard
+
+// Polygon index for hover highlights: 'kind:id' → L.Polygon.
+// Rebuilt on every redraw; lets _hoverMapItem mutate styles in-place.
+let _polyIndex       = new Map();
+let _hoverLayer      = null;            // featureGroup for temporary hover polygons
+let _hoveredPolyKind = null;
+let _hoveredPolyId   = null;
+let _hoveredTempPoly = null;
 
 // Sentinel id for the synthetic "Plots" dropdown option.
 const PLOTS_TYPE_SENTINEL = '__plots__';
@@ -63,6 +71,7 @@ function initMap() {
 
   _mapPlotLayer     = L.featureGroup().addTo(_map);
   _mapBoundaryLayer = L.featureGroup().addTo(_map);
+  _hoverLayer       = L.featureGroup().addTo(_map);
 
   _map.on('click', () => {
     if (_selectedItemId !== null) _clearMapSelection();
@@ -290,8 +299,11 @@ function _normalizeMapState() {
 function redrawMap() {
   if (!_map || !_mapPlotLayer || !_mapBoundaryLayer) return;
   _normalizeMapState();
+  _unhoverMapItem();
+  _polyIndex.clear();
   _mapPlotLayer.clearLayers();
   _mapBoundaryLayer.clearLayers();
+  if (_hoverLayer) _hoverLayer.clearLayers();
 
   // Layer 0: dropdown's selected level (every boundary of that type, OR
   // every plot when the synthetic "Plots" option is picked).
@@ -352,6 +364,7 @@ function _drawPlotPoly(plot) {
     _selectItem('plot', plot.id);
   });
   _mapPlotLayer.addLayer(poly);
+  _polyIndex.set('plot:' + plot.id, poly);
 }
 
 function _drawBoundaryPoly(b, color) {
@@ -364,6 +377,7 @@ function _drawBoundaryPoly(b, color) {
   poly.on('click',    (e) => onBoundaryPolyClick(e, b));
   poly.on('dblclick', (e) => onBoundaryPolyDblClick(e, b.id));
   _mapBoundaryLayer.addLayer(poly);
+  _polyIndex.set('boundary:' + b.id, poly);
 }
 
 function onBoundaryPolyClick(e, b) {
@@ -401,6 +415,124 @@ function _clearMapSelection() {
   redrawMap();
 }
 
+// ── Hover highlights (side-panel children) ──
+
+function _hoverMapItem(kind, id) {
+  _unhoverMapItem();
+  _hoveredPolyKind = kind;
+  _hoveredPolyId   = id;
+  const indexed = _polyIndex.get(kind + ':' + id);
+  if (indexed) {
+    // Item is already on the map: boost its style in-place
+    if (kind === 'boundary') {
+      const b = data.boundaries.find(x => x.id === id);
+      const c = colorForBoundaryType(b?.typeId);
+      indexed.setStyle({ color: c, weight: 3.5, fillColor: c, fillOpacity: 0.55, lineJoin: 'round' });
+    } else {
+      indexed.setStyle({ color: '#1f2937', weight: 3, fillColor: '#475569', fillOpacity: 0.45 });
+    }
+  } else if (_hoverLayer) {
+    // Item not currently drawn (different map level): draw temporarily
+    if (kind === 'boundary') {
+      const b = data.boundaries.find(x => x.id === id);
+      if (b) {
+        const geom = resolveBoundaryGeometry(b);
+        if (geom && geom.polygons.length) {
+          const c = colorForBoundaryType(b.typeId);
+          _hoveredTempPoly = L.polygon(geom.polygons,
+            { color: c, weight: 3, fillColor: c, fillOpacity: 0.55, lineJoin: 'round', dashArray: '6,4' });
+          _hoverLayer.addLayer(_hoveredTempPoly);
+        }
+      }
+    } else {
+      const p = data.plots.find(x => x.id === id);
+      if (p) {
+        const geo = resolvePlotGeometry(p);
+        if (geo.polygons.length) {
+          _hoveredTempPoly = L.polygon(geo.polygons,
+            { color: '#1f2937', weight: 3, fillColor: '#475569', fillOpacity: 0.45, dashArray: '6,4' });
+          _hoverLayer.addLayer(_hoveredTempPoly);
+        }
+      }
+    }
+  }
+}
+
+function _unhoverMapItem() {
+  if (_hoveredTempPoly) {
+    _hoverLayer && _hoverLayer.removeLayer(_hoveredTempPoly);
+    _hoveredTempPoly = null;
+  }
+  if (_hoveredPolyKind && _hoveredPolyId) {
+    const indexed = _polyIndex.get(_hoveredPolyKind + ':' + _hoveredPolyId);
+    if (indexed) {
+      const isSelected = _selectedItemKind === _hoveredPolyKind && _selectedItemId === _hoveredPolyId;
+      if (_hoveredPolyKind === 'boundary') {
+        const b = data.boundaries.find(x => x.id === _hoveredPolyId);
+        indexed.setStyle(boundaryFilledStyle(colorForBoundaryType(b?.typeId), isSelected));
+      } else {
+        indexed.setStyle(plotPolygonStyle(isSelected));
+      }
+    }
+  }
+  _hoveredPolyKind = null;
+  _hoveredPolyId   = null;
+}
+
+// ── Panel navigation ──
+
+// Click a parent in the membership chain → show that type at root, select it
+function _panelNavigateToParent(parentId) {
+  const b = data.boundaries.find(x => x.id === parentId);
+  if (!b) return;
+  _unhoverMapItem();
+  _mapCurrentTypeId = b.typeId;
+  _drillStack = [];
+  _selectItem('boundary', parentId);
+  try {
+    const geom = resolveBoundaryGeometry(b);
+    if (geom && geom.polygons.length) {
+      const bounds = L.polygon(geom.polygons).getBounds();
+      if (bounds.isValid()) _map && _map.fitBounds(bounds, { padding: [40, 40] });
+    }
+  } catch (e) {}
+}
+
+// Click a child in the members list → drill into current boundary, select child
+function _panelNavigateToChild(childKind, childId) {
+  if (_selectedItemKind !== 'boundary' || !_selectedItemId) return;
+  const parent = data.boundaries.find(b => b.id === _selectedItemId);
+  if (!parent) return;
+  _unhoverMapItem();
+  _mapCurrentTypeId = parent.typeId;
+  _drillStack = [{
+    boundaryId: parent.id,
+    name: parent.name || getBoundaryTypeName(parent.typeId) || '?',
+    typeId: parent.typeId,
+  }];
+  _selectItem(childKind, childId);
+  // Fit to child geometry
+  if (childKind === 'boundary') {
+    const child = data.boundaries.find(b => b.id === childId);
+    try {
+      const geom = child && resolveBoundaryGeometry(child);
+      if (geom && geom.polygons.length) {
+        const bounds = L.polygon(geom.polygons).getBounds();
+        if (bounds.isValid()) _map && _map.fitBounds(bounds, { padding: [30, 30] });
+      }
+    } catch (e) {}
+  } else {
+    const p = data.plots.find(x => x.id === childId);
+    if (p) {
+      const geo = resolvePlotGeometry(p);
+      if (geo.polygons.length) {
+        const bounds = L.polygon(geo.polygons).getBounds();
+        if (bounds.isValid()) _map && _map.fitBounds(bounds, { padding: [30, 30] });
+      }
+    }
+  }
+}
+
 // Returns the chain of ancestor boundaries from direct parent upward.
 // chain[0] = direct parent, chain[1] = grandparent, etc.
 function _getAncestorChain(kind, id) {
@@ -416,6 +548,35 @@ function _getAncestorChain(kind, id) {
   return chain;
 }
 
+function _renderChildren(boundary) {
+  const members = boundary.members || [];
+  if (members.length === 0) return '';
+  let html = `<div class="map-panel-section">Members (${members.length})</div>`;
+  for (const m of members) {
+    let name, typeChip;
+    if (m.kind === 'plot') {
+      const p = data.plots.find(x => x.id === m.id);
+      name     = p?.name ? esc(p.name) : '<em class="text-muted">Unnamed</em>';
+      typeChip = `<span class="map-panel-member-type" style="background:#475569">Plot</span>`;
+    } else {
+      const sub = data.boundaries.find(x => x.id === m.id);
+      const color = colorForBoundaryType(sub?.typeId);
+      const tName = getBoundaryTypeName(sub?.typeId);
+      name     = sub?.name ? esc(sub.name) : '<em class="text-muted">Unnamed</em>';
+      typeChip = `<span class="map-panel-member-type" style="background:${color}">${esc(tName)}</span>`;
+    }
+    html += `
+      <div class="map-panel-child"
+        onmouseenter="_hoverMapItem('${m.kind}','${m.id}')"
+        onmouseleave="_unhoverMapItem()"
+        onclick="_panelNavigateToChild('${m.kind}','${m.id}')">
+        ${typeChip}
+        <span class="map-panel-child-name">${name}</span>
+      </div>`;
+  }
+  return html;
+}
+
 function _renderMemberships(kind, id) {
   const ancestors = _getAncestorChain(kind, id);
   if (ancestors.length === 0) {
@@ -429,7 +590,7 @@ function _renderMemberships(kind, id) {
     html += `
       <div class="map-panel-membership">
         <span class="map-panel-member-label">${label}</span>
-        <a class="map-panel-member-link" onclick="openBoundaryDetail('${esc(b.id)}')">
+        <a class="map-panel-member-link" onclick="_panelNavigateToParent('${esc(b.id)}')">
           <span class="map-panel-member-type" style="background:${color}">${esc(typeName)}</span>
           ${b.name ? esc(b.name) : '<em>Unnamed</em>'}
         </a>
@@ -486,6 +647,7 @@ function renderMapSidePanel() {
           <textarea class="input map-panel-notes" onblur="_panelSaveNotes(this.value)"
             rows="3" placeholder="No notes">${esc(b.notes || '')}</textarea>
         </div>
+        ${_renderChildren(b)}
         ${_renderMemberships('boundary', b.id)}
         <button class="btn btn-sm btn-primary" style="width:100%;margin-top:4px"
           onclick="openBoundaryDetail('${esc(b.id)}')">Open full details</button>

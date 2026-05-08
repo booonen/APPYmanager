@@ -455,6 +455,14 @@ input[type="checkbox"]:checked::after {
   border-radius: 999px; color: #fff; font-weight: 500; white-space: nowrap;
 }
 .map-panel-membership-none { font-size: 12px; color: var(--text-muted); font-style: italic; }
+.map-panel-child {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 6px; border-radius: var(--radius-sm);
+  cursor: pointer; font-size: 12px; color: var(--text-dim);
+  transition: background var(--transition);
+}
+.map-panel-child:hover { background: var(--bg-hover); color: var(--text); }
+.map-panel-child-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ──────────────────────────────────────────────────────────────
    MAP TOOLBAR (Brick 6c) — type dropdown + drill breadcrumb
