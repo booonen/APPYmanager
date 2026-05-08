@@ -42,7 +42,7 @@ const PLOTS_TYPE_SENTINEL = '__plots__';
 function initMap() {
   const el = document.getElementById('map');
   if (!el) return;
-  if (_map) { _map.invalidateSize(); redrawMap(); return; }
+  if (_map) { _map.invalidateSize(); redrawMap(); startGeometryPrecompute(); return; }
 
   _map = L.map(el, {
     center: [0, 0],
@@ -81,6 +81,7 @@ function initMap() {
   });
 
   redrawMap();
+  startGeometryPrecompute();
 }
 
 // ============================================================
@@ -276,12 +277,13 @@ function _normalizeMapState() {
     if (data.boundaries.some(b => b.id === top.boundaryId)) break;
     _drillStack.pop();
   }
-  // Default the dropdown to the largest boundary type, or to "Plots" when
-  // no boundary types exist yet.
+  // Default to the Plots view so the map is immediately usable without
+  // waiting for boundary union work. The background precompute fills
+  // the geometry cache so switching the dropdown feels instant.
   const isKnownType = _mapCurrentTypeId === PLOTS_TYPE_SENTINEL
     || data.boundaryTypes.some(t => t.id === _mapCurrentTypeId);
   if (!isKnownType) {
-    _mapCurrentTypeId = _largestBoundaryTypeId() || PLOTS_TYPE_SENTINEL;
+    _mapCurrentTypeId = PLOTS_TYPE_SENTINEL;
   }
 }
 

@@ -316,25 +316,42 @@ function boundaryArea(boundary) {
 // change we just nuke the whole cache.
 
 let _boundaryGeomCache = new Map();
+let _precomputeInProgress = false;
+let _precomputeDebounce  = null;
 
 function invalidateBoundaryGeometry(boundaryId) {
   if (boundaryId) _boundaryGeomCache.delete(boundaryId);
   else _boundaryGeomCache.clear();
+  // Cancel any in-progress precompute and reschedule after mutations settle.
+  _precomputeInProgress = false;
+  clearTimeout(_precomputeDebounce);
+  _precomputeDebounce = setTimeout(startGeometryPrecompute, 300);
 }
 
+// Compute and cache boundary geometry, using already-cached child boundary
+// features rather than re-unioning every leaf plot. This makes Province
+// computation O(municipalities) instead of O(all constituent plots).
 function resolveBoundaryGeometry(boundary) {
   if (!boundary) return null;
   const cached = _boundaryGeomCache.get(boundary.id);
   if (cached !== undefined) return cached;
 
-  const plotIds = new Set(flattenBoundaryToPlotIds(boundary));
+  // Collect geometry for each direct member. For boundary members, recurse
+  // (which hits the cache when the child is already computed).
   const features = [];
-  for (const pid of plotIds) {
-    const p = data.plots.find(pp => pp.id === pid);
-    if (!p) continue;
-    const f = plotToGeoJSONFeature(p);
-    if (f) features.push(f);
+  for (const m of (boundary.members || [])) {
+    if (m.kind === 'plot') {
+      const p = data.plots.find(pp => pp.id === m.id);
+      if (p) { const f = plotToGeoJSONFeature(p); if (f) features.push(f); }
+    } else if (m.kind === 'boundary') {
+      const sub = data.boundaries.find(b => b.id === m.id);
+      if (sub) {
+        const subGeom = resolveBoundaryGeometry(sub);
+        if (subGeom?.feature) features.push(subGeom.feature);
+      }
+    }
   }
+
   if (features.length === 0) {
     _boundaryGeomCache.set(boundary.id, null);
     return null;
@@ -352,6 +369,50 @@ function resolveBoundaryGeometry(boundary) {
   const result = { polygons, feature: merged };
   _boundaryGeomCache.set(boundary.id, result);
   return result;
+}
+
+// ============================================================
+// BACKGROUND GEOMETRY PRECOMPUTE
+// ============================================================
+// Fills the geometry cache smallest-type-first so that by the time a
+// Province is computed its Municipality features are already cached —
+// the union then folds over a handful of merged polygons rather than
+// hundreds of raw plots.  Called once on map init and rescheduled
+// (debounced 300 ms) after every cache invalidation.
+
+function startGeometryPrecompute() {
+  if (_precomputeInProgress) return;
+  if (!data.boundaries || data.boundaries.length === 0) return;
+  _precomputeInProgress = true;
+
+  // _typesLargestFirst() lives in map.js (loaded after this file). Use it
+  // when available; fall back to insertion order (still correct, just
+  // possibly suboptimal ordering on first call before map.js is ready).
+  const types = (typeof _typesLargestFirst === 'function')
+    ? _typesLargestFirst()
+    : (data.boundaryTypes || []);
+  // types[0] = largest (Country), types[last] = smallest (Municipality).
+  // We want smallest first so children are cached before parents.
+  const typeRank = new Map(types.map((t, i) => [t.id, i]));
+
+  const queue = data.boundaries.slice().sort((a, b) => {
+    const ra = typeRank.get(a.typeId) ?? -1;
+    const rb = typeRank.get(b.typeId) ?? -1;
+    return rb - ra; // higher rank index = smaller type = earlier
+  });
+
+  let i = 0;
+  function step() {
+    if (!_precomputeInProgress) return; // cancelled by invalidation
+    const end = Math.min(i + 4, queue.length);
+    while (i < end) {
+      const b = queue[i++];
+      if (!_boundaryGeomCache.has(b.id)) resolveBoundaryGeometry(b);
+    }
+    if (i < queue.length) setTimeout(step, 0);
+    else _precomputeInProgress = false;
+  }
+  setTimeout(step, 50);
 }
 
 function _boundaryGeoJSONToLeafletPolygons(feature) {
