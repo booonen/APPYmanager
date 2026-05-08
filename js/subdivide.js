@@ -234,16 +234,24 @@ function computeSubdivisionPlan(candidates, nodes, ways) {
       continue;
     }
 
-    // Wrap branch: any fully-contained plots go here. Compute the gap (area
-    // of `c` not covered by ANY overlapping plot, wrapped or partial).
-    if (wrapped.length > 0) {
+    // Gap branch: compute the area of the candidate not covered by ANY
+    // overlapping plot (wrapped or partial). This captures both:
+    //   • the "absorbed wrappers + gap" case (wrapped.length > 0), and
+    //   • the "candidate extends into empty space" case (wrapped.length === 0
+    //     but candidate sticks out beyond the partial-overlap plots).
+    // Without this, partial-only imports silently lose the outside-existing
+    // region.
+    let gapFeature = null;
+    if (wrapped.length > 0 || partial.length > 0) {
       let gap = cFeature;
       for (const { pFeature } of [...wrapped, ...partial]) {
         if (!gap) break;
         if (!pFeature) continue;
         try { gap = turf.difference(gap, pFeature); } catch (_) { gap = null; break; }
       }
-      const gapFeature = (gap && turf.area(gap) >= REMAINDER_NOISE_FLOOR_M2) ? gap : null;
+      gapFeature = (gap && turf.area(gap) >= REMAINDER_NOISE_FLOOR_M2) ? gap : null;
+    }
+    if (wrapped.length > 0 || gapFeature) {
       wraps.push({
         candidate: c,
         wrappedPlots: wrapped.map(w => w.plot),
