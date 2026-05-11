@@ -304,73 +304,9 @@ which rules it implements but does not re-state them in full. Read the
   population lives everywhere. The "applies to" set is what makes
   boundary-only properties possible without polluting every plot's
   inspector with N/A rows.
-- **Brick 9c** *(deferred, scoped 2026-05-11, refined 2026-05-11)* —
-  **Calculated** property *source*. Source is a new axis on the schema,
-  orthogonal to Kind (numeric / categorical / percentage). Three
-  sources: `'manual'` (today's behaviour, value typed by user),
-  `'calculated'` (derived from a formula referencing other properties),
-  `'overpass'` (pulled from an Overpass query — Brick 9d). Default
-  `'manual'` for all existing schemas. Schema editor grows a "Source"
-  selector under Kind; source-conditional fields appear below.
-  **Mini-language sketch for `'calculated'`:**
-  - Refs: `{Property Name}` resolves per entity (plot / boundary). The
-    virtual area schema is referenced as `{Area}` — every entity (plot
-    or boundary) has one, no need to disambiguate "plot area" vs
-    "boundary area".
-  - Operators: `+ - * / ( )`; comparison `> < >= <= == !=`;
-    ternary `cond ? a else b`. (Using `else` instead of `:` to make
-    the branch boundary unambiguous — slightly unusual but more
-    readable than the C-style colon. No separate `if()` function — the
-    ternary covers it.)
-  - Functions:
-    - `min(a, b, …)`, `max(a, b, …)` — variadic.
-    - `abs(x)`.
-    - `sum(a, b, …)`, `avg(a, b, …)` — variadic numeric helpers.
-    - `round(value)` (to integer), `round(value, digits)` (to N
-      decimals, negative digits round to tens/hundreds — `round(4657,
-      -2) → 4700`). `ceil(x)`, `floor(x)`.
-  - Literals: numbers; `"strings"` for categorical outputs.
-  - Context refs we may want: `{my level}` for level-aware formulas.
-  - Example calculated numeric (density per km²):
-    `{Population} / ({Area} / 1000000)`
-  - Example calculated categorical:
-    `{Cows} > {Chickens} ? "cattle" else "poultry"`
-  - **Open question — short-name aliases.** Should `{Pop}` work as
-    shorthand for `Population`? Hardcoded aliases are fragile (user can
-    rename / delete `Population`). Better: each schema grows an
-    `aliases: string[]` field; the user declares short forms
-    themselves. Schema editor would surface this as an "Aliases"
-    text input. Refs in formulas resolve by name OR alias. Deferred
-    decision — open to just "name your schema 'Pop' if you want short
-    refs" instead, which is simpler.
-  - **Open question — `{{Property}}` name-of operator.** Idea: double
-    curlies return the schema *name* as a string literal, so formulas
-    like `{Cows} > {Chickens} ? {{Cows}} else {{Chickens}}` produce
-    `"Cows"` or `"Chickens"`. Useful when the output is categorical
-    derived from numeric comparisons. Alternative: `argmax(a, b)` /
-    `argmin(a, b)` return the *name* of the larger / smaller ref.
-    Both are workable; we'll pick when we build.
-  Cycle detection: extend the current `_propertyRefId` walker to walk
-  every `{…}` ref in the formula's parsed AST, not just the single
-  `weightPropertyId` / `denominatorPropertyId` pointer.
-  Boundary roll-up: a calculated value on a boundary is computed from
-  that boundary's resolved input properties — *not* aggregated from
-  children. (i.e. density is computed from boundary's population and
-  boundary's area, not summed from children's densities.)
-- **Brick 9d** *(deferred, scoped 2026-05-11)* — **Overpass-derived**
-  property source. Per-property query template; spatial filter binds
-  to the entity's polygon via Overpass `poly:` form (`{{geometry}}`
-  placeholder substituted at fetch time). Result reduction: an
-  "aggregator" picker — `count` / `sum of tag` / `average of tag` /
-  `first tag value`. Manual "Refresh values" button on the schema;
-  results cached alongside the property value (no auto-refresh).
-  Counts against the existing Overpass rate-limit budget. Boundary
-  roll-up: same default as manual — sum / weighted-avg per the
-  schema's aggregation rule, *unless* the schema opts into "refetch
-  for boundary geometry" (treat the boundary's own polygon as the
-  query target instead of summing children).
-  Both 9c and 9d will likely justify a "Derived properties" subsection
-  in the Properties tab — to be designed when we pick them up.
+  *(Calculated and Overpass-derived property sources — formerly
+  scoped here as Brick 9c / 9d — were moved to Phase 8 in the
+  2026-05-11 plan refresh. See below.)*
 
 ### Phase 4 — Plot operations
 
@@ -422,6 +358,87 @@ which rules it implements but does not re-state them in full. Read the
   11), look up residential ways/relations inside the plot and
   ratio-split their estimated population between the two new plots
   by area.
+
+### Phase 8 — Derived properties
+
+By this point the user has weeks of real mapping behind them with
+manual property values, plus boundary aggregation (10), choropleth
+(13), the issues panel (14), the OGF round-trip (15/16), and the
+population estimator (17). That's enough usage signal to design the
+derived-property layer concretely instead of in a vacuum.
+
+Both bricks share a new **Source** axis on the property schema:
+`'manual'` (today's behaviour), `'overpass'`, `'calculated'`. The
+schema editor grows a Source selector under Kind with source-
+conditional fields below. Likely a dedicated "Derived properties"
+subsection in the Properties tab once both have landed.
+
+- **Brick 18** *(was Brick 9d)* — **Overpass-derived** property
+  source. Built first because it's technically simpler (no language
+  design) and its per-entity value cache is something Brick 19 will
+  reuse. Per-property query template; spatial filter binds to the
+  entity's polygon via Overpass `poly:` form (`{{geometry}}`
+  placeholder substituted at fetch time). Result reduction: an
+  "aggregator" picker — `count` / `sum of tag` / `average of tag` /
+  `first tag value`. Manual "Refresh values" button on the schema;
+  results cached alongside the property value (no auto-refresh).
+  Counts against the existing Overpass rate-limit budget. Boundary
+  roll-up: same default as manual — sum / weighted-avg per the
+  schema's aggregation rule, *unless* the schema opts into "refetch
+  for boundary geometry" (treat the boundary's own polygon as the
+  query target instead of summing children).
+- **Brick 19** *(was Brick 9c)* — **Calculated** property source. A
+  property whose value is derived from a small expression referencing
+  other properties.
+  **Mini-language sketch:**
+  - Refs: `{Property Name}` resolves per entity (plot / boundary).
+    The virtual area schema is referenced as `{Area}` — every entity
+    has one, no need to disambiguate "plot area" vs "boundary area".
+  - Operators: `+ - * / ( )`; comparison `> < >= <= == !=`;
+    ternary `cond ? a else b`. (Using `else` instead of `:` to make
+    the branch boundary unambiguous — slightly unusual but more
+    readable than the C-style colon. No separate `if()` function —
+    the ternary covers it.)
+  - Functions:
+    - `min(a, b, …)`, `max(a, b, …)` — variadic.
+    - `abs(x)`.
+    - `sum(a, b, …)`, `avg(a, b, …)` — variadic numeric helpers.
+    - `round(value)` (to integer), `round(value, digits)` (to N
+      decimals, negative digits round to tens/hundreds — `round(4657,
+      -2) → 4700`). `ceil(x)`, `floor(x)`.
+  - Literals: numbers; `"strings"` for categorical outputs.
+  - Context refs we may want: `{my level}` for level-aware formulas.
+  - Example calculated numeric (density per km²):
+    `{Population} / ({Area} / 1000000)`
+  - Example calculated categorical:
+    `{Cows} > {Chickens} ? "cattle" else "poultry"`
+  - **Open question — short-name aliases.** Should `{Pop}` work as
+    shorthand for `Population`? Hardcoded aliases are fragile (user
+    can rename / delete `Population`). Better: each schema grows an
+    `aliases: string[]` field; the user declares short forms
+    themselves. Schema editor would surface this as an "Aliases"
+    text input. Refs in formulas resolve by name OR alias. Deferred
+    decision — open to just "name your schema 'Pop' if you want
+    short refs" instead, which is simpler.
+  - **Open question — `{{Property}}` name-of operator.** Idea:
+    double curlies return the schema *name* as a string literal, so
+    formulas like `{Cows} > {Chickens} ? {{Cows}} else {{Chickens}}`
+    produce `"Cows"` or `"Chickens"`. Useful when the output is
+    categorical derived from numeric comparisons. Alternative:
+    `argmax(a, b)` / `argmin(a, b)` return the *name* of the larger
+    / smaller ref. Both are workable; we'll pick when we build.
+  Cycle detection: extend the current `_propertyRefId` walker to walk
+  every `{…}` ref in the formula's parsed AST, not just the single
+  `weightPropertyId` / `denominatorPropertyId` pointer.
+  Boundary roll-up: a calculated value on a boundary is computed from
+  that boundary's resolved input properties — *not* aggregated from
+  children. (i.e. density is computed from boundary's population and
+  boundary's area, not summed from children's densities.)
+  Synergy with Brick 17: the population estimator's density-preset
+  logic is itself an early "calculated" use case. By building 17
+  first we get a concrete worked example informing the language; by
+  building 19 after we can optionally re-express 17's bootstrap as
+  a built-in calculated formula.
 
 ### Deferred (post-MVP)
 
