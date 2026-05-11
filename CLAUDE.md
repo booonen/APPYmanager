@@ -741,3 +741,43 @@ they come up; the plan is a living document.
   `rootLevelId: 'plot'` explicitly on Population + Predominant
   language. No boundary-side rendering or aggregation yet — that's
   Brick 10b / 10c.
+
+### Phase 3 — Properties — **complete** (2026-05-11)
+
+Bricks 8, 9, 10 are in. The properties pipeline runs end-to-end:
+schema editor → values on plots → values on boundaries → aggregation
+with override + mismatch flags. The central issues panel listing
+project-wide flags is Brick 14's job; that's the only thing
+referencing back at this layer.
+
+**Open questions for Phase 4 (plot operations)** — flagged here so
+they're visible when we kick off Brick 11:
+
+- **Plot split + numeric property redistribution.** Plan says
+  "area-proportional split with manual override." Need a UI that
+  shows the proposed split and lets the user tweak before commit.
+  Easy for `sum`-aggregated numerics; less obvious for
+  weighted-averages.
+- **Plot split + percentage property.** A `% Urban` value of 30%
+  on a plot, after a cut that puts a city in the right half and
+  fields in the left — the percentages on the two new plots are NOT
+  30% each. Either we (a) ask the user to set both sides, (b) default
+  to keeping the percent and silently re-deriving raw from the
+  smaller plot's denom, or (c) try to be clever about which side the
+  urbanised area is on. (b) is the simplest correct default; (c)
+  is hard without semantic data.
+- **Plot split + boundary aggregation.** When a plot splits into
+  two, parent boundaries still need to reference the right plots
+  in their `members` list. The split flow has to rewrite member
+  references (parent ends up with both halves instead of the
+  original). Aggregation re-runs naturally after that.
+- **Land/water split (Brick 12).** Plan says "Properties can be set
+  independently on land vs. water portions when the split is on."
+  That's effectively a third axis on top of (entity, schema).
+  Likely needs storage like `propertyValuesLand` /
+  `propertyValuesWater` and adjustment to the inspectors + the
+  aggregation engine. Worth scoping properly before building.
+
+None of these block 10c's correctness — they're design calls for
+when we get to Phase 4. Filed here so future-Claude doesn't
+rediscover them cold.
