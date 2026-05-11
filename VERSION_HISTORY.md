@@ -1,3 +1,34 @@
+## 0.4.0 — Brick 9: Property values on plots
+- Plot detail modal gains a **Properties** section listing every
+  property schema with a kind-appropriate input. Auto-saves on blur
+  (numeric / categorical) or live as you type (percentage).
+- Storage: `plot.propertyValues = { [schemaId]: <value> }`. Shape per
+  kind:
+  - **numeric** → bare number
+  - **categorical** → bare string
+  - **percentage** → `{ mode: 'raw' | 'percent', value: number }`
+- **Percentage UX** (the load-bearing piece): two inputs side by side.
+  Type into either the raw amount or the %, and the other side derives
+  live from the denominator's current value on this plot. Whichever
+  side the user typed is the "source of truth"; the other re-derives.
+  Changing the denominator's value updates the derived side while
+  preserving the source. The source input is accented so the user can
+  see which side is authoritative at a glance.
+- Percentage row also surfaces context: schema name + unit chip,
+  denominator name and current value, plus a warning if the
+  denominator schema isn't set on this plot yet.
+- New helpers in `js/properties.js`: `getPlotPropertyValue` /
+  `setPlotPropertyValue` / `clearPlotPropertyValue`,
+  `resolveNumericValueForPlot`, `derivePercentageDisplay`,
+  `formatPropertyNumber`.
+- **Cascade cleanup**: `deletePropertySchema` now walks all plots and
+  drops any stored value for the deleted schema (no orphan entries).
+  Boundary values arrive in Brick 10 — extend then.
+- New CSS block (`.plot-property-row` / `.plot-property-input-percent`)
+  and a `.plot-detail-section-label` to label the new section.
+- Empty input deletes the value entirely; the modal will never persist
+  a `''` or `NaN` placeholder.
+
 ## 0.3.0 — Brick 8: Property schema editor
 - New "Properties" tab in the Geography section (after Settlements,
   before Map). Lists every property schema with Name / Kind /

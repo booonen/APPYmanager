@@ -201,7 +201,16 @@ registerLanguage('en', 'English', {
     "flag_subdivision_remainder": "Subdivision remainder — review recommended (merge, accept, or re-split).",
     "delete_btn": "Delete plot",
     "confirm_delete": "Delete plot \"{name}\"?\nThis cannot be undone.",
-    "deleted_toast": "Deleted \"{name}\""
+    "deleted_toast": "Deleted \"{name}\"",
+    "properties_label": "Properties",
+    "properties_empty": "No properties defined.",
+    "properties_empty_link": "Define some →",
+    "property_empty_placeholder": "(empty)",
+    "property_raw_placeholder": "raw",
+    "property_percent_placeholder": "%",
+    "property_no_denominator": "No denominator property set on this schema — values can't be linked.",
+    "property_denominator_unset": "{name} is not set on this plot — values won't link until it is.",
+    "property_denominator_of": "of {name} = {value}"
   },
   "boundary_types": {
     "hierarchy_title": "Hierarchy",

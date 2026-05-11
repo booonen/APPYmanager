@@ -2086,6 +2086,10 @@ function openPlotDetail(plotId) {
         placeholder="${t('plot_detail.notes_placeholder')}"
         onblur="onPlotDetailSave()">${esc(plot.notes || '')}</textarea>
     </div>
+    <div class="plot-detail-properties-section">
+      <div class="plot-detail-section-label">${t('plot_detail.properties_label')}</div>
+      <div id="plot-detail-properties">${_renderPlotPropertyRows(plot)}</div>
+    </div>
     <div class="plot-detail-meta">
       <div>
         <div class="plot-detail-meta-label">${t('plot_detail.ogf_id')}</div>
@@ -2158,6 +2162,238 @@ function closePlotDetail() {
   _detailPlotId = null;
   destroyDetailMap();
   closeModal();
+}
+
+// ============================================================
+// PLOT PROPERTY VALUE ENTRY (Brick 9)
+// ============================================================
+// Renders one row per property schema inside the plot detail modal,
+// with a kind-appropriate input:
+//   - numeric:     <input type="number">
+//   - categorical: <input type="text">
+//   - percentage:  two inputs (raw + percent) linked live; the side
+//                  the user typed becomes the "source of truth" and
+//                  is what we persist; the other side is derived from
+//                  the current denominator value.
+//
+// Auto-save fires on blur (numeric / categorical) or on each keystroke
+// (percentage — so the linked field can update live).  Empty inputs
+// delete the value entirely.
+
+function _renderPlotPropertyRows(plot) {
+  const schemas = (data.propertySchemas || []).slice().sort((a, b) =>
+    (a.name || '').localeCompare(b.name || '')
+  );
+  if (schemas.length === 0) {
+    return `<div class="text-dim" style="font-size:12px;padding:8px 0">
+      ${t('plot_detail.properties_empty')}
+      <a href="javascript:void(0)" onclick="closePlotDetail();switchTab('properties')">${t('plot_detail.properties_empty_link')}</a>
+    </div>`;
+  }
+  return schemas.map(schema => _renderPlotPropertyRow(plot, schema)).join('');
+}
+
+function _renderPlotPropertyRow(plot, schema) {
+  const stored = getPlotPropertyValue(plot, schema.id);
+  const unitChip = schema.unit
+    ? `<span class="property-unit-chip">${esc(schema.unit)}</span>`
+    : '';
+  const label = `<div class="plot-property-label">
+    <span class="plot-property-name">${esc(schema.name)}</span>${unitChip}
+  </div>`;
+
+  if (schema.kind === 'numeric') {
+    const val = stored != null && stored !== '' ? esc(String(stored)) : '';
+    return `<div class="plot-property-row">
+      ${label}
+      <div class="plot-property-input">
+        <input type="number" step="any" data-schema-id="${esc(schema.id)}" data-kind="numeric"
+          value="${val}" placeholder="${t('plot_detail.property_empty_placeholder')}"
+          onblur="onPlotPropertyBlur(this)">
+      </div>
+    </div>`;
+  }
+
+  if (schema.kind === 'categorical') {
+    const val = typeof stored === 'string' ? esc(stored) : '';
+    return `<div class="plot-property-row">
+      ${label}
+      <div class="plot-property-input">
+        <input type="text" data-schema-id="${esc(schema.id)}" data-kind="categorical"
+          value="${val}" placeholder="${t('plot_detail.property_empty_placeholder')}"
+          onblur="onPlotPropertyBlur(this)">
+      </div>
+    </div>`;
+  }
+
+  if (schema.kind === 'percentage') {
+    const display = derivePercentageDisplay(plot, schema, stored);
+    const denomName = display.denomSchema?.name || '';
+    const denomUnit = display.denomSchema?.unit || '';
+    const denomUnitTxt = denomUnit ? ` ${denomUnit}` : '';
+    const rawSourceIsRaw = stored?.mode === 'raw';
+    const rawSourceIsPct = stored?.mode === 'percent';
+    const rawVal = display.raw    != null ? formatPropertyNumber(display.raw)    : '';
+    const pctVal = display.percent != null ? formatPropertyNumber(display.percent) : '';
+    const noDenomNote = !display.denomSchema
+      ? `<div class="plot-property-warning">${t('plot_detail.property_no_denominator')}</div>`
+      : (display.denomVal == null
+          ? `<div class="plot-property-hint">${t('plot_detail.property_denominator_unset', { name: esc(denomName) })}</div>`
+          : `<div class="plot-property-hint">${t('plot_detail.property_denominator_of', {
+              name: esc(denomName),
+              value: formatPropertyNumber(display.denomVal) + esc(denomUnitTxt)
+            })}</div>`);
+
+    return `<div class="plot-property-row plot-property-row-percent">
+      ${label}
+      <div class="plot-property-input plot-property-input-percent">
+        <input type="number" step="any"
+          data-schema-id="${esc(schema.id)}" data-kind="percentage" data-mode="raw"
+          value="${rawVal}" placeholder="${t('plot_detail.property_raw_placeholder')}"
+          ${rawSourceIsRaw ? 'data-source="1"' : ''}
+          oninput="onPlotPropertyPercentInput(this)"
+          onblur="onPlotPropertyPercentBlur(this)">
+        <span class="plot-property-eq">${esc(denomUnit) || '·'}</span>
+        <input type="number" step="any"
+          data-schema-id="${esc(schema.id)}" data-kind="percentage" data-mode="percent"
+          value="${pctVal}" placeholder="${t('plot_detail.property_percent_placeholder')}"
+          ${rawSourceIsPct ? 'data-source="1"' : ''}
+          oninput="onPlotPropertyPercentInput(this)"
+          onblur="onPlotPropertyPercentBlur(this)">
+        <span class="plot-property-eq">%</span>
+        ${noDenomNote}
+      </div>
+    </div>`;
+  }
+  return '';
+}
+
+// Re-render every percentage row whose schema depends on `changedSchemaId`
+// as its denominator. Used after a numeric value changes — the dependent
+// percentage rows recompute their derived side without disturbing the
+// source side. We re-render *only* the dependent percentage rows so the
+// numeric/categorical inputs and focus state of the row the user just
+// edited stay intact.
+function _refreshDependentPercentageRows(changedSchemaId) {
+  if (!_detailPlotId) return;
+  const plot = data.plots.find(p => p.id === _detailPlotId);
+  if (!plot) return;
+  const dependents = (data.propertySchemas || []).filter(s =>
+    s.kind === 'percentage' && s.denominatorPropertyId === changedSchemaId
+  );
+  for (const dep of dependents) {
+    const rawInput = document.querySelector(
+      `#plot-detail-properties input[data-schema-id="${dep.id}"][data-mode="raw"]`
+    );
+    const pctInput = document.querySelector(
+      `#plot-detail-properties input[data-schema-id="${dep.id}"][data-mode="percent"]`
+    );
+    if (!rawInput || !pctInput) continue;
+    const stored = getPlotPropertyValue(plot, dep.id);
+    const display = derivePercentageDisplay(plot, dep, stored);
+    // Update the derived side only; leave the source side alone.
+    if (stored?.mode === 'raw') {
+      pctInput.value = display.percent != null ? formatPropertyNumber(display.percent) : '';
+    } else if (stored?.mode === 'percent') {
+      rawInput.value = display.raw != null ? formatPropertyNumber(display.raw) : '';
+    } else {
+      // Nothing stored — both sides empty, but if the denominator now has
+      // a value the user can type into either side.
+      rawInput.value = '';
+      pctInput.value = '';
+    }
+  }
+}
+
+function onPlotPropertyBlur(inputEl) {
+  if (!_detailPlotId) return;
+  const plot = data.plots.find(p => p.id === _detailPlotId);
+  if (!plot) return;
+  const schemaId = inputEl.dataset.schemaId;
+  const kind = inputEl.dataset.kind;
+  const raw = inputEl.value;
+
+  if (kind === 'numeric') {
+    if (raw === '' || raw == null) {
+      clearPlotPropertyValue(plot, schemaId);
+    } else {
+      const n = Number(raw);
+      if (!Number.isFinite(n)) return; // invalid — leave previous value alone
+      setPlotPropertyValue(plot, schemaId, n);
+    }
+    save();
+    _refreshDependentPercentageRows(schemaId);
+  } else if (kind === 'categorical') {
+    if (raw === '' || raw == null) {
+      clearPlotPropertyValue(plot, schemaId);
+    } else {
+      setPlotPropertyValue(plot, schemaId, raw);
+    }
+    save();
+  }
+}
+
+// Percentage input — live-link the two fields. Each keystroke in one
+// field updates the other field's value AND updates storage with the
+// new source (mode + value).  An empty field deletes the value entirely
+// and clears the linked field too.
+function onPlotPropertyPercentInput(inputEl) {
+  if (!_detailPlotId) return;
+  const plot = data.plots.find(p => p.id === _detailPlotId);
+  if (!plot) return;
+  const schemaId = inputEl.dataset.schemaId;
+  const mode = inputEl.dataset.mode; // 'raw' | 'percent'
+  const schema = findPropertySchema(schemaId);
+  if (!schema) return;
+  const raw = inputEl.value;
+
+  // Empty input → clear both sides and storage.
+  if (raw === '' || raw == null) {
+    clearPlotPropertyValue(plot, schemaId);
+    const otherMode = mode === 'raw' ? 'percent' : 'raw';
+    const otherInput = document.querySelector(
+      `#plot-detail-properties input[data-schema-id="${schemaId}"][data-mode="${otherMode}"]`
+    );
+    if (otherInput) otherInput.value = '';
+    // Reset source attribute on both inputs.
+    document.querySelectorAll(
+      `#plot-detail-properties input[data-schema-id="${schemaId}"]`
+    ).forEach(el => el.removeAttribute('data-source'));
+    save();
+    return;
+  }
+
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return; // invalid — leave alone
+
+  setPlotPropertyValue(plot, schemaId, { mode, value: n });
+  // Mark this input as source, clear source on its sibling.
+  document.querySelectorAll(
+    `#plot-detail-properties input[data-schema-id="${schemaId}"]`
+  ).forEach(el => {
+    if (el === inputEl) el.setAttribute('data-source', '1');
+    else el.removeAttribute('data-source');
+  });
+
+  // Recompute the derived sibling.
+  const display = derivePercentageDisplay(plot, schema, { mode, value: n });
+  const siblingMode = mode === 'raw' ? 'percent' : 'raw';
+  const sibling = document.querySelector(
+    `#plot-detail-properties input[data-schema-id="${schemaId}"][data-mode="${siblingMode}"]`
+  );
+  if (sibling) {
+    const derived = siblingMode === 'raw' ? display.raw : display.percent;
+    sibling.value = derived != null ? formatPropertyNumber(derived) : '';
+  }
+  save();
+}
+
+// Percentage blur — save() is already called inside the input handler
+// for every keystroke (debounced 300 ms by save()), so blur is just a
+// belt-and-braces flush in case focus loss happens without a final
+// input event.
+function onPlotPropertyPercentBlur(_inputEl) {
+  save();
 }
 
 // ============================================================

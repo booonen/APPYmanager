@@ -401,6 +401,52 @@ input[type="checkbox"]:checked::after {
 .plot-flag-icon { flex-shrink: 0; }
 
 /* ============================================================
+   PLOT PROPERTY VALUES (Brick 9)
+   ============================================================ */
+.plot-detail-properties-section { margin: 14px 0 12px; }
+.plot-detail-section-label {
+  font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--text-muted); margin-bottom: 8px;
+}
+.plot-property-row {
+  display: grid; grid-template-columns: minmax(160px, 220px) 1fr;
+  gap: 12px; align-items: center;
+  padding: 6px 0; border-bottom: 1px solid var(--border);
+}
+.plot-property-row:last-child { border-bottom: none; }
+.plot-property-row-percent { align-items: flex-start; padding: 8px 0; }
+.plot-property-label { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.plot-property-name {
+  font-size: 13px; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.property-unit-chip {
+  font-size: 10px; color: var(--text-muted); background: var(--bg-input);
+  padding: 1px 6px; border-radius: 10px; flex-shrink: 0; font-family: var(--font-mono);
+}
+.plot-property-input input[type="text"],
+.plot-property-input input[type="number"] {
+  width: 100%; box-sizing: border-box;
+}
+.plot-property-input-percent {
+  display: grid; grid-template-columns: 1fr auto 1fr auto;
+  gap: 6px; align-items: center;
+}
+.plot-property-input-percent .plot-property-eq {
+  font-size: 11px; color: var(--text-muted); font-family: var(--font-mono);
+  min-width: 1.5em; text-align: center;
+}
+.plot-property-input-percent input[data-source="1"] {
+  border-color: var(--accent);
+}
+.plot-property-hint {
+  grid-column: 1 / -1; font-size: 11px; color: var(--text-dim); margin-top: 2px;
+}
+.plot-property-warning {
+  grid-column: 1 / -1; font-size: 11px; color: var(--warn); margin-top: 2px;
+}
+
+/* ============================================================
    BOUNDARIES (Brick 6a)
    ============================================================ */
 .boundary-members-section {

@@ -471,3 +471,17 @@ they come up; the plan is a living document.
   Predominant language (categorical/no-rollup) — chosen lean so the
   list isn't empty but every other property is user-defined. No plot
   values yet (Brick 9), no boundary aggregation yet (Brick 10).
+- **Brick 9** ✓ (PR open on `claude/brick-8-start-qJz0D`) — property
+  values on plots. Plot detail modal grew a **Properties** section
+  with one row per schema. Numeric / categorical rows = single input
+  with auto-save on blur. Percentage rows = two inputs (raw + %)
+  linked live: typing in either updates the other from the current
+  denominator value, the typed side is recorded as the "source of
+  truth" (`{ mode, value }`), and changes to the denominator preserve
+  the source while re-deriving the linked side. Source input is
+  accent-bordered so it's obvious which side is authoritative.
+  Storage on plot.propertyValues keyed by schema id: bare number /
+  bare string / `{ mode: 'raw' \| 'percent', value }`. Empty input
+  deletes the entry (no `''`/NaN persisted). `deletePropertySchema`
+  now cascades to clear every plot's value for the deleted schema.
+  Boundary user-set values + the override semantics arrive in Brick 10.
