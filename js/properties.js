@@ -118,12 +118,17 @@ function createPropertySchema({ name, unit, kind, notes,
 function deletePropertySchema(id) {
   if (!data.propertySchemas) return;
   data.propertySchemas = data.propertySchemas.filter(p => p.id !== id);
-  // Cascade: drop any plot's stored value for this schema so we don't
-  // leave orphan entries hanging around. Boundary values arrive in
-  // Brick 10 — extend this loop then.
+  // Cascade: drop any stored value for this schema across plots AND
+  // boundaries (Brick 10b) so we don't leave orphan entries hanging
+  // around.
   for (const plot of (data.plots || [])) {
     if (plot.propertyValues && plot.propertyValues[id] !== undefined) {
       delete plot.propertyValues[id];
+    }
+  }
+  for (const b of (data.boundaries || [])) {
+    if (b.propertyValues && b.propertyValues[id] !== undefined) {
+      delete b.propertyValues[id];
     }
   }
 }
@@ -271,6 +276,64 @@ function clearPlotPropertyValue(plot, schemaId) {
   delete plot.propertyValues[schemaId];
 }
 
+// ============================================================
+// BOUNDARY VALUES (Brick 10b)
+// ============================================================
+// Boundaries carry property values in the same shape as plots:
+// `boundary.propertyValues` keyed by schema id, values are bare numbers
+// (numeric), bare strings (categorical), or `{ mode, value }` objects
+// (percentage). Helpers mirror the plot ones one-for-one.
+//
+// The aggregation engine — rolling up plot/sub-boundary values onto
+// parent boundaries with override detection — is Brick 10c. 10b is
+// purely user-set storage on boundaries.
+
+function getBoundaryPropertyValue(boundary, schemaId) {
+  if (!boundary || !boundary.propertyValues) return undefined;
+  return boundary.propertyValues[schemaId];
+}
+
+function setBoundaryPropertyValue(boundary, schemaId, value) {
+  if (!boundary) return;
+  boundary.propertyValues = boundary.propertyValues || {};
+  boundary.propertyValues[schemaId] = value;
+}
+
+function clearBoundaryPropertyValue(boundary, schemaId) {
+  if (!boundary?.propertyValues) return;
+  delete boundary.propertyValues[schemaId];
+}
+
+// Does `schema` apply to entities at `levelId`?  Rule (from Brick 10a):
+// applies iff `levelId === schema.rootLevelId` OR `schema.rootLevelId` is
+// reachable from `levelId` downward through the primitiveId chain.
+//
+// `levelId` is `'plot'` for plot entities or a boundary-type id for
+// boundary entities. Plot-rooted schemas apply at every boundary level
+// (every chain terminates at plot/null), but boundary-rooted schemas
+// only apply at their own level and above.
+function appliesAtLevel(schema, levelId) {
+  if (!schema) return false;
+  const root = schema.rootLevelId || 'plot';
+  if (root === levelId) return true;
+  if (levelId === 'plot') return false; // plot has no levels below it
+  let cur = (data.boundaryTypes || []).find(t => t.id === levelId);
+  if (!cur) return false;
+  const seen = new Set();
+  while (cur) {
+    if (seen.has(cur.id)) return false; // cycle guard (shouldn't happen)
+    seen.add(cur.id);
+    const next = cur.primitiveId;
+    if (next === null || next === undefined) {
+      // Reached the implicit-plot terminal — only plot-rooted schemas qualify.
+      return root === 'plot';
+    }
+    if (next === root) return true;
+    cur = (data.boundaryTypes || []).find(t => t.id === next);
+  }
+  return false;
+}
+
 // Numeric resolver: returns a finite number if the plot has a usable
 // numeric value for `schema`, otherwise null. Handles legacy bare
 // numbers and the percentage value shape (which carries `value` and
@@ -310,6 +373,63 @@ function resolveNumericValueForPlot(plot, schema) {
     return _maybeRound((pct / 100) * denomVal, schema);
   }
   return null;
+}
+
+// Boundary-side parallels of resolveNumericValueForPlot and
+// derivePercentageDisplay. Same shape, swap plot helpers for boundary
+// helpers and `plotArea` for `boundaryArea`. The two pairs are kept
+// separate (rather than DRY'd through a context-passing refactor) so
+// the existing plot inspector code keeps its proven hot paths.
+
+function resolveNumericValueForBoundary(boundary, schema) {
+  if (!boundary || !schema) return null;
+  if (schema.id === AREA_VIRTUAL_ID) {
+    const a = (typeof boundaryArea === 'function') ? boundaryArea(boundary) : 0;
+    return Number.isFinite(a) ? _maybeRound(a, schema) : null;
+  }
+  const raw = getBoundaryPropertyValue(boundary, schema.id);
+  if (raw === undefined || raw === null || raw === '') return null;
+  if (schema.kind === 'numeric') {
+    const n = Number(raw);
+    return Number.isFinite(n) ? _maybeRound(n, schema) : null;
+  }
+  if (schema.kind === 'percentage') {
+    if (typeof raw !== 'object') return null;
+    if (raw.mode === 'raw') {
+      const n = Number(raw.value);
+      return Number.isFinite(n) ? _maybeRound(n, schema) : null;
+    }
+    const denomSchema = findPropertySchema(schema.denominatorPropertyId);
+    if (!denomSchema) return null;
+    const denomVal = resolveNumericValueForBoundary(boundary, denomSchema);
+    if (denomVal == null) return null;
+    const pct = Number(raw.value);
+    if (!Number.isFinite(pct)) return null;
+    return _maybeRound((pct / 100) * denomVal, schema);
+  }
+  return null;
+}
+
+function derivePercentageDisplayForBoundary(boundary, schema, storedValue) {
+  if (!schema || schema.kind !== 'percentage') return { raw: null, percent: null };
+  const denomSchema = findPropertySchema(schema.denominatorPropertyId);
+  const denomVal = denomSchema ? resolveNumericValueForBoundary(boundary, denomSchema) : null;
+  let raw = null;
+  let percent = null;
+  if (storedValue && typeof storedValue === 'object') {
+    const v = Number(storedValue.value);
+    if (Number.isFinite(v)) {
+      if (storedValue.mode === 'raw') {
+        raw = v;
+        if (denomVal != null && denomVal !== 0) percent = (v / denomVal) * 100;
+      } else if (storedValue.mode === 'percent') {
+        percent = v;
+        if (denomVal != null) raw = (v / 100) * denomVal;
+      }
+    }
+  }
+  raw = _maybeRound(raw, schema);
+  return { raw, percent, denomVal, denomSchema };
 }
 
 // Compute the "other side" of a percentage value given the current

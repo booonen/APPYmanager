@@ -1332,6 +1332,10 @@ function openBoundaryDetail(boundaryId) {
         placeholder="${t('boundary_detail.notes_placeholder')}"
         onblur="onBoundaryDetailSave()">${esc(b.notes || '')}</textarea>
     </div>
+    <div class="plot-detail-properties-section">
+      <div class="plot-detail-section-label">${t('plot_detail.properties_label')}</div>
+      <div id="boundary-detail-properties">${_renderBoundaryPropertyRows(b)}</div>
+    </div>
     <div class="plot-detail-meta">
       <div>
         <div class="plot-detail-meta-label">${t('boundary_detail.type')}</div>
@@ -2208,12 +2212,13 @@ function closePlotDetail() {
 // delete the value entirely.
 
 function _renderPlotPropertyRows(plot) {
-  // Plot inspector only shows schemas rooted at 'plot' — anything
-  // rooted at a boundary type doesn't apply here. The "empty" message
+  // Plot inspector shows schemas where `appliesAtLevel(s, 'plot')` is
+  // true — currently equivalent to "rooted at 'plot'" but uses the
+  // generic helper so the rule lives in one place. The "empty" message
   // refers to the unfiltered list so users don't get a misleading
   // "no properties" when they've only got boundary-only schemas.
   const allSchemas = data.propertySchemas || [];
-  const schemas = allSchemas.filter(s => (s.rootLevelId || 'plot') === 'plot');
+  const schemas = allSchemas.filter(s => appliesAtLevel(s, 'plot'));
   if (allSchemas.length === 0) {
     return `<div class="text-dim" style="font-size:12px;padding:8px 0">
       ${t('plot_detail.properties_empty')}
@@ -2398,13 +2403,195 @@ function _renderPlotPropertyRow(plot, schema, isNested) {
   return '';
 }
 
-// Distinct non-empty categorical values seen across all plots for the
-// given schema. Drives the typeahead's suggestions on categorical
-// rows — fights typos when reusing the same category across plots.
+// ============================================================
+// BOUNDARY INSPECTOR — property rows (Brick 10b)
+// ============================================================
+// Mirrors the plot inspector functions one-for-one, swapping plot
+// helpers for boundary helpers. The DOM container is
+// `#boundary-detail-properties` and state lives on `_boundaryDetailId`.
+// No aggregation engine yet — values entered here are purely user-set.
+// Roll-up + override flags arrive in Brick 10c.
+
+function _renderBoundaryPropertyRows(boundary) {
+  if (!boundary) return '';
+  const allSchemas = data.propertySchemas || [];
+  const schemas = allSchemas.filter(s => appliesAtLevel(s, boundary.typeId));
+  if (allSchemas.length === 0) {
+    return `<div class="text-dim" style="font-size:12px;padding:8px 0">
+      ${t('plot_detail.properties_empty')}
+      <a href="javascript:void(0)" onclick="closeBoundaryDetail();switchTab('properties')">${t('plot_detail.properties_empty_link')}</a>
+    </div>`;
+  }
+  if (schemas.length === 0) {
+    return `<div class="text-dim" style="font-size:12px;padding:8px 0">
+      ${t('boundary_detail.properties_none_apply')}
+    </div>`;
+  }
+
+  // Group percentage schemas by their denominator id, exactly as on plots.
+  const childrenByDenom = new Map();
+  const orphans = [];
+  for (const s of schemas) {
+    if (s.kind !== 'percentage') continue;
+    const denomId = s.denominatorPropertyId;
+    let valid = false;
+    if (denomId) {
+      if (isVirtualPropertyId(denomId)) valid = true;
+      else if ((data.propertySchemas || []).some(x => x.id === denomId)) valid = true;
+    }
+    if (!valid) { orphans.push(s); continue; }
+    if (!childrenByDenom.has(denomId)) childrenByDenom.set(denomId, []);
+    childrenByDenom.get(denomId).push(s);
+  }
+  for (const arr of childrenByDenom.values()) {
+    arr.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  }
+
+  const renderChildren = (parentId, ancestors) => {
+    if (ancestors.has(parentId)) return '';
+    const next = new Set(ancestors);
+    next.add(parentId);
+    let h = '';
+    for (const pct of (childrenByDenom.get(parentId) || [])) {
+      h += _renderBoundaryPropertyRow(boundary, pct, true);
+      h += renderChildren(pct.id, next);
+    }
+    return h;
+  };
+
+  const numerics    = schemas.filter(s => s.kind === 'numeric')
+                             .slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  const categorical = schemas.filter(s => s.kind === 'categorical')
+                             .slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+
+  let html = '';
+  html += _renderBoundaryAreaRow(boundary);
+  html += renderChildren(AREA_VIRTUAL_ID, new Set());
+  for (const num of numerics) {
+    html += _renderBoundaryPropertyRow(boundary, num, false);
+    html += renderChildren(num.id, new Set());
+  }
+  for (const cat of categorical) {
+    html += _renderBoundaryPropertyRow(boundary, cat, false);
+  }
+  if (orphans.length > 0) {
+    html += `<div class="plot-property-subhead">${t('plot_detail.property_orphan_section')}</div>`;
+    for (const pct of orphans) html += _renderBoundaryPropertyRow(boundary, pct, false);
+  }
+  return html;
+}
+
+function _renderBoundaryAreaRow(boundary) {
+  const a = (typeof boundaryArea === 'function') ? boundaryArea(boundary) : 0;
+  const formatted = (typeof formatArea === 'function') ? formatArea(a) : '—';
+  return `<div class="plot-property-row plot-property-row-readonly" data-area-row="1">
+    <div class="plot-property-label">
+      <span class="plot-property-name">${t('plot_detail.area_label')}</span>
+      <span class="property-unit-chip">${t('plot_detail.computed_chip')}</span>
+    </div>
+    <div class="plot-property-input">
+      <span class="plot-property-readonly-value mono">${esc(formatted)}</span>
+    </div>
+  </div>`;
+}
+
+function _renderBoundaryPropertyRow(boundary, schema, isNested) {
+  const stored = getBoundaryPropertyValue(boundary, schema.id);
+  const label = `<div class="plot-property-label">
+    <span class="plot-property-name">${esc(schema.name)}</span>
+  </div>`;
+  const rowClass = isNested ? 'plot-property-row plot-property-row-nested' : 'plot-property-row';
+
+  if (schema.kind === 'numeric') {
+    const val = stored != null && stored !== '' ? esc(String(stored)) : '';
+    const input = `<input type="number" step="any" data-schema-id="${esc(schema.id)}" data-kind="numeric"
+      value="${val}" placeholder="${t('plot_detail.property_empty_placeholder')}"
+      onblur="onBoundaryPropertyBlur(this)">`;
+    return `<div class="${rowClass}">
+      ${label}
+      <div class="plot-property-input">
+        ${_inputWithSuffix(input, schema.unit || '')}
+      </div>
+    </div>`;
+  }
+
+  if (schema.kind === 'categorical') {
+    const val = typeof stored === 'string' ? stored : '';
+    const taId = `ta-b-${boundary.id}-${schema.id}`;
+    return `<div class="${rowClass}">
+      ${label}
+      <div class="plot-property-input">
+        ${typeaheadHTML({
+          id: taId,
+          value: val,
+          placeholder: t('plot_detail.property_empty_placeholder'),
+          optionsFnName: 'categoricalSuggestionsForInput',
+          commitFnName: 'onBoundaryPropertyBlur',
+          dataAttrs: { 'schema-id': schema.id, 'kind': 'categorical' }
+        })}
+      </div>
+    </div>`;
+  }
+
+  if (schema.kind === 'percentage') {
+    const display = derivePercentageDisplayForBoundary(boundary, schema, stored);
+    const denomName = display.denomSchema?.name || '';
+    const denomUnit = display.denomSchema?.unit || '';
+    const denomUnitTxt = denomUnit ? ` ${denomUnit}` : '';
+    const rawSourceIsRaw = stored?.mode === 'raw';
+    const rawSourceIsPct = stored?.mode === 'percent';
+    const rawVal = display.raw    != null ? formatPropertyNumber(display.raw)    : '';
+    const pctVal = display.percent != null ? formatPropertyNumber(display.percent) : '';
+    let denomNote = '';
+    if (!display.denomSchema) {
+      denomNote = `<div class="plot-property-warning">${t('plot_detail.property_no_denominator')}</div>`;
+    } else if (display.denomVal == null) {
+      denomNote = `<div class="plot-property-hint">${t('plot_detail.property_denominator_unset', { name: esc(denomName) })}</div>`;
+    } else if (!isNested) {
+      denomNote = `<div class="plot-property-hint">${t('plot_detail.property_denominator_of', {
+        name: esc(denomName),
+        value: formatPropertyNumber(display.denomVal) + esc(denomUnitTxt)
+      })}</div>`;
+    }
+
+    const rawInput = `<input type="number" step="any"
+      data-schema-id="${esc(schema.id)}" data-kind="percentage" data-mode="raw"
+      value="${rawVal}" placeholder="${t('plot_detail.property_raw_placeholder')}"
+      ${rawSourceIsRaw ? 'data-source="1"' : ''}
+      oninput="onBoundaryPropertyPercentInput(this)"
+      onblur="onBoundaryPropertyPercentBlur(this)">`;
+    const pctInput = `<input type="number" step="any"
+      data-schema-id="${esc(schema.id)}" data-kind="percentage" data-mode="percent"
+      value="${pctVal}" placeholder="${t('plot_detail.property_percent_placeholder')}"
+      ${rawSourceIsPct ? 'data-source="1"' : ''}
+      oninput="onBoundaryPropertyPercentInput(this)"
+      onblur="onBoundaryPropertyPercentBlur(this)">`;
+
+    return `<div class="${rowClass} plot-property-row-percent">
+      ${label}
+      <div class="plot-property-input plot-property-input-percent">
+        ${_inputWithSuffix(rawInput, denomUnit || '')}
+        <span class="plot-property-eq">=</span>
+        ${_inputWithSuffix(pctInput, '%')}
+        ${denomNote}
+      </div>
+    </div>`;
+  }
+  return '';
+}
+
+// Distinct non-empty categorical values seen across all plots AND
+// boundaries (Brick 10b) for the given schema. Drives the typeahead's
+// suggestions on categorical rows — fights typos when reusing the
+// same category across entities.
 function _collectCategoricalValues(schemaId, currentVal) {
   const values = new Set();
   for (const plot of (data.plots || [])) {
     const v = plot.propertyValues?.[schemaId];
+    if (typeof v === 'string' && v.trim()) values.add(v.trim());
+  }
+  for (const b of (data.boundaries || [])) {
+    const v = b.propertyValues?.[schemaId];
     if (typeof v === 'string' && v.trim()) values.add(v.trim());
   }
   if (typeof currentVal === 'string' && currentVal.trim()) values.add(currentVal.trim());
@@ -2582,6 +2769,151 @@ function onPlotPropertyPercentBlur(inputEl) {
             sibling.value = display.percent != null ? formatPropertyNumber(display.percent) : '';
           }
           _refreshDependentPercentageRows(schemaId);
+        }
+      }
+    }
+  }
+  save();
+}
+
+// ============================================================
+// BOUNDARY INSPECTOR — value handlers (Brick 10b)
+// ============================================================
+// Parallel to onPlotProperty* — same logic, swap plot helpers for
+// boundary helpers, swap `_detailPlotId` for `_boundaryDetailId`, swap
+// `#plot-detail-properties` for `#boundary-detail-properties`.
+
+function _refreshDependentBoundaryPercentageRows(changedSchemaId, visited) {
+  if (!_boundaryDetailId) return;
+  visited = visited || new Set();
+  if (visited.has(changedSchemaId)) return;
+  visited.add(changedSchemaId);
+  const boundary = data.boundaries.find(b => b.id === _boundaryDetailId);
+  if (!boundary) return;
+  const dependents = (data.propertySchemas || []).filter(s =>
+    s.kind === 'percentage' && s.denominatorPropertyId === changedSchemaId
+  );
+  for (const dep of dependents) {
+    const rawInput = document.querySelector(
+      `#boundary-detail-properties input[data-schema-id="${dep.id}"][data-mode="raw"]`
+    );
+    const pctInput = document.querySelector(
+      `#boundary-detail-properties input[data-schema-id="${dep.id}"][data-mode="percent"]`
+    );
+    if (!rawInput || !pctInput) continue;
+    const stored = getBoundaryPropertyValue(boundary, dep.id);
+    const display = derivePercentageDisplayForBoundary(boundary, dep, stored);
+    if (stored?.mode === 'raw') {
+      pctInput.value = display.percent != null ? formatPropertyNumber(display.percent) : '';
+    } else if (stored?.mode === 'percent') {
+      rawInput.value = display.raw != null ? formatPropertyNumber(display.raw) : '';
+    } else {
+      rawInput.value = '';
+      pctInput.value = '';
+    }
+    _refreshDependentBoundaryPercentageRows(dep.id, visited);
+  }
+}
+
+function onBoundaryPropertyBlur(inputEl) {
+  if (!_boundaryDetailId) return;
+  const boundary = data.boundaries.find(b => b.id === _boundaryDetailId);
+  if (!boundary) return;
+  const schemaId = inputEl.dataset.schemaId;
+  const kind = inputEl.dataset.kind;
+  const raw = inputEl.value;
+
+  if (kind === 'numeric') {
+    if (raw === '' || raw == null) {
+      clearBoundaryPropertyValue(boundary, schemaId);
+    } else {
+      const n = Number(raw);
+      if (!Number.isFinite(n)) return;
+      const schema = findPropertySchema(schemaId);
+      const stored = schema?.autoRound ? Math.round(n) : n;
+      setBoundaryPropertyValue(boundary, schemaId, stored);
+      if (stored !== n) inputEl.value = String(stored);
+    }
+    save();
+    _refreshDependentBoundaryPercentageRows(schemaId);
+  } else if (kind === 'categorical') {
+    if (raw === '' || raw == null) {
+      clearBoundaryPropertyValue(boundary, schemaId);
+    } else {
+      setBoundaryPropertyValue(boundary, schemaId, raw);
+    }
+    save();
+  }
+}
+
+function onBoundaryPropertyPercentInput(inputEl) {
+  if (!_boundaryDetailId) return;
+  const boundary = data.boundaries.find(b => b.id === _boundaryDetailId);
+  if (!boundary) return;
+  const schemaId = inputEl.dataset.schemaId;
+  const mode = inputEl.dataset.mode;
+  const schema = findPropertySchema(schemaId);
+  if (!schema) return;
+  const raw = inputEl.value;
+
+  if (raw === '' || raw == null) {
+    clearBoundaryPropertyValue(boundary, schemaId);
+    const otherMode = mode === 'raw' ? 'percent' : 'raw';
+    const otherInput = document.querySelector(
+      `#boundary-detail-properties input[data-schema-id="${schemaId}"][data-mode="${otherMode}"]`
+    );
+    if (otherInput) otherInput.value = '';
+    document.querySelectorAll(
+      `#boundary-detail-properties input[data-schema-id="${schemaId}"]`
+    ).forEach(el => el.removeAttribute('data-source'));
+    save();
+    return;
+  }
+
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return;
+
+  setBoundaryPropertyValue(boundary, schemaId, { mode, value: n });
+  document.querySelectorAll(
+    `#boundary-detail-properties input[data-schema-id="${schemaId}"]`
+  ).forEach(el => {
+    if (el === inputEl) el.setAttribute('data-source', '1');
+    else el.removeAttribute('data-source');
+  });
+
+  const display = derivePercentageDisplayForBoundary(boundary, schema, { mode, value: n });
+  const siblingMode = mode === 'raw' ? 'percent' : 'raw';
+  const sibling = document.querySelector(
+    `#boundary-detail-properties input[data-schema-id="${schemaId}"][data-mode="${siblingMode}"]`
+  );
+  if (sibling) {
+    const derived = siblingMode === 'raw' ? display.raw : display.percent;
+    sibling.value = derived != null ? formatPropertyNumber(derived) : '';
+  }
+  save();
+}
+
+function onBoundaryPropertyPercentBlur(inputEl) {
+  if (_boundaryDetailId && inputEl?.dataset?.mode === 'raw') {
+    const boundary = data.boundaries.find(b => b.id === _boundaryDetailId);
+    const schemaId = inputEl.dataset.schemaId;
+    const schema = schemaId ? findPropertySchema(schemaId) : null;
+    if (boundary && schema && _effectiveAutoRound(schema)) {
+      const stored = getBoundaryPropertyValue(boundary, schemaId);
+      if (stored && typeof stored === 'object' && stored.mode === 'raw'
+          && Number.isFinite(Number(stored.value))) {
+        const rounded = Math.round(Number(stored.value));
+        if (rounded !== Number(stored.value)) {
+          setBoundaryPropertyValue(boundary, schemaId, { mode: 'raw', value: rounded });
+          inputEl.value = String(rounded);
+          const sibling = document.querySelector(
+            `#boundary-detail-properties input[data-schema-id="${schemaId}"][data-mode="percent"]`
+          );
+          if (sibling) {
+            const display = derivePercentageDisplayForBoundary(boundary, schema, { mode: 'raw', value: rounded });
+            sibling.value = display.percent != null ? formatPropertyNumber(display.percent) : '';
+          }
+          _refreshDependentBoundaryPercentageRows(schemaId);
         }
       }
     }

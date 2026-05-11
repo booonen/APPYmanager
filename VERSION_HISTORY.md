@@ -1,3 +1,59 @@
+## 0.5.2 — Brick 10b: boundary inspector with property values
+Second sub-step of Brick 10. Boundaries now carry user-set property
+values, parallel to plots. Still no aggregation engine — that's 10c.
+
+- **Boundary detail modal grows a Properties section.** Mirrors the
+  plot one (same row layout, suffix-styled units, percentage chains
+  with nested rendering, typeahead-driven categoricals, auto-rounding,
+  Area read-only row at the top). DOM container:
+  `#boundary-detail-properties`. State: `_boundaryDetailId`
+  (pre-existing — used for the rest of the modal too).
+- **Filtering by rootLevelId.** Each boundary's inspector only shows
+  schemas where `appliesAtLevel(schema, boundary.typeId)` is true.
+  New helper `appliesAtLevel` walks the `primitiveId` chain downward
+  from the entity's level: a schema rooted at R applies iff levelId
+  == R OR R is reachable from levelId downward through the chain.
+  Equivalently: schema appears at its root level and at every
+  larger level in the same chain.
+- **Plot inspector** refactored to use the same `appliesAtLevel`
+  helper (was an inline `rootLevelId === 'plot'` check). Behaviour
+  unchanged; cleanup only.
+- **New data-layer helpers** in `js/properties.js`:
+  - `getBoundaryPropertyValue` / `setBoundaryPropertyValue` /
+    `clearBoundaryPropertyValue` — parallel to the plot trio.
+  - `resolveNumericValueForBoundary` — `boundaryArea` for the Area
+    virtual, otherwise reads from `boundary.propertyValues`. Same
+    rounding + recursion behaviour as the plot resolver.
+  - `derivePercentageDisplayForBoundary` — same shape as the plot
+    version, swapping the resolver.
+- **New view-layer functions** (parallel to plot inspector):
+  - `_renderBoundaryPropertyRows` / `_renderBoundaryAreaRow` /
+    `_renderBoundaryPropertyRow` — render boundary rows with the
+    same percentage-nesting and orphan-section logic as plots.
+  - `onBoundaryPropertyBlur` / `onBoundaryPropertyPercentInput` /
+    `onBoundaryPropertyPercentBlur` — store values, auto-round on
+    commit, refresh dependent percentages transitively.
+  - `_refreshDependentBoundaryPercentageRows` — walks percentage
+    chains within the boundary inspector.
+- **Cross-entity:**
+  - `_collectCategoricalValues` now walks both `data.plots` and
+    `data.boundaries`, so typeahead suggestions on either entity
+    surface values entered on the other. Fights typos consistently
+    across the project.
+  - `deletePropertySchema` cascades to boundary values too (drops
+    `boundary.propertyValues[id]` for every boundary).
+- **Empty state at boundary level**: when *some* schemas exist but
+  *none* apply at this boundary's level, a soft note explains why
+  ("A property is shown if it's rooted at this boundary type or at
+  any smaller level reachable downward."). When no schemas exist at
+  all, the same empty-state link as the plot inspector.
+- l10n: `boundary_detail.properties_none_apply`.
+
+Still deferred to 10c:
+- Aggregation engine (rolling up children's values onto the boundary).
+- Override visual cue (this row is the rooted level vs. above-root).
+- Mismatch flags (under-sum critical / over-sum acceptable).
+
 ## 0.5.1 — Branching-hierarchy warning on boundary-type delete
 Polish on the v0.5.0 schema-promotion-on-type-delete behaviour. When a
 boundary type has multiple parents (a branching hierarchy) AND there

@@ -670,6 +670,25 @@ they come up; the plan is a living document.
      (because half-people don't exist) and the virtual Area schema;
      **off** for any newly-created numeric (user opts in via the
      schema editor's "Round to whole numbers" checkbox).
+- **Brick 10b** ✓ (PR open on `claude/brick-8-start-qJz0D`) — boundary
+  inspector with property values. Boundary detail modal grows a
+  Properties section parallel to the plot one (same row layout,
+  suffix-styled units, percentage chains, typeahead categoricals,
+  auto-rounding, Area row at top). New `appliesAtLevel(schema, levelId)`
+  helper walks the primitiveId chain downward from levelId — used to
+  filter both plot and boundary inspectors (plot inspector refactored
+  to use it too). New data-layer parallels in `js/properties.js`:
+  `getBoundaryPropertyValue` / `setBoundaryPropertyValue` /
+  `clearBoundaryPropertyValue`, `resolveNumericValueForBoundary`,
+  `derivePercentageDisplayForBoundary`. Parallel view-layer functions:
+  `_renderBoundaryPropertyRows` / `_renderBoundaryAreaRow` /
+  `_renderBoundaryPropertyRow`, `onBoundaryPropertyBlur` /
+  `onBoundaryPropertyPercentInput` / `onBoundaryPropertyPercentBlur`,
+  `_refreshDependentBoundaryPercentageRows`. Cross-entity:
+  `_collectCategoricalValues` walks both plots and boundaries (so
+  typeahead suggestions are consistent across entities);
+  `deletePropertySchema` cascades to boundary values. Still deferred
+  to 10c: aggregation engine, override visual cue, mismatch flags.
 - **Brick 10a** ✓ (PR open on `claude/brick-8-start-qJz0D`) — Brick 10
   schema-side prerequisite. Property schemas gain `rootLevelId`
   (default `'plot'`). Schema editor grows a "Defined at" dropdown

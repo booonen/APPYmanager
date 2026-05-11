@@ -277,6 +277,7 @@ registerLanguage('en', 'English', {
     "members_title": "Members",
     "members_count": "{n} member(s)",
     "members_empty": "No members yet. Click “+ Add members” to assign plots or sub-boundaries.",
+    "properties_none_apply": "No properties are defined at this level or rolled up here. (A property is shown if it's rooted at this boundary type or at any smaller level reachable downward.)",
     "add_members_btn": "+ Add members",
     "remove_member_btn": "Remove",
     "delete_btn": "Delete boundary",
