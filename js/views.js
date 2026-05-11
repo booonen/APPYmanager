@@ -2583,19 +2583,35 @@ function _renderBoundaryPropertyRow(boundary, schema, isNested) {
 // Distinct non-empty categorical values seen across all plots AND
 // boundaries (Brick 10b) for the given schema. Drives the typeahead's
 // suggestions on categorical rows — fights typos when reusing the
-// same category across entities.
+// same category across entities. Ordered by **prevalence** (most-used
+// first, descending count across plots + boundaries), with alphabetical
+// as tiebreaker. The in-flight value on the input being edited is
+// included with count 0 so it appears in the list even when distinct
+// from anything stored — but lands after real matches of equal alpha
+// order.
 function _collectCategoricalValues(schemaId, currentVal) {
-  const values = new Set();
+  const counts = new Map(); // canonicalised value → count
   for (const plot of (data.plots || [])) {
     const v = plot.propertyValues?.[schemaId];
-    if (typeof v === 'string' && v.trim()) values.add(v.trim());
+    if (typeof v === 'string' && v.trim()) {
+      const key = v.trim();
+      counts.set(key, (counts.get(key) || 0) + 1);
+    }
   }
   for (const b of (data.boundaries || [])) {
     const v = b.propertyValues?.[schemaId];
-    if (typeof v === 'string' && v.trim()) values.add(v.trim());
+    if (typeof v === 'string' && v.trim()) {
+      const key = v.trim();
+      counts.set(key, (counts.get(key) || 0) + 1);
+    }
   }
-  if (typeof currentVal === 'string' && currentVal.trim()) values.add(currentVal.trim());
-  return Array.from(values).sort((a, b) => a.localeCompare(b));
+  if (typeof currentVal === 'string' && currentVal.trim()) {
+    const key = currentVal.trim();
+    if (!counts.has(key)) counts.set(key, 0);
+  }
+  return Array.from(counts.entries())
+    .sort((a, b) => (b[1] - a[1]) || a[0].localeCompare(b[0]))
+    .map(([value]) => value);
 }
 
 // Suggestion source for typeaheadHTML on categorical rows. Looked up by

@@ -1,3 +1,12 @@
+## 0.5.3 — Typeahead suggestions sort by prevalence
+`_collectCategoricalValues` previously returned distinct values
+alphabetically. The typeahead preserved that order, so a category used
+once edged out a category used fifty times if it sorted earlier
+alpha-wise. Now ordered by **prevalence** (descending count across
+plots + boundaries) with alphabetical as tiebreaker. The user's
+in-flight typed value still appears in the list, with count 0 so it
+lands after equally-spelled real matches.
+
 ## 0.5.2 — Brick 10b: boundary inspector with property values
 Second sub-step of Brick 10. Boundaries now carry user-set property
 values, parallel to plots. Still no aggregation engine — that's 10c.
