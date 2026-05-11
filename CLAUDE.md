@@ -404,13 +404,18 @@ subsection in the Properties tab once both have landed.
   - Refs: `{Property Name}` resolves per entity (plot / boundary).
     The virtual area schema is referenced as `{Area}` — every entity
     has one, no need to disambiguate "plot area" vs "boundary area".
-  - Operators: `+ - * / ( )`; comparison `> < >= <= == !=`;
-    ternary `cond ? a else b`. (Using `else` instead of `:` to make
-    the branch boundary unambiguous — slightly unusual but more
+  - Operators: `+ - * / % ** ( )`; comparison `> < >= <= == !=`;
+    ternary `cond ? a else b`. (`%` is modulo / remainder; `**` is
+    power-raising — `2 ** 10 → 1024`. Using `else` instead of `:` to
+    make the branch boundary unambiguous — slightly unusual but more
     readable than the C-style colon. No separate `if()` function —
     the ternary covers it.)
   - Functions:
     - `min(a, b, …)`, `max(a, b, …)` — variadic.
+    - `clamp(value, lo, hi)` — clamps `value` into the `[lo, hi]`
+      range. Equivalent to `max(lo, min(hi, value))` but reads better
+      in formulas that bound a derived result (e.g.
+      `clamp({Pop density}, 0, 30000)`).
     - `abs(x)`.
     - `sum(a, b, …)`, `avg(a, b, …)` — variadic numeric helpers.
     - `round(value)` (to integer), `round(value, digits)` (to N
