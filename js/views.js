@@ -336,12 +336,27 @@ function deleteBoundaryType(id) {
 
   // Warn if other types use this as their primitive
   const dependents = data.boundaryTypes.filter(t => t.primitiveId === id);
-  const msg = dependents.length > 0
+  // Schemas rooted at this type — they'll promote to its parent on delete.
+  const rootedSchemas = (data.propertySchemas || []).filter(s => s.rootLevelId === id);
+  let msg = dependents.length > 0
     ? t('boundary_types.confirm_delete_with_deps', {
         name: type.name,
         deps: dependents.map(t => t.name).join(', ')
       })
     : t('boundary_types.confirm_delete', { name: type.name });
+
+  // Branching hierarchy + rooted schemas = potential data loss once
+  // boundary-level property values exist (Brick 10b/c). The schema can
+  // only promote to ONE parent; sibling parents lose the rooted
+  // properties in their inspectors. Surface this explicitly so the
+  // user can re-root manually if they need the other branch.
+  if (rootedSchemas.length > 0 && dependents.length > 1) {
+    msg += '\n\n' + t('boundary_types.confirm_delete_branching_schemas', {
+      schemas: rootedSchemas.map(s => s.name).join(', '),
+      winner: dependents[0].name,
+      losers: dependents.slice(1).map(d => d.name).join(', '),
+    });
+  }
 
   appConfirm(msg, () => {
     // Schema-root promotion (Brick 10a). A property schema rooted at the

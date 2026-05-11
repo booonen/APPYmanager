@@ -1,3 +1,23 @@
+## 0.5.1 — Branching-hierarchy warning on boundary-type delete
+Polish on the v0.5.0 schema-promotion-on-type-delete behaviour. When a
+boundary type has multiple parents (a branching hierarchy) AND there
+are schemas rooted at that type, the deletion confirm dialog now
+appends an explicit heads-up:
+- Names the affected schemas.
+- Names the "winner" parent (the one the schema's rootLevelId promotes
+  to — first deterministically).
+- Names the "loser" parent(s) — sibling parents that won't receive the
+  promotion.
+- Notes that property values on the loser branch's boundaries become
+  hidden (still in the save file, but not surfaced).
+- Suggests re-rooting manually after deletion if needed.
+
+Pre-emptive — once Brick 10b/10c land and boundaries can carry
+property values, this warning protects users from quietly losing data
+on the non-promoted branch. Doesn't change any current behaviour
+(boundary values don't exist yet); just makes the future failure mode
+visible. New l10n key: `boundary_types.confirm_delete_branching_schemas`.
+
 ## 0.5.0 — Brick 10a: rootLevelId schema field
 First sub-step of Brick 10 (property aggregation on boundaries). Pure
 schema-side prerequisite — no boundary-side rendering or aggregation

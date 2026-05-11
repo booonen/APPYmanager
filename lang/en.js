@@ -233,6 +233,7 @@ registerLanguage('en', 'English', {
     "primitive_help": "The type this boundary type is made up of. Selecting \"Plots (implicit)\" means this type directly groups plots.",
     "confirm_delete": "Delete \"{name}\"?\nThis cannot be undone.",
     "confirm_delete_with_deps": "Delete \"{name}\"?\n\"{deps}\" currently use it as their primitive and will be re-linked to its parent.",
+    "confirm_delete_branching_schemas": "Heads-up: property schema(s) \"{schemas}\" are defined at this level, and this type has multiple parents (\"{winner}\", \"{losers}\"). The schema(s) will promote to \"{winner}\". Any values you've set on \"{losers}\" boundaries for these properties will become hidden after deletion (still in the save file, just not surfaced). Re-root the schema(s) manually after if you need them on the other branch.",
     "deleted_toast": "Deleted \"{name}\"",
     "error_name_empty": "Name cannot be empty.",
     "error_name_duplicate": "\"{name}\" already exists.",
