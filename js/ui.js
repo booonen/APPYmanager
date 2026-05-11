@@ -87,6 +87,7 @@ function switchTab(tab) {
     'boundary-types': renderBoundaryTypes,
     boundaries: renderBoundaries,
     settlements: renderSettlements,
+    properties: renderProperties,
     map: () => {
       if (!_map) { initMap(); return; }
       _map.invalidateSize();

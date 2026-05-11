@@ -1,3 +1,431 @@
+## 0.6.1 — Rollup hint visual weight matches input
+v0.6.0's `.plot-property-rollup-hint` was 11px / `--text-dim` — read
+too muted next to the 13px / `--text` input. Bumped to 13px / `--text`
+so the rolled-up value sits as a peer to the user-set input value
+rather than a footnote. Mismatch badges keep their 10px chip size
+(they're meta-labels, not values).
+
+## 0.6.0 — Brick 10c: aggregation, override, mismatch flags (Brick 10 complete)
+Third and final sub-step of Brick 10. Boundaries now display a rolled-up
+value alongside their user-set value, with mismatch flags surfacing the
+data-quality cases agreed in the plan.
+
+### Aggregation engine (`js/properties.js`)
+
+- **"Effective" value semantics** — `resolveEffectiveForPlot(plot, schema)`
+  is just the plot's user-stored value (plots are leaves). For
+  boundaries, `resolveEffectiveForBoundary(boundary, schema)` returns
+  the user-set value if any (override) and otherwise rolls up from
+  members. A `visited` Set is threaded through recursive calls to
+  guard against any cycle that schema validation might miss.
+- **Roll-up rules per kind:**
+  - Numeric / sum → sum of members' effective values.
+  - Numeric / weighted_average → ∑(value × weight) / ∑(weight). The
+    weight is resolved per-member via the schema's
+    `weightPropertyId`.
+  - Percentage → sum members' effective raws, then divide by the
+    boundary's effective denominator. The percent at the boundary is
+    `(rawSum / denomVal) * 100`; the raw is `_maybeRound(rawSum,
+    schema)`.
+  - Categorical / `rollupDistribution: true` → `Map<value, count>`
+    over members' user-set categorical values.
+  - Categorical / no rollup → null (no roll-up shown).
+- **Cross-schema effect:** `resolveNumericValueForBoundary` and
+  `derivePercentageDisplayForBoundary` now resolve denominators via
+  `resolveEffectiveForBoundary`. So a `% Urban` row on a Province
+  uses the *rolled-up* Population as its denominator when the user
+  hasn't overridden Population on that Province.
+
+### Mismatch classification
+
+`classifyRollupMismatch(userVal, rollupVal)` → `'match' | 'under' |
+'over' | null`. Tolerance is `max(|user|, |rollup|, 1) × 1e-9` to
+absorb floating-point noise on what should be exact-match cases.
+
+### UI (`js/views.js`)
+
+- Each boundary property row gets a new `.plot-property-rollup-hint`
+  wrapper after the inputs, carrying `data-rollup-container=<schemaId>`
+  so we can refresh in place. At the schema's root level (this
+  boundary IS the source of truth) the wrapper renders empty — CSS
+  `:empty` hides it.
+- Above-root rows show:
+  - "Rolled up: 12,345 people" hint for numerics.
+  - "Rolled up: 12,345 people = 30%" for percentages.
+  - "Distribution: Spanish 40%, Quechua 60%" for opt-in categorical
+    distributions.
+- Mismatch badge appears when the user-set value is non-null:
+  - `match` (green) — green for "everything reconciles."
+  - `under` (red, bold) — critical: user-set is below rollup, which
+    means we're claiming less than the children sum to.
+  - `over` (warn-yellow) — acceptable: user-set is above rollup,
+    typical OGF-incomplete case.
+- New helper `_refreshAllBoundaryRollups()` re-renders every row's
+  rollup block after any value commit. Cheap full sweep — cleaner
+  than computing exact dependents (effective denom changes can
+  cascade to percentage rollup-percents, etc.).
+- Wired into `onBoundaryPropertyBlur`, `onBoundaryPropertyPercentInput`,
+  `onBoundaryPropertyPercentBlur` so live updates fire as the user
+  edits.
+
+### CSS
+
+- `.plot-property-rollup-hint` (with `:empty` hide rule).
+- `.rollup-mismatch-badge` + `match` / `under` / `over` variants using
+  existing `--success`, `--accent`, `--warn` tokens.
+
+### l10n
+
+- `boundary_detail.rollup_value`, `rollup_distribution`, `rollup_match`,
+  `rollup_under`, `rollup_over`.
+
+### What's NOT in 10c (intentional)
+
+- **Central issues panel.** The mismatch badges are inline in the
+  inspector; a project-wide list of all current under/over-sum flags
+  is Brick 14.
+- **Categorical distribution-of-distributions.** When rolling up
+  categorical with distribution-on into a Country boundary, we count
+  each sub-boundary's *user-set* category, not its rolled-up
+  distribution. Future polish if it matters.
+- **"Use rollup value" / clear-override button.** The user can type
+  the rollup value manually or clear their input. Not worth a
+  dedicated control yet.
+
+Brick 10 (boundary aggregation) is now complete.
+
+## 0.5.3 — Typeahead suggestions sort by prevalence
+`_collectCategoricalValues` previously returned distinct values
+alphabetically. The typeahead preserved that order, so a category used
+once edged out a category used fifty times if it sorted earlier
+alpha-wise. Now ordered by **prevalence** (descending count across
+plots + boundaries) with alphabetical as tiebreaker. The user's
+in-flight typed value still appears in the list, with count 0 so it
+lands after equally-spelled real matches.
+
+## 0.5.2 — Brick 10b: boundary inspector with property values
+Second sub-step of Brick 10. Boundaries now carry user-set property
+values, parallel to plots. Still no aggregation engine — that's 10c.
+
+- **Boundary detail modal grows a Properties section.** Mirrors the
+  plot one (same row layout, suffix-styled units, percentage chains
+  with nested rendering, typeahead-driven categoricals, auto-rounding,
+  Area read-only row at the top). DOM container:
+  `#boundary-detail-properties`. State: `_boundaryDetailId`
+  (pre-existing — used for the rest of the modal too).
+- **Filtering by rootLevelId.** Each boundary's inspector only shows
+  schemas where `appliesAtLevel(schema, boundary.typeId)` is true.
+  New helper `appliesAtLevel` walks the `primitiveId` chain downward
+  from the entity's level: a schema rooted at R applies iff levelId
+  == R OR R is reachable from levelId downward through the chain.
+  Equivalently: schema appears at its root level and at every
+  larger level in the same chain.
+- **Plot inspector** refactored to use the same `appliesAtLevel`
+  helper (was an inline `rootLevelId === 'plot'` check). Behaviour
+  unchanged; cleanup only.
+- **New data-layer helpers** in `js/properties.js`:
+  - `getBoundaryPropertyValue` / `setBoundaryPropertyValue` /
+    `clearBoundaryPropertyValue` — parallel to the plot trio.
+  - `resolveNumericValueForBoundary` — `boundaryArea` for the Area
+    virtual, otherwise reads from `boundary.propertyValues`. Same
+    rounding + recursion behaviour as the plot resolver.
+  - `derivePercentageDisplayForBoundary` — same shape as the plot
+    version, swapping the resolver.
+- **New view-layer functions** (parallel to plot inspector):
+  - `_renderBoundaryPropertyRows` / `_renderBoundaryAreaRow` /
+    `_renderBoundaryPropertyRow` — render boundary rows with the
+    same percentage-nesting and orphan-section logic as plots.
+  - `onBoundaryPropertyBlur` / `onBoundaryPropertyPercentInput` /
+    `onBoundaryPropertyPercentBlur` — store values, auto-round on
+    commit, refresh dependent percentages transitively.
+  - `_refreshDependentBoundaryPercentageRows` — walks percentage
+    chains within the boundary inspector.
+- **Cross-entity:**
+  - `_collectCategoricalValues` now walks both `data.plots` and
+    `data.boundaries`, so typeahead suggestions on either entity
+    surface values entered on the other. Fights typos consistently
+    across the project.
+  - `deletePropertySchema` cascades to boundary values too (drops
+    `boundary.propertyValues[id]` for every boundary).
+- **Empty state at boundary level**: when *some* schemas exist but
+  *none* apply at this boundary's level, a soft note explains why
+  ("A property is shown if it's rooted at this boundary type or at
+  any smaller level reachable downward."). When no schemas exist at
+  all, the same empty-state link as the plot inspector.
+- l10n: `boundary_detail.properties_none_apply`.
+
+Still deferred to 10c:
+- Aggregation engine (rolling up children's values onto the boundary).
+- Override visual cue (this row is the rooted level vs. above-root).
+- Mismatch flags (under-sum critical / over-sum acceptable).
+
+## 0.5.1 — Branching-hierarchy warning on boundary-type delete
+Polish on the v0.5.0 schema-promotion-on-type-delete behaviour. When a
+boundary type has multiple parents (a branching hierarchy) AND there
+are schemas rooted at that type, the deletion confirm dialog now
+appends an explicit heads-up:
+- Names the affected schemas.
+- Names the "winner" parent (the one the schema's rootLevelId promotes
+  to — first deterministically).
+- Names the "loser" parent(s) — sibling parents that won't receive the
+  promotion.
+- Notes that property values on the loser branch's boundaries become
+  hidden (still in the save file, but not surfaced).
+- Suggests re-rooting manually after deletion if needed.
+
+Pre-emptive — once Brick 10b/10c land and boundaries can carry
+property values, this warning protects users from quietly losing data
+on the non-promoted branch. Doesn't change any current behaviour
+(boundary values don't exist yet); just makes the future failure mode
+visible. New l10n key: `boundary_types.confirm_delete_branching_schemas`.
+
+## 0.5.0 — Brick 10a: rootLevelId schema field
+First sub-step of Brick 10 (property aggregation on boundaries). Pure
+schema-side prerequisite — no boundary-side rendering or aggregation
+engine yet (those land as 10b and 10c).
+
+- **New schema field `rootLevelId`** (default `'plot'`). The boundary
+  level where a property is normally recorded. Replaces the
+  multi-select `appliesTo` model floated earlier on 2026-05-11 — the
+  single-root version is much simpler and matches the natural "data
+  lives at one level, rolls up" mental model. The rule for whether
+  a property appears at level T: T must be `R` itself, or `R` must
+  be reachable from T downward through the `primitiveId` chain.
+  Smaller-than-R and unrelated-chain levels don't show the row.
+- **Schema editor: "Defined at" dropdown** between Kind and the
+  kind-specific block. Options: Plot (the implicit default, pinned at
+  the top), then every boundary type in hierarchy order
+  (smallest-containers-first, mirroring the Boundary Types tab).
+  Powered by new helper `boundaryTypesInHierarchyOrder()` in
+  `boundaries.js` — walks reverse-`primitiveId` from the type with
+  `primitiveId=null` upward.
+- **Plot inspector filter.** The plot detail modal's Properties
+  section now hides any schema with `rootLevelId !== 'plot'`. The
+  "no properties defined" empty state still references the
+  unfiltered schema list so the user doesn't get a misleading message
+  when they've got boundary-only schemas defined.
+- **Properties tab chip.** When a schema is rooted at a boundary
+  type, the Behaviour column gets a small accent-tinted
+  "Defined at: \<type name\>" chip. Plot-rooted schemas (the common
+  default) show nothing — keeps the table quiet for the typical case.
+- **Boundary-type deletion cleanup.** `deleteBoundaryType` now
+  promotes any schema rooted at the deleted type to that type's
+  *parent* (the type whose `primitiveId` pointed at it). Least-impact
+  relink so data stays at a higher / more-aggregate level rather than
+  sliding down into a smaller one. Top-level deletions (no parent)
+  fall back to `'plot'`. Branching hierarchies: pick the first parent
+  deterministically.
+- **Bootstrap.** Population + Predominant language now seed with
+  explicit `rootLevelId: 'plot'` (matches the default, but makes
+  intent clear in the bootstrap code).
+- **Migration.** Schemas loaded from older saves with no
+  `rootLevelId` default to `'plot'` via the `|| 'plot'` fallback at
+  every read site — no destructive migration.
+- l10n: `properties.defined_at_label`, `defined_at_help`,
+  `defined_at_plot`, `defined_at_chip`.
+- CLAUDE.md: Brick 10 plan rewritten around the new model; the old
+  `appliesTo` scoping note preserved as a "superseded" sentence so
+  future-me can see why we picked this shape.
+
+## 0.4.3 — Brick 9 polish round 3: typeahead fix, Area rename, auto-round
+- **Typeahead dropdown background fix.** v0.4.2's `.ta-dropdown` was
+  styled `background: var(--bg-card)` — a token that doesn't exist in
+  the APPY palette, so the dropdown rendered transparently over the
+  modal (unselected rows were invisible against the modal background).
+  Switched to `var(--bg-input)` for the dropdown + items, and
+  `var(--bg-hover)` for the highlight state, so hovered/keyboard-
+  highlighted rows now stand out cleanly. Items themselves also carry
+  an explicit background so they don't show through to whatever sits
+  underneath.
+- **Plot area → Area.** Renamed the virtual schema's user-facing name
+  from "Plot area" to "Area". Every entity (plot or boundary) has one,
+  so no need to disambiguate. The underlying `AREA_VIRTUAL_ID`
+  (`__plot_area__`) stays put so saves from older versions still load
+  correctly. The "Area" virtual now also carries `autoRound: true`
+  (m² values are naturally integers for our purposes).
+- **Auto-round on numeric properties.** New schema field
+  `autoRound: boolean` (numeric kind only). When on:
+  - Numeric input commit rounds the entered value to integer before
+    storing — and reflects the rounded value back into the input so
+    the user sees the snap.
+  - Percentage's RAW side rounds via `_effectiveAutoRound(schema)`,
+    which walks the denominator chain to its terminal numeric. So
+    `% Urban` of an auto-rounded Population rounds its raw side
+    automatically — no per-percentage flag needed.
+  - `resolveNumericValueForPlot` and `derivePercentageDisplay` round
+    via the same helper, so any downstream consumer (chained
+    percentages, future boundary roll-up) sees the rounded value.
+  - On commit of the percent side: no rounding (percent values are in
+    %, not subject to this flag).
+  - On commit of the raw side: round via `_effectiveAutoRound`, then
+    re-derive the percent sibling from the rounded raw.
+  Defaults: **on** for the bootstrapped Population schema and the
+  virtual Area schema; **off** for new user-created numerics. The
+  schema editor's numeric kind block gains a "Round to whole numbers"
+  checkbox (with explanatory help text).
+- CLAUDE.md: Brick 9c scoping refined per discussion —
+  - `{Plot area}` → `{Area}` (matches the rename).
+  - Ternary uses `? else` instead of `? :` (more readable; no separate
+    `if()` function).
+  - `round(value, digits)`, `ceil`, `floor`, `avg` added to the
+    proposed function list.
+  - Two **open questions** flagged:
+    - `{Pop}` shorthand for `Population` — fragile if hardcoded.
+      Proposed: per-schema `aliases: string[]` declared by the user.
+    - `{{Property}}` to return the schema's name as a string literal
+      (for "predominant animal"-style outputs). Alternative:
+      `argmax / argmin` returning the name of the larger / smaller ref.
+
+## 0.4.2 — Brick 9 polish round 2: unit-suffix, typeahead, percentage chains
+- **Unit-as-suffix.** The schema's `unit` no longer sits as a chip next
+  to the property name. It's rendered *inside* the input frame as a
+  trailing suffix span (`.input-with-suffix` / `.input-suffix`), so the
+  unit reads as part of the value the user is typing. Numeric rows get
+  one wrapper; percentage rows get two (raw side suffixed with the
+  denominator's unit, percent side suffixed with `%`). The redundant
+  trailing `%` glyph between the two inputs is gone — replaced with a
+  single `=` separator. Source-of-truth highlight (accent border on
+  the side the user typed into) moves to the wrapper via `:has()`.
+  The Plot area read-only row keeps its "computed" chip in the label
+  slot — that chip is intel about the row's behaviour, not a unit.
+- **Native typeahead.** New `js/typeahead.js` — a search-as-you-type
+  dropdown modeled on BRIXY's `nodePicker*`, adapted for free-text
+  accept so categorical inputs can record values that don't appear in
+  the suggestions list. Arrow keys navigate (↑ / ↓), Enter commits
+  (highlighted option if any, else the typed value), Escape dismisses,
+  outside-click dismisses, mousedown on a dropdown item beats the
+  input's blur so the click registers cleanly. Replaces the
+  browser-default `<datalist>` on every categorical row. CSS classes:
+  `.typeahead`, `.ta-input`, `.ta-dropdown`, `.ta-item`,
+  `.ta-item.highlighted`, `.ta-empty`. The component is generic — wired
+  by passing `optionsFnName` and `commitFnName` as data attrs, looked
+  up on `window` at runtime. First user is categorical property
+  values; reusable for future selectors.
+- **Percentages can now be denominators of other percentages.** Schema
+  editor's denominator dropdown now lists both numerics and percentages
+  (alongside the virtual `Plot area`). `getDenominatorPropertyOptions`
+  is the new fn (the existing `getNumericPropertyOptions` stays as the
+  weight-reference source — weighting by a percentage is conceptually
+  strange). Validation accepts `kind === 'numeric' || kind ===
+  'percentage'`. Chains like `Population → % Urban → % Spanish in
+  urban` resolve bottom-up via the existing
+  `resolveNumericValueForPlot` recursion. The plot detail modal
+  renders chained percentages nested recursively (`renderChildren`
+  walks the children-by-denominator map depth-first; `ancestors` set
+  guards against cycles).
+  `_refreshDependentPercentageRows` similarly walks dependents
+  transitively so a change to A re-derives B (% of A), then C (% of B),
+  etc.
+- l10n: new `typeahead.no_match` ("No matches — press Enter to use as
+  a new value."), renamed `error_denominator_not_numeric` to
+  `error_denominator_invalid` with updated copy, updated
+  `denominator_help` to mention percentage chains.
+
+## 0.4.1 — Brick 9 polish: nesting, Plot area, categorical autocomplete
+- **Percentage rows nest under their denominator** in the plot detail
+  modal. Visual indent + left-border connector make it obvious which
+  numeric a percentage is pulling from. The redundant
+  "of {name} = {value}" hint is dropped when the parent row sits
+  directly above; the "denominator unset on this plot" and "no
+  denominator schema" notes still surface (they describe problems the
+  user needs to act on). Orphan percentages whose denominator schema
+  was deleted or never linked collect under a small subheader at the
+  bottom of the section.
+- **`Plot area` as a virtual denominator** — new `AREA_VIRTUAL_ID =
+  '__plot_area__'` in `js/properties.js`:
+  - `findPropertySchema` returns a synthetic numeric schema
+    (`name: 'Plot area'`, `unit: 'm²'`, `__virtual: true`).
+  - `getNumericPropertyOptions` prepends the virtual so it's
+    selectable as a percentage denominator in the schema editor.
+  - `resolveNumericValueForPlot` special-cases the virtual id and
+    returns `plotArea(plot)` (m²).
+  - `_propertyRefSelect` (schema editor dropdown) pins virtual entries
+    to the top of the list with a "(computed)" suffix.
+  - Plot detail modal now also surfaces Area as a read-only row at the
+    top of the Properties section, so the user can see what their
+    `% urbanised`-style children pull from.
+  - Brick 10 will need a parallel `resolveNumericValueForBoundary`
+    that returns `boundaryArea(boundary)` for the same magic id.
+- **Categorical inputs gain a `<datalist>`** populated from every
+  distinct non-empty value already in use for that schema across all
+  plots (the in-flight value on this plot is included too so it shows
+  up immediately). Native browser autocomplete — fights typos when
+  reusing the same category across plots.
+- New CSS: `.plot-property-row-readonly`, `.plot-property-row-nested`,
+  `.plot-property-subhead`.
+- CLAUDE.md log + long-term plan updated: **Brick 9c (Calculated source)**
+  and **Brick 9d (Overpass-derived source)** added as deferred bricks
+  with brief scoping notes — both need a design session before we
+  build (expression language, query templates, refresh semantics,
+  rate-limit accounting).
+
+## 0.4.0 — Brick 9: Property values on plots
+- Plot detail modal gains a **Properties** section listing every
+  property schema with a kind-appropriate input. Auto-saves on blur
+  (numeric / categorical) or live as you type (percentage).
+- Storage: `plot.propertyValues = { [schemaId]: <value> }`. Shape per
+  kind:
+  - **numeric** → bare number
+  - **categorical** → bare string
+  - **percentage** → `{ mode: 'raw' | 'percent', value: number }`
+- **Percentage UX** (the load-bearing piece): two inputs side by side.
+  Type into either the raw amount or the %, and the other side derives
+  live from the denominator's current value on this plot. Whichever
+  side the user typed is the "source of truth"; the other re-derives.
+  Changing the denominator's value updates the derived side while
+  preserving the source. The source input is accented so the user can
+  see which side is authoritative at a glance.
+- Percentage row also surfaces context: schema name + unit chip,
+  denominator name and current value, plus a warning if the
+  denominator schema isn't set on this plot yet.
+- New helpers in `js/properties.js`: `getPlotPropertyValue` /
+  `setPlotPropertyValue` / `clearPlotPropertyValue`,
+  `resolveNumericValueForPlot`, `derivePercentageDisplay`,
+  `formatPropertyNumber`.
+- **Cascade cleanup**: `deletePropertySchema` now walks all plots and
+  drops any stored value for the deleted schema (no orphan entries).
+  Boundary values arrive in Brick 10 — extend then.
+- New CSS block (`.plot-property-row` / `.plot-property-input-percent`)
+  and a `.plot-detail-section-label` to label the new section.
+- Empty input deletes the value entirely; the modal will never persist
+  a `''` or `NaN` placeholder.
+
+## 0.3.0 — Brick 8: Property schema editor
+- New "Properties" tab in the Geography section (after Settlements,
+  before Map). Lists every property schema with Name / Kind /
+  Behaviour / Unit columns plus per-row Edit and Delete.
+- `js/properties.js` data layer:
+  - `propertySchema` record: `{ id, name, unit, kind, notes,
+    aggregation, weightPropertyId, rollupDistribution,
+    denominatorPropertyId }`. Three kinds: numeric, categorical,
+    percentage.
+  - `bootstrapPropertySchemas()` seeds two starter properties on first
+    visit: **Population** (numeric, sum, unit "people") and
+    **Predominant language** (categorical, no rollup).
+  - `createPropertySchema`, `deletePropertySchema`,
+    `findPropertySchema`, `findPropertyDependents`,
+    `getNumericPropertyOptions`, `describePropertyBehaviour`,
+    `_hasPropertyRefCycle`.
+- Add/Edit modal with kind-conditional fields:
+  - **Numeric**: aggregation = sum or weighted-average; if weighted,
+    pick a numeric weight property.
+  - **Categorical**: opt-in "Roll up as distribution on boundaries"
+    checkbox (off by default — matches CLAUDE.md decision).
+  - **Percentage**: pick a numeric denominator property.
+- Validation enforced on save:
+  - Name required and unique (case-insensitive).
+  - Weight / denominator must be an existing numeric property.
+  - No self-reference; no cycles in the combined weight/denominator
+    dependency graph (`_hasPropertyRefCycle`).
+- Kind is locked on edit (data-integrity hedge — Brick 9 plot values
+  shouldn't have to handle a numeric→categorical schema flip mid-flight).
+- Delete is blocked when another schema references the target as
+  weight or denominator; the toast names the dependents so the user
+  can fix them first.
+- Dashboard already had a Properties stat tile via
+  `data.propertySchemas.length`; bootstrap now actually populates it
+  on first visit.
+
 ## 0.2.7 — Settlement auto-assign: name-match boundary preferred
 - `autoAssignSettlementParent(lat, lng, name)` gains a name-matching
   pass that runs before the existing smallest-region logic. Walks

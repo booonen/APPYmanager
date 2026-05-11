@@ -401,6 +401,198 @@ input[type="checkbox"]:checked::after {
 .plot-flag-icon { flex-shrink: 0; }
 
 /* ============================================================
+   PLOT PROPERTY VALUES (Brick 9)
+   ============================================================ */
+.plot-detail-properties-section { margin: 14px 0 12px; }
+.plot-detail-section-label {
+  font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--text-muted); margin-bottom: 8px;
+}
+.plot-property-row {
+  display: grid; grid-template-columns: minmax(160px, 220px) 1fr;
+  gap: 12px; align-items: center;
+  padding: 6px 0; border-bottom: 1px solid var(--border);
+}
+.plot-property-row:last-child { border-bottom: none; }
+.plot-property-row-percent { align-items: flex-start; padding: 8px 0; }
+.plot-property-label { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.plot-property-name {
+  font-size: 13px; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.property-unit-chip {
+  font-size: 10px; color: var(--text-muted); background: var(--bg-input);
+  padding: 1px 6px; border-radius: 10px; flex-shrink: 0; font-family: var(--font-mono);
+}
+/* Properties-tab Behaviour column chip — surfaces a non-default root level
+   (e.g. "Defined at: Province"). Tinted with the accent so the eye picks it
+   out from the unit chip above. */
+.property-root-chip {
+  display: inline-block;
+  font-size: 10px;
+  color: var(--accent);
+  background: var(--accent-glow);
+  padding: 1px 6px; margin-left: 6px;
+  border-radius: 10px; white-space: nowrap;
+}
+.plot-property-input input[type="text"],
+.plot-property-input input[type="number"] {
+  width: 100%; box-sizing: border-box;
+}
+.plot-property-input-percent {
+  display: grid; grid-template-columns: 1fr auto 1fr;
+  gap: 6px; align-items: center;
+}
+.plot-property-input-percent .plot-property-eq {
+  font-size: 11px; color: var(--text-muted); font-family: var(--font-mono);
+  min-width: 1em; text-align: center;
+}
+
+/* Input with a trailing suffix span (unit, %) that sits INSIDE the
+   input frame. The wrapper takes the border + focus state; the
+   inner input is transparent and borderless. */
+.input-with-suffix {
+  display: flex; align-items: stretch;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+  min-width: 0;
+}
+.input-with-suffix:focus-within { border-color: var(--accent); }
+.input-with-suffix > input {
+  flex: 1; min-width: 0;
+  background: transparent;
+  border: none; outline: none;
+  padding: 6px 4px 6px 8px;
+  color: var(--text); font-size: 13px;
+  font-family: inherit;
+}
+.input-with-suffix.has-suffix > input { padding-right: 4px; }
+.input-with-suffix > .input-suffix {
+  display: flex; align-items: center;
+  padding: 0 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  pointer-events: none;
+  white-space: nowrap;
+  user-select: none;
+}
+/* Source-of-truth marker on percentage rows: the input the user typed
+   into is highlighted with a left accent stripe (preserves the v0.4.0
+   behaviour through the new wrapper). */
+.input-with-suffix:has(input[data-source="1"]) {
+  border-color: var(--accent);
+}
+.plot-property-hint {
+  grid-column: 1 / -1; font-size: 11px; color: var(--text-dim); margin-top: 2px;
+}
+.plot-property-warning {
+  grid-column: 1 / -1; font-size: 11px; color: var(--warn); margin-top: 2px;
+}
+
+/* Brick 10c — rollup hint + mismatch badge on boundary property rows.
+   Always rendered (empty wrapper kept so we can update in place); the
+   `:empty` selector hides it when there's nothing to show.
+   Sized to match the input text (13px / --text) so the rolled-up
+   value reads as a peer value to the user-set input, not as a muted
+   footnote. */
+.plot-property-rollup-hint {
+  font-size: 13px;
+  color: var(--text);
+  margin-top: 4px;
+}
+.plot-property-row-percent .plot-property-rollup-hint {
+  grid-column: 1 / -1;
+}
+.plot-property-rollup-hint:empty { display: none; }
+
+.rollup-mismatch-badge {
+  display: inline-block;
+  font-size: 10px;
+  padding: 1px 6px;
+  margin-left: 6px;
+  border-radius: 8px;
+  white-space: nowrap;
+}
+.rollup-mismatch-match {
+  color: var(--success);
+  background: var(--success-dim);
+}
+.rollup-mismatch-under {
+  color: var(--accent);
+  background: var(--accent-glow);
+  font-weight: 600; /* under-sum is a critical signal */
+}
+.rollup-mismatch-over {
+  color: var(--warn);
+  background: var(--warn-dim);
+}
+
+/* Read-only system rows (e.g. Plot area) */
+.plot-property-row-readonly { background: var(--bg-input); }
+.plot-property-readonly-value {
+  font-size: 13px; color: var(--text); padding: 6px 0;
+}
+
+/* Nested rows: indented under their parent (percentage-of) row.
+   The left border acts as a visual connector linking the child to its
+   parent's row above. */
+.plot-property-row-nested {
+  padding-left: 20px;
+  border-left: 2px solid var(--border);
+  margin-left: 8px;
+}
+.plot-property-row-nested .plot-property-name { font-size: 12px; color: var(--text-dim); }
+
+/* Typeahead — search-as-you-type dropdown component
+   (modeled on BRIXY's node picker; see js/typeahead.js). */
+.typeahead {
+  position: relative;
+  display: block;
+}
+.typeahead .ta-input {
+  width: 100%; box-sizing: border-box;
+}
+.typeahead .ta-dropdown {
+  display: none;
+  position: absolute; top: 100%; left: 0; right: 0;
+  z-index: 50;
+  margin-top: 2px;
+  max-height: 220px; overflow-y: auto;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: 0 6px 16px rgba(0,0,0,0.4);
+}
+.typeahead .ta-dropdown.open { display: block; }
+.typeahead .ta-item {
+  padding: 6px 10px;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg-input);
+  cursor: pointer;
+}
+.typeahead .ta-item:hover,
+.typeahead .ta-item.highlighted {
+  background: var(--bg-hover);
+  color: var(--accent);
+}
+.typeahead .ta-empty {
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* Section subheader for orphan percentages (denominator missing/broken). */
+.plot-property-subhead {
+  font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--text-muted); margin: 12px 0 4px;
+}
+
+/* ============================================================
    BOUNDARIES (Brick 6a)
    ============================================================ */
 .boundary-members-section {

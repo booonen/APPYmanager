@@ -336,15 +336,42 @@ function deleteBoundaryType(id) {
 
   // Warn if other types use this as their primitive
   const dependents = data.boundaryTypes.filter(t => t.primitiveId === id);
-  const msg = dependents.length > 0
+  // Schemas rooted at this type — they'll promote to its parent on delete.
+  const rootedSchemas = (data.propertySchemas || []).filter(s => s.rootLevelId === id);
+  let msg = dependents.length > 0
     ? t('boundary_types.confirm_delete_with_deps', {
         name: type.name,
         deps: dependents.map(t => t.name).join(', ')
       })
     : t('boundary_types.confirm_delete', { name: type.name });
 
+  // Branching hierarchy + rooted schemas = potential data loss once
+  // boundary-level property values exist (Brick 10b/c). The schema can
+  // only promote to ONE parent; sibling parents lose the rooted
+  // properties in their inspectors. Surface this explicitly so the
+  // user can re-root manually if they need the other branch.
+  if (rootedSchemas.length > 0 && dependents.length > 1) {
+    msg += '\n\n' + t('boundary_types.confirm_delete_branching_schemas', {
+      schemas: rootedSchemas.map(s => s.name).join(', '),
+      winner: dependents[0].name,
+      losers: dependents.slice(1).map(d => d.name).join(', '),
+    });
+  }
+
   appConfirm(msg, () => {
-    // Detach dependents: set their primitiveId to what the deleted type pointed at
+    // Schema-root promotion (Brick 10a). A property schema rooted at the
+    // deleted type promotes to that type's *parent* (a type whose
+    // primitiveId pointed at the deleted one) — least-impact relink, so
+    // data stays at the higher / more-aggregate level rather than
+    // sliding down into a smaller-than-intended one. If the deleted type
+    // was top-level (no parent), fall back to 'plot'. In a branching
+    // hierarchy with multiple parents we pick the first deterministically
+    // (`dependents` is the list of types that pointed at this one).
+    const promotedRoot = dependents.length > 0 ? dependents[0].id : 'plot';
+    (data.propertySchemas || []).forEach(s => {
+      if (s.rootLevelId === id) s.rootLevelId = promotedRoot;
+    });
+    // Detach type dependents: set their primitiveId to what the deleted type pointed at
     dependents.forEach(dep => { dep.primitiveId = type.primitiveId; });
     data.boundaryTypes = data.boundaryTypes.filter(t => t.id !== id);
     save();
@@ -1305,6 +1332,10 @@ function openBoundaryDetail(boundaryId) {
         placeholder="${t('boundary_detail.notes_placeholder')}"
         onblur="onBoundaryDetailSave()">${esc(b.notes || '')}</textarea>
     </div>
+    <div class="plot-detail-properties-section">
+      <div class="plot-detail-section-label">${t('plot_detail.properties_label')}</div>
+      <div id="boundary-detail-properties">${_renderBoundaryPropertyRows(b)}</div>
+    </div>
     <div class="plot-detail-meta">
       <div>
         <div class="plot-detail-meta-label">${t('boundary_detail.type')}</div>
@@ -2086,6 +2117,10 @@ function openPlotDetail(plotId) {
         placeholder="${t('plot_detail.notes_placeholder')}"
         onblur="onPlotDetailSave()">${esc(plot.notes || '')}</textarea>
     </div>
+    <div class="plot-detail-properties-section">
+      <div class="plot-detail-section-label">${t('plot_detail.properties_label')}</div>
+      <div id="plot-detail-properties">${_renderPlotPropertyRows(plot)}</div>
+    </div>
     <div class="plot-detail-meta">
       <div>
         <div class="plot-detail-meta-label">${t('plot_detail.ogf_id')}</div>
@@ -2158,4 +2193,1281 @@ function closePlotDetail() {
   _detailPlotId = null;
   destroyDetailMap();
   closeModal();
+}
+
+// ============================================================
+// PLOT PROPERTY VALUE ENTRY (Brick 9)
+// ============================================================
+// Renders one row per property schema inside the plot detail modal,
+// with a kind-appropriate input:
+//   - numeric:     <input type="number">
+//   - categorical: <input type="text">
+//   - percentage:  two inputs (raw + percent) linked live; the side
+//                  the user typed becomes the "source of truth" and
+//                  is what we persist; the other side is derived from
+//                  the current denominator value.
+//
+// Auto-save fires on blur (numeric / categorical) or on each keystroke
+// (percentage — so the linked field can update live).  Empty inputs
+// delete the value entirely.
+
+function _renderPlotPropertyRows(plot) {
+  // Plot inspector shows schemas where `appliesAtLevel(s, 'plot')` is
+  // true — currently equivalent to "rooted at 'plot'" but uses the
+  // generic helper so the rule lives in one place. The "empty" message
+  // refers to the unfiltered list so users don't get a misleading
+  // "no properties" when they've only got boundary-only schemas.
+  const allSchemas = data.propertySchemas || [];
+  const schemas = allSchemas.filter(s => appliesAtLevel(s, 'plot'));
+  if (allSchemas.length === 0) {
+    return `<div class="text-dim" style="font-size:12px;padding:8px 0">
+      ${t('plot_detail.properties_empty')}
+      <a href="javascript:void(0)" onclick="closePlotDetail();switchTab('properties')">${t('plot_detail.properties_empty_link')}</a>
+    </div>`;
+  }
+
+  // Group percentage schemas by their denominator id so we can nest them
+  // visually under whichever property they pull from. A percentage's
+  // denominator may itself be a percentage (chains like "Population →
+  // % Urban → % Spanish in urban"), which is why we render recursively.
+  // Schemas without a resolvable denominator land in `orphans`.
+  const childrenByDenom = new Map(); // denomId → percentageSchema[]
+  const orphans = [];
+  for (const s of schemas) {
+    if (s.kind !== 'percentage') continue;
+    const denomId = s.denominatorPropertyId;
+    let valid = false;
+    if (denomId) {
+      if (isVirtualPropertyId(denomId)) valid = true;
+      else if ((data.propertySchemas || []).some(x => x.id === denomId)) valid = true;
+    }
+    if (!valid) { orphans.push(s); continue; }
+    if (!childrenByDenom.has(denomId)) childrenByDenom.set(denomId, []);
+    childrenByDenom.get(denomId).push(s);
+  }
+  for (const arr of childrenByDenom.values()) {
+    arr.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  }
+
+  // Recursively render a parent's percentage children, grandchildren, etc.
+  // All nested rows share one indent — visual chain comes from ordering
+  // (each descendant renders directly after its parent). The ancestors
+  // set guards against any cycle that schema validation might have missed.
+  const renderChildren = (parentId, ancestors) => {
+    if (ancestors.has(parentId)) return '';
+    const next = new Set(ancestors);
+    next.add(parentId);
+    let h = '';
+    for (const pct of (childrenByDenom.get(parentId) || [])) {
+      h += _renderPlotPropertyRow(plot, pct, true);
+      h += renderChildren(pct.id, next);
+    }
+    return h;
+  };
+
+  const numerics    = schemas.filter(s => s.kind === 'numeric')
+                             .slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  const categorical = schemas.filter(s => s.kind === 'categorical')
+                             .slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+
+  let html = '';
+  html += _renderPlotAreaRow(plot);
+  html += renderChildren(AREA_VIRTUAL_ID, new Set());
+  for (const num of numerics) {
+    html += _renderPlotPropertyRow(plot, num, false);
+    html += renderChildren(num.id, new Set());
+  }
+  for (const cat of categorical) {
+    html += _renderPlotPropertyRow(plot, cat, false);
+  }
+  if (orphans.length > 0) {
+    html += `<div class="plot-property-subhead">${t('plot_detail.property_orphan_section')}</div>`;
+    for (const pct of orphans) html += _renderPlotPropertyRow(plot, pct, false);
+  }
+  return html;
+}
+
+function _renderPlotAreaRow(plot) {
+  const a = (typeof plotArea === 'function') ? plotArea(plot) : 0;
+  const formatted = (typeof formatArea === 'function') ? formatArea(a) : '—';
+  return `<div class="plot-property-row plot-property-row-readonly" data-area-row="1">
+    <div class="plot-property-label">
+      <span class="plot-property-name">${t('plot_detail.area_label')}</span>
+      <span class="property-unit-chip">${t('plot_detail.computed_chip')}</span>
+    </div>
+    <div class="plot-property-input">
+      <span class="plot-property-readonly-value mono">${esc(formatted)}</span>
+    </div>
+  </div>`;
+}
+
+// Wrap an <input>'s HTML in a `.input-with-suffix` frame. The suffix
+// (e.g. "people", "m²", "%") sits inside the input frame, right-aligned,
+// so the unit reads as part of the value rather than as a separate
+// label-side chip.
+function _inputWithSuffix(inputHtml, suffix) {
+  if (!suffix) return `<div class="input-with-suffix">${inputHtml}</div>`;
+  return `<div class="input-with-suffix has-suffix">${inputHtml}<span class="input-suffix">${esc(suffix)}</span></div>`;
+}
+
+function _renderPlotPropertyRow(plot, schema, isNested) {
+  const stored = getPlotPropertyValue(plot, schema.id);
+  // No more label-side unit chip — the unit lives inside the input as a
+  // suffix (see _inputWithSuffix). Read-only system rows (Plot area)
+  // still carry a label chip for "computed" — handled in _renderPlotAreaRow.
+  const label = `<div class="plot-property-label">
+    <span class="plot-property-name">${esc(schema.name)}</span>
+  </div>`;
+  const rowClass = isNested ? 'plot-property-row plot-property-row-nested' : 'plot-property-row';
+
+  if (schema.kind === 'numeric') {
+    const val = stored != null && stored !== '' ? esc(String(stored)) : '';
+    const input = `<input type="number" step="any" data-schema-id="${esc(schema.id)}" data-kind="numeric"
+      value="${val}" placeholder="${t('plot_detail.property_empty_placeholder')}"
+      onblur="onPlotPropertyBlur(this)">`;
+    return `<div class="${rowClass}">
+      ${label}
+      <div class="plot-property-input">
+        ${_inputWithSuffix(input, schema.unit || '')}
+      </div>
+    </div>`;
+  }
+
+  if (schema.kind === 'categorical') {
+    const val = typeof stored === 'string' ? stored : '';
+    const taId = `ta-${plot.id}-${schema.id}`;
+    return `<div class="${rowClass}">
+      ${label}
+      <div class="plot-property-input">
+        ${typeaheadHTML({
+          id: taId,
+          value: val,
+          placeholder: t('plot_detail.property_empty_placeholder'),
+          optionsFnName: 'categoricalSuggestionsForInput',
+          commitFnName: 'onPlotPropertyBlur',
+          dataAttrs: { 'schema-id': schema.id, 'kind': 'categorical' }
+        })}
+      </div>
+    </div>`;
+  }
+
+  if (schema.kind === 'percentage') {
+    const display = derivePercentageDisplay(plot, schema, stored);
+    const denomName = display.denomSchema?.name || '';
+    const denomUnit = display.denomSchema?.unit || '';
+    const denomUnitTxt = denomUnit ? ` ${denomUnit}` : '';
+    const rawSourceIsRaw = stored?.mode === 'raw';
+    const rawSourceIsPct = stored?.mode === 'percent';
+    const rawVal = display.raw    != null ? formatPropertyNumber(display.raw)    : '';
+    const pctVal = display.percent != null ? formatPropertyNumber(display.percent) : '';
+    // When the percentage is nested under its denominator's row, the
+    // "of <denom> = <value>" hint is redundant — the denominator row sits
+    // directly above. We still show the "denominator unset on this plot"
+    // hint and the "no denominator schema" warning, since those describe
+    // a problem the user needs to know about.
+    let denomNote = '';
+    if (!display.denomSchema) {
+      denomNote = `<div class="plot-property-warning">${t('plot_detail.property_no_denominator')}</div>`;
+    } else if (display.denomVal == null) {
+      denomNote = `<div class="plot-property-hint">${t('plot_detail.property_denominator_unset', { name: esc(denomName) })}</div>`;
+    } else if (!isNested) {
+      denomNote = `<div class="plot-property-hint">${t('plot_detail.property_denominator_of', {
+        name: esc(denomName),
+        value: formatPropertyNumber(display.denomVal) + esc(denomUnitTxt)
+      })}</div>`;
+    }
+
+    const rawInput = `<input type="number" step="any"
+      data-schema-id="${esc(schema.id)}" data-kind="percentage" data-mode="raw"
+      value="${rawVal}" placeholder="${t('plot_detail.property_raw_placeholder')}"
+      ${rawSourceIsRaw ? 'data-source="1"' : ''}
+      oninput="onPlotPropertyPercentInput(this)"
+      onblur="onPlotPropertyPercentBlur(this)">`;
+    const pctInput = `<input type="number" step="any"
+      data-schema-id="${esc(schema.id)}" data-kind="percentage" data-mode="percent"
+      value="${pctVal}" placeholder="${t('plot_detail.property_percent_placeholder')}"
+      ${rawSourceIsPct ? 'data-source="1"' : ''}
+      oninput="onPlotPropertyPercentInput(this)"
+      onblur="onPlotPropertyPercentBlur(this)">`;
+
+    return `<div class="${rowClass} plot-property-row-percent">
+      ${label}
+      <div class="plot-property-input plot-property-input-percent">
+        ${_inputWithSuffix(rawInput, denomUnit || '')}
+        <span class="plot-property-eq">=</span>
+        ${_inputWithSuffix(pctInput, '%')}
+        ${denomNote}
+      </div>
+    </div>`;
+  }
+  return '';
+}
+
+// ============================================================
+// BOUNDARY INSPECTOR — property rows (Brick 10b)
+// ============================================================
+// Mirrors the plot inspector functions one-for-one, swapping plot
+// helpers for boundary helpers. The DOM container is
+// `#boundary-detail-properties` and state lives on `_boundaryDetailId`.
+// No aggregation engine yet — values entered here are purely user-set.
+// Roll-up + override flags arrive in Brick 10c.
+
+function _renderBoundaryPropertyRows(boundary) {
+  if (!boundary) return '';
+  const allSchemas = data.propertySchemas || [];
+  const schemas = allSchemas.filter(s => appliesAtLevel(s, boundary.typeId));
+  if (allSchemas.length === 0) {
+    return `<div class="text-dim" style="font-size:12px;padding:8px 0">
+      ${t('plot_detail.properties_empty')}
+      <a href="javascript:void(0)" onclick="closeBoundaryDetail();switchTab('properties')">${t('plot_detail.properties_empty_link')}</a>
+    </div>`;
+  }
+  if (schemas.length === 0) {
+    return `<div class="text-dim" style="font-size:12px;padding:8px 0">
+      ${t('boundary_detail.properties_none_apply')}
+    </div>`;
+  }
+
+  // Group percentage schemas by their denominator id, exactly as on plots.
+  const childrenByDenom = new Map();
+  const orphans = [];
+  for (const s of schemas) {
+    if (s.kind !== 'percentage') continue;
+    const denomId = s.denominatorPropertyId;
+    let valid = false;
+    if (denomId) {
+      if (isVirtualPropertyId(denomId)) valid = true;
+      else if ((data.propertySchemas || []).some(x => x.id === denomId)) valid = true;
+    }
+    if (!valid) { orphans.push(s); continue; }
+    if (!childrenByDenom.has(denomId)) childrenByDenom.set(denomId, []);
+    childrenByDenom.get(denomId).push(s);
+  }
+  for (const arr of childrenByDenom.values()) {
+    arr.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  }
+
+  const renderChildren = (parentId, ancestors) => {
+    if (ancestors.has(parentId)) return '';
+    const next = new Set(ancestors);
+    next.add(parentId);
+    let h = '';
+    for (const pct of (childrenByDenom.get(parentId) || [])) {
+      h += _renderBoundaryPropertyRow(boundary, pct, true);
+      h += renderChildren(pct.id, next);
+    }
+    return h;
+  };
+
+  const numerics    = schemas.filter(s => s.kind === 'numeric')
+                             .slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  const categorical = schemas.filter(s => s.kind === 'categorical')
+                             .slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+
+  let html = '';
+  html += _renderBoundaryAreaRow(boundary);
+  html += renderChildren(AREA_VIRTUAL_ID, new Set());
+  for (const num of numerics) {
+    html += _renderBoundaryPropertyRow(boundary, num, false);
+    html += renderChildren(num.id, new Set());
+  }
+  for (const cat of categorical) {
+    html += _renderBoundaryPropertyRow(boundary, cat, false);
+  }
+  if (orphans.length > 0) {
+    html += `<div class="plot-property-subhead">${t('plot_detail.property_orphan_section')}</div>`;
+    for (const pct of orphans) html += _renderBoundaryPropertyRow(boundary, pct, false);
+  }
+  return html;
+}
+
+function _renderBoundaryAreaRow(boundary) {
+  const a = (typeof boundaryArea === 'function') ? boundaryArea(boundary) : 0;
+  const formatted = (typeof formatArea === 'function') ? formatArea(a) : '—';
+  return `<div class="plot-property-row plot-property-row-readonly" data-area-row="1">
+    <div class="plot-property-label">
+      <span class="plot-property-name">${t('plot_detail.area_label')}</span>
+      <span class="property-unit-chip">${t('plot_detail.computed_chip')}</span>
+    </div>
+    <div class="plot-property-input">
+      <span class="plot-property-readonly-value mono">${esc(formatted)}</span>
+    </div>
+  </div>`;
+}
+
+function _renderBoundaryPropertyRow(boundary, schema, isNested) {
+  const stored = getBoundaryPropertyValue(boundary, schema.id);
+  const label = `<div class="plot-property-label">
+    <span class="plot-property-name">${esc(schema.name)}</span>
+  </div>`;
+  const rowClass = isNested ? 'plot-property-row plot-property-row-nested' : 'plot-property-row';
+  // Brick 10c: rollup hint + mismatch badge live in a stable wrapper so
+  // we can refresh just the rollup region in place when a value
+  // changes (no row re-render = no focus loss).
+  const rollupBlock = _renderBoundaryRollupBlock(boundary, schema);
+
+  if (schema.kind === 'numeric') {
+    const val = stored != null && stored !== '' ? esc(String(stored)) : '';
+    const input = `<input type="number" step="any" data-schema-id="${esc(schema.id)}" data-kind="numeric"
+      value="${val}" placeholder="${t('plot_detail.property_empty_placeholder')}"
+      onblur="onBoundaryPropertyBlur(this)">`;
+    return `<div class="${rowClass}">
+      ${label}
+      <div class="plot-property-input">
+        ${_inputWithSuffix(input, schema.unit || '')}
+        ${rollupBlock}
+      </div>
+    </div>`;
+  }
+
+  if (schema.kind === 'categorical') {
+    const val = typeof stored === 'string' ? stored : '';
+    const taId = `ta-b-${boundary.id}-${schema.id}`;
+    return `<div class="${rowClass}">
+      ${label}
+      <div class="plot-property-input">
+        ${typeaheadHTML({
+          id: taId,
+          value: val,
+          placeholder: t('plot_detail.property_empty_placeholder'),
+          optionsFnName: 'categoricalSuggestionsForInput',
+          commitFnName: 'onBoundaryPropertyBlur',
+          dataAttrs: { 'schema-id': schema.id, 'kind': 'categorical' }
+        })}
+        ${rollupBlock}
+      </div>
+    </div>`;
+  }
+
+  if (schema.kind === 'percentage') {
+    const display = derivePercentageDisplayForBoundary(boundary, schema, stored);
+    const denomName = display.denomSchema?.name || '';
+    const denomUnit = display.denomSchema?.unit || '';
+    const denomUnitTxt = denomUnit ? ` ${denomUnit}` : '';
+    const rawSourceIsRaw = stored?.mode === 'raw';
+    const rawSourceIsPct = stored?.mode === 'percent';
+    const rawVal = display.raw    != null ? formatPropertyNumber(display.raw)    : '';
+    const pctVal = display.percent != null ? formatPropertyNumber(display.percent) : '';
+    let denomNote = '';
+    if (!display.denomSchema) {
+      denomNote = `<div class="plot-property-warning">${t('plot_detail.property_no_denominator')}</div>`;
+    } else if (display.denomVal == null) {
+      denomNote = `<div class="plot-property-hint">${t('plot_detail.property_denominator_unset', { name: esc(denomName) })}</div>`;
+    } else if (!isNested) {
+      denomNote = `<div class="plot-property-hint">${t('plot_detail.property_denominator_of', {
+        name: esc(denomName),
+        value: formatPropertyNumber(display.denomVal) + esc(denomUnitTxt)
+      })}</div>`;
+    }
+
+    const rawInput = `<input type="number" step="any"
+      data-schema-id="${esc(schema.id)}" data-kind="percentage" data-mode="raw"
+      value="${rawVal}" placeholder="${t('plot_detail.property_raw_placeholder')}"
+      ${rawSourceIsRaw ? 'data-source="1"' : ''}
+      oninput="onBoundaryPropertyPercentInput(this)"
+      onblur="onBoundaryPropertyPercentBlur(this)">`;
+    const pctInput = `<input type="number" step="any"
+      data-schema-id="${esc(schema.id)}" data-kind="percentage" data-mode="percent"
+      value="${pctVal}" placeholder="${t('plot_detail.property_percent_placeholder')}"
+      ${rawSourceIsPct ? 'data-source="1"' : ''}
+      oninput="onBoundaryPropertyPercentInput(this)"
+      onblur="onBoundaryPropertyPercentBlur(this)">`;
+
+    return `<div class="${rowClass} plot-property-row-percent">
+      ${label}
+      <div class="plot-property-input plot-property-input-percent">
+        ${_inputWithSuffix(rawInput, denomUnit || '')}
+        <span class="plot-property-eq">=</span>
+        ${_inputWithSuffix(pctInput, '%')}
+        ${denomNote}
+        ${rollupBlock}
+      </div>
+    </div>`;
+  }
+  return '';
+}
+
+// Brick 10c — rollup hint + mismatch badge for a single property row
+// on a boundary. The wrapper is always rendered (carries
+// `data-rollup-container="<schemaId>"`) so we can refresh it in place
+// when values change. CSS `:empty` hides it when nothing to show.
+function _renderBoundaryRollupBlock(boundary, schema) {
+  return `<div class="plot-property-rollup-hint"
+    data-rollup-container="${esc(schema.id)}">${
+      _renderBoundaryRollupBlockInner(boundary, schema)
+    }</div>`;
+}
+
+function _renderBoundaryRollupBlockInner(boundary, schema) {
+  if (!boundary || !schema) return '';
+  const root = schema.rootLevelId || 'plot';
+  // At the source-of-truth level: no rollup hint (this IS where the
+  // value is recorded). Rollups only make sense at LARGER levels.
+  if (root === boundary.typeId) return '';
+
+  if (schema.kind === 'numeric') {
+    const rollup = computeRollupNumeric(boundary, schema, new Set([boundary.id]));
+    if (rollup == null) return '';
+    const unitTxt = schema.unit ? ` ${esc(schema.unit)}` : '';
+    const hint = t('boundary_detail.rollup_value', {
+      value: formatPropertyNumber(rollup) + unitTxt,
+    });
+    const userVal = resolveNumericValueForBoundary(boundary, schema);
+    const mm = classifyRollupMismatch(userVal, rollup);
+    return hint + _renderMismatchBadge(mm);
+  }
+
+  if (schema.kind === 'percentage') {
+    const r = computeRollupPercentage(boundary, schema, new Set([boundary.id]));
+    if (!r) return '';
+    const denomUnit = r.denomSchema?.unit || '';
+    const denomUnitTxt = denomUnit ? ` ${esc(denomUnit)}` : '';
+    const parts = [];
+    if (r.raw != null)     parts.push(formatPropertyNumber(r.raw) + denomUnitTxt);
+    if (r.percent != null) parts.push(formatPropertyNumber(r.percent) + '%');
+    const hint = parts.length > 0
+      ? t('boundary_detail.rollup_value', { value: parts.join(' = ') })
+      : '';
+    const userVal = resolveNumericValueForBoundary(boundary, schema); // raw
+    const mm = classifyRollupMismatch(userVal, r.raw);
+    return hint + _renderMismatchBadge(mm);
+  }
+
+  if (schema.kind === 'categorical' && schema.rollupDistribution) {
+    const dist = computeRollupCategoricalDistribution(boundary, schema, new Set([boundary.id]));
+    if (!dist || dist.size === 0) return '';
+    const total = Array.from(dist.values()).reduce((a, b) => a + b, 0);
+    if (total === 0) return '';
+    const formatted = Array.from(dist.entries())
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([val, count]) => `${esc(val)} ${Math.round((count / total) * 100)}%`)
+      .join(', ');
+    return t('boundary_detail.rollup_distribution', { dist: formatted });
+  }
+  return '';
+}
+
+function _renderMismatchBadge(cls) {
+  if (!cls) return '';
+  if (cls === 'match') return `<span class="rollup-mismatch-badge rollup-mismatch-match">${t('boundary_detail.rollup_match')}</span>`;
+  if (cls === 'under') return `<span class="rollup-mismatch-badge rollup-mismatch-under">${t('boundary_detail.rollup_under')}</span>`;
+  if (cls === 'over')  return `<span class="rollup-mismatch-badge rollup-mismatch-over">${t('boundary_detail.rollup_over')}</span>`;
+  return '';
+}
+
+// Refresh every rollup block on the open boundary inspector. Called
+// after any value commit on the boundary, because:
+//   - The boundary's user-set value just changed → mismatch may shift.
+//   - Effective denom of this boundary may change → percentage rows'
+//     rollup percents may shift even though their rollup raws don't.
+// Cheap to walk all rows; the alternative (computing exact deps) isn't
+// worth the complexity.
+function _refreshAllBoundaryRollups() {
+  if (!_boundaryDetailId) return;
+  const boundary = data.boundaries.find(b => b.id === _boundaryDetailId);
+  if (!boundary) return;
+  const schemas = (data.propertySchemas || []).filter(s => appliesAtLevel(s, boundary.typeId));
+  for (const s of schemas) {
+    const container = document.querySelector(
+      `#boundary-detail-properties [data-rollup-container="${s.id}"]`
+    );
+    if (container) container.innerHTML = _renderBoundaryRollupBlockInner(boundary, s);
+  }
+}
+
+// Distinct non-empty categorical values seen across all plots AND
+// boundaries (Brick 10b) for the given schema. Drives the typeahead's
+// suggestions on categorical rows — fights typos when reusing the
+// same category across entities. Ordered by **prevalence** (most-used
+// first, descending count across plots + boundaries), with alphabetical
+// as tiebreaker. The in-flight value on the input being edited is
+// included with count 0 so it appears in the list even when distinct
+// from anything stored — but lands after real matches of equal alpha
+// order.
+function _collectCategoricalValues(schemaId, currentVal) {
+  const counts = new Map(); // canonicalised value → count
+  for (const plot of (data.plots || [])) {
+    const v = plot.propertyValues?.[schemaId];
+    if (typeof v === 'string' && v.trim()) {
+      const key = v.trim();
+      counts.set(key, (counts.get(key) || 0) + 1);
+    }
+  }
+  for (const b of (data.boundaries || [])) {
+    const v = b.propertyValues?.[schemaId];
+    if (typeof v === 'string' && v.trim()) {
+      const key = v.trim();
+      counts.set(key, (counts.get(key) || 0) + 1);
+    }
+  }
+  if (typeof currentVal === 'string' && currentVal.trim()) {
+    const key = currentVal.trim();
+    if (!counts.has(key)) counts.set(key, 0);
+  }
+  return Array.from(counts.entries())
+    .sort((a, b) => (b[1] - a[1]) || a[0].localeCompare(b[0]))
+    .map(([value]) => value);
+}
+
+// Suggestion source for typeaheadHTML on categorical rows. Looked up by
+// name via the typeahead's `data-options-fn` attribute — must stay a
+// top-level (global) function. Reads the schema id off the input.
+function categoricalSuggestionsForInput(input) {
+  const schemaId = input.getAttribute('data-schema-id');
+  if (!schemaId) return [];
+  return _collectCategoricalValues(schemaId, input.value);
+}
+
+// Re-render every percentage row whose schema depends on `changedSchemaId`
+// as its denominator. Used after a numeric (or percentage!) value
+// changes — dependents recompute their derived side without disturbing
+// the source side. Walks transitively: when A changes, B (% of A)
+// refreshes, then C (% of B) also refreshes, etc. `visited` guards
+// against any cycle that schema validation might have missed.
+function _refreshDependentPercentageRows(changedSchemaId, visited) {
+  if (!_detailPlotId) return;
+  visited = visited || new Set();
+  if (visited.has(changedSchemaId)) return;
+  visited.add(changedSchemaId);
+  const plot = data.plots.find(p => p.id === _detailPlotId);
+  if (!plot) return;
+  const dependents = (data.propertySchemas || []).filter(s =>
+    s.kind === 'percentage' && s.denominatorPropertyId === changedSchemaId
+  );
+  for (const dep of dependents) {
+    const rawInput = document.querySelector(
+      `#plot-detail-properties input[data-schema-id="${dep.id}"][data-mode="raw"]`
+    );
+    const pctInput = document.querySelector(
+      `#plot-detail-properties input[data-schema-id="${dep.id}"][data-mode="percent"]`
+    );
+    if (!rawInput || !pctInput) continue;
+    const stored = getPlotPropertyValue(plot, dep.id);
+    const display = derivePercentageDisplay(plot, dep, stored);
+    // Update the derived side only; leave the source side alone.
+    if (stored?.mode === 'raw') {
+      pctInput.value = display.percent != null ? formatPropertyNumber(display.percent) : '';
+    } else if (stored?.mode === 'percent') {
+      rawInput.value = display.raw != null ? formatPropertyNumber(display.raw) : '';
+    } else {
+      // Nothing stored — both sides empty, but if the denominator now has
+      // a value the user can type into either side.
+      rawInput.value = '';
+      pctInput.value = '';
+    }
+    // This dep's resolved value just changed, so anything that uses it
+    // as a denominator needs to recompute too.
+    _refreshDependentPercentageRows(dep.id, visited);
+  }
+}
+
+function onPlotPropertyBlur(inputEl) {
+  if (!_detailPlotId) return;
+  const plot = data.plots.find(p => p.id === _detailPlotId);
+  if (!plot) return;
+  const schemaId = inputEl.dataset.schemaId;
+  const kind = inputEl.dataset.kind;
+  const raw = inputEl.value;
+
+  if (kind === 'numeric') {
+    if (raw === '' || raw == null) {
+      clearPlotPropertyValue(plot, schemaId);
+    } else {
+      const n = Number(raw);
+      if (!Number.isFinite(n)) return; // invalid — leave previous value alone
+      const schema = findPropertySchema(schemaId);
+      const stored = schema?.autoRound ? Math.round(n) : n;
+      setPlotPropertyValue(plot, schemaId, stored);
+      // Reflect the rounded value back into the input so the user sees
+      // what got persisted (rather than 50.8 silently becoming 51 in
+      // the next render).
+      if (stored !== n) inputEl.value = String(stored);
+    }
+    save();
+    _refreshDependentPercentageRows(schemaId);
+  } else if (kind === 'categorical') {
+    if (raw === '' || raw == null) {
+      clearPlotPropertyValue(plot, schemaId);
+    } else {
+      setPlotPropertyValue(plot, schemaId, raw);
+    }
+    save();
+  }
+}
+
+// Percentage input — live-link the two fields. Each keystroke in one
+// field updates the other field's value AND updates storage with the
+// new source (mode + value).  An empty field deletes the value entirely
+// and clears the linked field too.
+function onPlotPropertyPercentInput(inputEl) {
+  if (!_detailPlotId) return;
+  const plot = data.plots.find(p => p.id === _detailPlotId);
+  if (!plot) return;
+  const schemaId = inputEl.dataset.schemaId;
+  const mode = inputEl.dataset.mode; // 'raw' | 'percent'
+  const schema = findPropertySchema(schemaId);
+  if (!schema) return;
+  const raw = inputEl.value;
+
+  // Empty input → clear both sides and storage.
+  if (raw === '' || raw == null) {
+    clearPlotPropertyValue(plot, schemaId);
+    const otherMode = mode === 'raw' ? 'percent' : 'raw';
+    const otherInput = document.querySelector(
+      `#plot-detail-properties input[data-schema-id="${schemaId}"][data-mode="${otherMode}"]`
+    );
+    if (otherInput) otherInput.value = '';
+    // Reset source attribute on both inputs.
+    document.querySelectorAll(
+      `#plot-detail-properties input[data-schema-id="${schemaId}"]`
+    ).forEach(el => el.removeAttribute('data-source'));
+    save();
+    return;
+  }
+
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return; // invalid — leave alone
+
+  setPlotPropertyValue(plot, schemaId, { mode, value: n });
+  // Mark this input as source, clear source on its sibling.
+  document.querySelectorAll(
+    `#plot-detail-properties input[data-schema-id="${schemaId}"]`
+  ).forEach(el => {
+    if (el === inputEl) el.setAttribute('data-source', '1');
+    else el.removeAttribute('data-source');
+  });
+
+  // Recompute the derived sibling.
+  const display = derivePercentageDisplay(plot, schema, { mode, value: n });
+  const siblingMode = mode === 'raw' ? 'percent' : 'raw';
+  const sibling = document.querySelector(
+    `#plot-detail-properties input[data-schema-id="${schemaId}"][data-mode="${siblingMode}"]`
+  );
+  if (sibling) {
+    const derived = siblingMode === 'raw' ? display.raw : display.percent;
+    sibling.value = derived != null ? formatPropertyNumber(derived) : '';
+  }
+  save();
+}
+
+// Percentage blur — save() is already called inside the input handler
+// for every keystroke (debounced 300 ms by save()), so blur is just a
+// belt-and-braces flush in case focus loss happens without a final
+// input event.
+function onPlotPropertyPercentBlur(inputEl) {
+  // Apply auto-round on commit (not on each keystroke — that would
+  // interfere with typing decimals). Only the raw side participates
+  // in auto-round: the percent side is in % and isn't rounded by the
+  // `autoRound` flag.
+  if (_detailPlotId && inputEl?.dataset?.mode === 'raw') {
+    const plot = data.plots.find(p => p.id === _detailPlotId);
+    const schemaId = inputEl.dataset.schemaId;
+    const schema = schemaId ? findPropertySchema(schemaId) : null;
+    if (plot && schema && _effectiveAutoRound(schema)) {
+      const stored = getPlotPropertyValue(plot, schemaId);
+      if (stored && typeof stored === 'object' && stored.mode === 'raw'
+          && Number.isFinite(Number(stored.value))) {
+        const rounded = Math.round(Number(stored.value));
+        if (rounded !== Number(stored.value)) {
+          setPlotPropertyValue(plot, schemaId, { mode: 'raw', value: rounded });
+          inputEl.value = String(rounded);
+          // The percent sibling derives from the now-rounded raw — refresh it.
+          const sibling = document.querySelector(
+            `#plot-detail-properties input[data-schema-id="${schemaId}"][data-mode="percent"]`
+          );
+          if (sibling) {
+            const display = derivePercentageDisplay(plot, schema, { mode: 'raw', value: rounded });
+            sibling.value = display.percent != null ? formatPropertyNumber(display.percent) : '';
+          }
+          _refreshDependentPercentageRows(schemaId);
+        }
+      }
+    }
+  }
+  save();
+}
+
+// ============================================================
+// BOUNDARY INSPECTOR — value handlers (Brick 10b)
+// ============================================================
+// Parallel to onPlotProperty* — same logic, swap plot helpers for
+// boundary helpers, swap `_detailPlotId` for `_boundaryDetailId`, swap
+// `#plot-detail-properties` for `#boundary-detail-properties`.
+
+function _refreshDependentBoundaryPercentageRows(changedSchemaId, visited) {
+  if (!_boundaryDetailId) return;
+  visited = visited || new Set();
+  if (visited.has(changedSchemaId)) return;
+  visited.add(changedSchemaId);
+  const boundary = data.boundaries.find(b => b.id === _boundaryDetailId);
+  if (!boundary) return;
+  const dependents = (data.propertySchemas || []).filter(s =>
+    s.kind === 'percentage' && s.denominatorPropertyId === changedSchemaId
+  );
+  for (const dep of dependents) {
+    const rawInput = document.querySelector(
+      `#boundary-detail-properties input[data-schema-id="${dep.id}"][data-mode="raw"]`
+    );
+    const pctInput = document.querySelector(
+      `#boundary-detail-properties input[data-schema-id="${dep.id}"][data-mode="percent"]`
+    );
+    if (!rawInput || !pctInput) continue;
+    const stored = getBoundaryPropertyValue(boundary, dep.id);
+    const display = derivePercentageDisplayForBoundary(boundary, dep, stored);
+    if (stored?.mode === 'raw') {
+      pctInput.value = display.percent != null ? formatPropertyNumber(display.percent) : '';
+    } else if (stored?.mode === 'percent') {
+      rawInput.value = display.raw != null ? formatPropertyNumber(display.raw) : '';
+    } else {
+      rawInput.value = '';
+      pctInput.value = '';
+    }
+    _refreshDependentBoundaryPercentageRows(dep.id, visited);
+  }
+}
+
+function onBoundaryPropertyBlur(inputEl) {
+  if (!_boundaryDetailId) return;
+  const boundary = data.boundaries.find(b => b.id === _boundaryDetailId);
+  if (!boundary) return;
+  const schemaId = inputEl.dataset.schemaId;
+  const kind = inputEl.dataset.kind;
+  const raw = inputEl.value;
+
+  if (kind === 'numeric') {
+    if (raw === '' || raw == null) {
+      clearBoundaryPropertyValue(boundary, schemaId);
+    } else {
+      const n = Number(raw);
+      if (!Number.isFinite(n)) return;
+      const schema = findPropertySchema(schemaId);
+      const stored = schema?.autoRound ? Math.round(n) : n;
+      setBoundaryPropertyValue(boundary, schemaId, stored);
+      if (stored !== n) inputEl.value = String(stored);
+    }
+    save();
+    _refreshDependentBoundaryPercentageRows(schemaId);
+    _refreshAllBoundaryRollups();
+  } else if (kind === 'categorical') {
+    if (raw === '' || raw == null) {
+      clearBoundaryPropertyValue(boundary, schemaId);
+    } else {
+      setBoundaryPropertyValue(boundary, schemaId, raw);
+    }
+    save();
+    _refreshAllBoundaryRollups();
+  }
+}
+
+function onBoundaryPropertyPercentInput(inputEl) {
+  if (!_boundaryDetailId) return;
+  const boundary = data.boundaries.find(b => b.id === _boundaryDetailId);
+  if (!boundary) return;
+  const schemaId = inputEl.dataset.schemaId;
+  const mode = inputEl.dataset.mode;
+  const schema = findPropertySchema(schemaId);
+  if (!schema) return;
+  const raw = inputEl.value;
+
+  if (raw === '' || raw == null) {
+    clearBoundaryPropertyValue(boundary, schemaId);
+    const otherMode = mode === 'raw' ? 'percent' : 'raw';
+    const otherInput = document.querySelector(
+      `#boundary-detail-properties input[data-schema-id="${schemaId}"][data-mode="${otherMode}"]`
+    );
+    if (otherInput) otherInput.value = '';
+    document.querySelectorAll(
+      `#boundary-detail-properties input[data-schema-id="${schemaId}"]`
+    ).forEach(el => el.removeAttribute('data-source'));
+    save();
+    _refreshDependentBoundaryPercentageRows(schemaId);
+    _refreshAllBoundaryRollups();
+    return;
+  }
+
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return;
+
+  setBoundaryPropertyValue(boundary, schemaId, { mode, value: n });
+  document.querySelectorAll(
+    `#boundary-detail-properties input[data-schema-id="${schemaId}"]`
+  ).forEach(el => {
+    if (el === inputEl) el.setAttribute('data-source', '1');
+    else el.removeAttribute('data-source');
+  });
+
+  const display = derivePercentageDisplayForBoundary(boundary, schema, { mode, value: n });
+  const siblingMode = mode === 'raw' ? 'percent' : 'raw';
+  const sibling = document.querySelector(
+    `#boundary-detail-properties input[data-schema-id="${schemaId}"][data-mode="${siblingMode}"]`
+  );
+  if (sibling) {
+    const derived = siblingMode === 'raw' ? display.raw : display.percent;
+    sibling.value = derived != null ? formatPropertyNumber(derived) : '';
+  }
+  save();
+  _refreshDependentBoundaryPercentageRows(schemaId);
+  _refreshAllBoundaryRollups();
+}
+
+function onBoundaryPropertyPercentBlur(inputEl) {
+  if (_boundaryDetailId && inputEl?.dataset?.mode === 'raw') {
+    const boundary = data.boundaries.find(b => b.id === _boundaryDetailId);
+    const schemaId = inputEl.dataset.schemaId;
+    const schema = schemaId ? findPropertySchema(schemaId) : null;
+    if (boundary && schema && _effectiveAutoRound(schema)) {
+      const stored = getBoundaryPropertyValue(boundary, schemaId);
+      if (stored && typeof stored === 'object' && stored.mode === 'raw'
+          && Number.isFinite(Number(stored.value))) {
+        const rounded = Math.round(Number(stored.value));
+        if (rounded !== Number(stored.value)) {
+          setBoundaryPropertyValue(boundary, schemaId, { mode: 'raw', value: rounded });
+          inputEl.value = String(rounded);
+          const sibling = document.querySelector(
+            `#boundary-detail-properties input[data-schema-id="${schemaId}"][data-mode="percent"]`
+          );
+          if (sibling) {
+            const display = derivePercentageDisplayForBoundary(boundary, schema, { mode: 'raw', value: rounded });
+            sibling.value = display.percent != null ? formatPropertyNumber(display.percent) : '';
+          }
+          _refreshDependentBoundaryPercentageRows(schemaId);
+        }
+      }
+    }
+  }
+  save();
+  // Always refresh rollup display on commit — covers any user-set change
+  // even if no rounding happened.
+  _refreshAllBoundaryRollups();
+}
+
+// ============================================================
+// PROPERTIES — schema editor (Brick 8)
+// ============================================================
+// Three kinds: numeric (sum / weighted-average), categorical (no rollup
+// by default; opt-in distribution aggregation), percentage (of another
+// property). Plot-level value entry arrives in Brick 9; aggregation in
+// Brick 10. This brick is the schema layer only.
+
+let _propertyEditId = null;
+
+function renderProperties() {
+  const el = document.getElementById('properties-content');
+  if (!el) return;
+
+  bootstrapPropertySchemas();
+
+  const all = (data.propertySchemas || []).slice().sort((a, b) =>
+    (a.name || '').localeCompare(b.name || '')
+  );
+
+  const top = `
+    <div class="flex" style="justify-content:space-between;align-items:center;margin-bottom:12px">
+      <button class="btn btn-primary" onclick="openAddPropertyModal()">+ ${t('properties.add_btn')}</button>
+      <span class="text-dim" style="font-size:12px">${t('properties.count', { n: all.length })}</span>
+    </div>`;
+
+  if (all.length === 0) {
+    el.innerHTML = top + `
+      <div class="empty-state">
+        <div class="empty-icon">◊</div>
+        <h3>${t('properties.empty_title')}</h3>
+        <p>${t('properties.empty_body')}</p>
+        <button class="btn btn-primary" onclick="openAddPropertyModal()">+ ${t('properties.add_btn')}</button>
+      </div>`;
+    return;
+  }
+
+  el.innerHTML = top + `
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>${t('properties.col_name')}</th>
+          <th>${t('properties.col_kind')}</th>
+          <th>${t('properties.col_behaviour')}</th>
+          <th>${t('properties.col_unit')}</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        ${all.map(_renderPropertyRow).join('')}
+      </tbody>
+    </table>`;
+}
+
+function _renderPropertyRow(schema) {
+  const kindLabel = t('properties.kind_' + schema.kind) || schema.kind;
+  const beh = describePropertyBehaviour(schema);
+  let behLabel;
+  if (beh.code === 'sum')                  behLabel = t('properties.beh_sum');
+  else if (beh.code === 'weighted_average') behLabel = beh.refName
+                                                ? t('properties.beh_weighted_by', { name: esc(beh.refName) })
+                                                : `<span class="text-muted">${t('properties.beh_weighted_unset')}</span>`;
+  else if (beh.code === 'distribution')     behLabel = t('properties.beh_distribution');
+  else if (beh.code === 'no_rollup')        behLabel = t('properties.beh_no_rollup');
+  else if (beh.code === 'percentage_of')    behLabel = beh.refName
+                                                ? t('properties.beh_percent_of', { name: esc(beh.refName) })
+                                                : `<span class="text-muted">${t('properties.beh_percent_unset')}</span>`;
+  else                                      behLabel = '<span class="text-muted">—</span>';
+
+  // Append a "Defined at: <type>" chip when the schema is rooted at a
+  // boundary type. Plot-rooted schemas (the common default) stay quiet
+  // so the column doesn't get noisy for the typical case.
+  const root = schema.rootLevelId || 'plot';
+  if (root !== 'plot') {
+    const rootType = (data.boundaryTypes || []).find(bt => bt.id === root);
+    if (rootType) {
+      behLabel += ` <span class="property-root-chip">${t('properties.defined_at_chip', { name: esc(rootType.name) })}</span>`;
+    }
+  }
+
+  return `<tr>
+    <td><strong>${esc(schema.name)}</strong></td>
+    <td>${esc(kindLabel)}</td>
+    <td>${behLabel}</td>
+    <td class="text-dim">${schema.unit ? esc(schema.unit) : '<span class="text-muted">—</span>'}</td>
+    <td class="actions-cell" style="white-space:nowrap;text-align:right">
+      <button class="btn btn-sm" onclick="openEditPropertyModal('${esc(schema.id)}')">${t('properties.edit_btn')}</button>
+      <button class="btn btn-sm btn-danger" onclick="deleteProperty('${esc(schema.id)}')">${t('properties.delete_btn')}</button>
+    </td>
+  </tr>`;
+}
+
+function openAddPropertyModal() {
+  _propertyEditId = null;
+  _openPropertyModal(t('properties.modal_add_title'), null);
+}
+
+function openEditPropertyModal(id) {
+  const schema = findPropertySchema(id);
+  if (!schema) return;
+  _propertyEditId = id;
+  _openPropertyModal(t('properties.modal_edit_title'), schema);
+}
+
+function _openPropertyModal(title, schema) {
+  const isEdit = !!schema;
+  const name = schema?.name || '';
+  const unit = schema?.unit || '';
+  const notes = schema?.notes || '';
+  const kind = schema?.kind || 'numeric';
+  const aggregation = schema?.aggregation || 'sum';
+  const weightId = schema?.weightPropertyId || '';
+  const denominatorId = schema?.denominatorPropertyId || '';
+  const rollup = !!schema?.rollupDistribution;
+  const autoRound = !!schema?.autoRound;
+  const rootLevelId = schema?.rootLevelId || 'plot';
+
+  // Kind dropdown is locked on edit (data-integrity hedge for Brick 9).
+  // Add: dropdown is enabled and onchange swaps the kind-specific block.
+  const kindSelectHtml = isEdit
+    ? `<select id="property-kind" disabled>
+         ${PROPERTY_KINDS.map(k => `<option value="${k}"${k === kind ? ' selected' : ''}>${esc(t('properties.kind_' + k))}</option>`).join('')}
+       </select>
+       <p class="text-dim" style="font-size:11px;margin-top:4px">${t('properties.kind_locked_help')}</p>`
+    : `<select id="property-kind" onchange="onPropertyKindChange(this.value)">
+         ${PROPERTY_KINDS.map(k => `<option value="${k}"${k === kind ? ' selected' : ''}>${esc(t('properties.kind_' + k))}</option>`).join('')}
+       </select>`;
+
+  openModal(title, `
+    <div class="form-group">
+      <label>${t('properties.name_label')}</label>
+      <input type="text" id="property-name" value="${esc(name)}"
+        placeholder="${t('properties.name_placeholder')}" autocomplete="off">
+    </div>
+    <div class="form-group">
+      <label>${t('properties.unit_label')}</label>
+      <p class="text-dim" style="font-size:12px;margin-bottom:6px">${t('properties.unit_help')}</p>
+      <input type="text" id="property-unit" value="${esc(unit)}"
+        placeholder="${t('properties.unit_placeholder')}" autocomplete="off" style="max-width:160px">
+    </div>
+    <div class="form-group">
+      <label>${t('properties.kind_label')}</label>
+      <p class="text-dim" style="font-size:12px;margin-bottom:6px">${t('properties.kind_help')}</p>
+      ${kindSelectHtml}
+    </div>
+    <div class="form-group">
+      <label>${t('properties.defined_at_label')}</label>
+      <p class="text-dim" style="font-size:12px;margin-bottom:6px">${t('properties.defined_at_help')}</p>
+      ${_definedAtSelect(rootLevelId)}
+    </div>
+    <div id="property-kind-fields">
+      ${_renderPropertyKindFields(kind, { aggregation, weightId, denominatorId, rollup, autoRound })}
+    </div>
+    <div class="form-group">
+      <label>${t('properties.notes_label')}</label>
+      <textarea id="property-notes" rows="2"
+        placeholder="${t('properties.notes_placeholder')}">${esc(notes)}</textarea>
+    </div>
+  `, `
+    <button class="btn" onclick="closeModal()">${t('btn.cancel')}</button>
+    <button class="btn btn-primary" onclick="saveProperty()">${t('btn.save')}</button>
+  `);
+
+  const modalEl = document.getElementById('modal');
+  if (modalEl) modalEl.style.width = '560px';
+  setTimeout(() => document.getElementById('property-name')?.focus(), 50);
+}
+
+function _renderPropertyKindFields(kind, opts) {
+  // opts: { aggregation, weightId, denominatorId, rollup, autoRound }
+  const numericOpts = getNumericPropertyOptions(_propertyEditId);
+  const denomOpts   = getDenominatorPropertyOptions(_propertyEditId);
+  if (kind === 'numeric') {
+    const aggSel = `
+      <select id="property-aggregation" onchange="onPropertyAggregationChange(this.value)">
+        ${NUMERIC_AGGREGATIONS.map(a => `<option value="${a}"${a === opts.aggregation ? ' selected' : ''}>${esc(t('properties.agg_' + a))}</option>`).join('')}
+      </select>`;
+    const showWeight = opts.aggregation === 'weighted_average';
+    const weightSelect = `
+      <div class="form-group" id="property-weight-group" style="${showWeight ? '' : 'display:none'}">
+        <label>${t('properties.weight_label')}</label>
+        <p class="text-dim" style="font-size:12px;margin-bottom:6px">${t('properties.weight_help')}</p>
+        ${_propertyRefSelect('property-weight', numericOpts, opts.weightId, t('properties.ref_pick_placeholder'))}
+      </div>`;
+    const autoRoundBlock = `
+      <div class="form-group">
+        <label style="display:inline-flex;align-items:center;gap:8px;cursor:pointer">
+          <input type="checkbox" id="property-auto-round"${opts.autoRound ? ' checked' : ''} style="margin:0">
+          <span>${t('properties.auto_round_label')}</span>
+        </label>
+        <p class="text-dim" style="font-size:12px;margin-top:4px">${t('properties.auto_round_help')}</p>
+      </div>`;
+    return `
+      <div class="form-group">
+        <label>${t('properties.aggregation_label')}</label>
+        <p class="text-dim" style="font-size:12px;margin-bottom:6px">${t('properties.aggregation_help')}</p>
+        ${aggSel}
+      </div>
+      ${weightSelect}
+      ${autoRoundBlock}`;
+  }
+  if (kind === 'categorical') {
+    return `
+      <div class="form-group">
+        <label style="display:inline-flex;align-items:center;gap:8px;cursor:pointer">
+          <input type="checkbox" id="property-rollup-distribution"${opts.rollup ? ' checked' : ''} style="margin:0">
+          <span>${t('properties.rollup_distribution_label')}</span>
+        </label>
+        <p class="text-dim" style="font-size:12px;margin-top:4px">${t('properties.rollup_distribution_help')}</p>
+      </div>`;
+  }
+  if (kind === 'percentage') {
+    return `
+      <div class="form-group">
+        <label>${t('properties.denominator_label')}</label>
+        <p class="text-dim" style="font-size:12px;margin-bottom:6px">${t('properties.denominator_help')}</p>
+        ${_propertyRefSelect('property-denominator', denomOpts, opts.denominatorId, t('properties.ref_pick_placeholder'))}
+      </div>`;
+  }
+  return '';
+}
+
+// "Defined at" dropdown — single select of the boundary level where this
+// property is normally recorded. Plot (the implicit lowest level) pins
+// at the top; user-defined boundary types follow in hierarchy order
+// (smallest containers first, matching the Boundary Types tab).
+function _definedAtSelect(currentValue) {
+  const types = (typeof boundaryTypesInHierarchyOrder === 'function')
+    ? boundaryTypesInHierarchyOrder()
+    : [];
+  const current = currentValue || 'plot';
+  const plotOpt = `<option value="plot"${current === 'plot' ? ' selected' : ''}>${t('properties.defined_at_plot')}</option>`;
+  const typeOpts = types.map(bt =>
+    `<option value="${esc(bt.id)}"${bt.id === current ? ' selected' : ''}>${esc(bt.name)}</option>`
+  ).join('');
+  return `<select id="property-defined-at">${plotOpt}${typeOpts}</select>`;
+}
+
+function _propertyRefSelect(id, numericOpts, currentValue, placeholderLabel) {
+  if (numericOpts.length === 0) {
+    return `<select id="${id}" disabled>
+        <option value="">${esc(t('properties.ref_no_numerics'))}</option>
+      </select>`;
+  }
+  // Virtual entries (e.g. Plot area) pin to the top with a "(computed)"
+  // suffix so users can spot them; user-defined numerics follow,
+  // alphabetical.
+  const sorted = numericOpts.slice().sort((a, b) => {
+    if (a.__virtual && !b.__virtual) return -1;
+    if (!a.__virtual && b.__virtual) return 1;
+    return (a.name || '').localeCompare(b.name || '');
+  });
+  const options = sorted.map(p => {
+    const label = p.__virtual
+      ? `${p.name} ${t('properties.ref_computed_suffix')}`
+      : p.name;
+    return `<option value="${esc(p.id)}"${p.id === currentValue ? ' selected' : ''}>${esc(label)}</option>`;
+  }).join('');
+  return `<select id="${id}">
+      <option value=""${!currentValue ? ' selected' : ''}>${esc(placeholderLabel)}</option>
+      ${options}
+    </select>`;
+}
+
+function onPropertyKindChange(kind) {
+  const container = document.getElementById('property-kind-fields');
+  if (!container) return;
+  // When the user toggles kinds we discard any in-progress fields for the
+  // previous kind (their state lives in DOM only). That's fine: switching
+  // kind in the add modal is a rare action and the alternative would be
+  // building a parallel state object just to round-trip values you may
+  // not want.
+  container.innerHTML = _renderPropertyKindFields(kind, {
+    aggregation: 'sum',
+    weightId: '',
+    denominatorId: '',
+    rollup: false,
+  });
+}
+
+function onPropertyAggregationChange(aggregation) {
+  const grp = document.getElementById('property-weight-group');
+  if (!grp) return;
+  grp.style.display = aggregation === 'weighted_average' ? '' : 'none';
+}
+
+function saveProperty() {
+  const nameEl = document.getElementById('property-name');
+  const unitEl = document.getElementById('property-unit');
+  const kindEl = document.getElementById('property-kind');
+  const notesEl = document.getElementById('property-notes');
+  if (!nameEl || !kindEl) return;
+
+  const name = nameEl.value.trim();
+  const unit = (unitEl?.value || '').trim();
+  const kind = kindEl.value;
+  const notes = (notesEl?.value || '').trim();
+
+  if (!name) {
+    toast(t('properties.error_name_empty'), 'error');
+    return;
+  }
+  if (!PROPERTY_KINDS.includes(kind)) {
+    toast(t('properties.error_kind_invalid'), 'error');
+    return;
+  }
+  const dup = (data.propertySchemas || []).find(p =>
+    p.name.toLowerCase() === name.toLowerCase() && p.id !== _propertyEditId
+  );
+  if (dup) {
+    toast(t('properties.error_name_duplicate', { name }), 'error');
+    return;
+  }
+
+  // Kind-specific field collection + validation.
+  let aggregation = null;
+  let weightPropertyId = null;
+  let denominatorPropertyId = null;
+  let rollupDistribution = false;
+  let autoRound = false;
+  // Common across all kinds: which level this property is defined at.
+  // Empty / unknown id falls back to 'plot'.
+  const rootLevelId = document.getElementById('property-defined-at')?.value || 'plot';
+
+  if (kind === 'numeric') {
+    aggregation = document.getElementById('property-aggregation')?.value || 'sum';
+    autoRound = !!document.getElementById('property-auto-round')?.checked;
+    if (!NUMERIC_AGGREGATIONS.includes(aggregation)) {
+      toast(t('properties.error_aggregation_invalid'), 'error');
+      return;
+    }
+    if (aggregation === 'weighted_average') {
+      weightPropertyId = document.getElementById('property-weight')?.value || null;
+      if (!weightPropertyId) {
+        toast(t('properties.error_weight_required'), 'error');
+        return;
+      }
+      if (weightPropertyId === _propertyEditId) {
+        toast(t('properties.error_weight_self'), 'error');
+        return;
+      }
+      const weightProp = findPropertySchema(weightPropertyId);
+      if (!weightProp || weightProp.kind !== 'numeric') {
+        toast(t('properties.error_weight_not_numeric'), 'error');
+        return;
+      }
+      if (_hasPropertyRefCycle(_propertyEditId, weightPropertyId)) {
+        toast(t('properties.error_cycle'), 'error');
+        return;
+      }
+    }
+  } else if (kind === 'categorical') {
+    rollupDistribution = !!document.getElementById('property-rollup-distribution')?.checked;
+  } else if (kind === 'percentage') {
+    denominatorPropertyId = document.getElementById('property-denominator')?.value || null;
+    if (!denominatorPropertyId) {
+      toast(t('properties.error_denominator_required'), 'error');
+      return;
+    }
+    if (denominatorPropertyId === _propertyEditId) {
+      toast(t('properties.error_denominator_self'), 'error');
+      return;
+    }
+    const denomProp = findPropertySchema(denominatorPropertyId);
+    if (!denomProp || (denomProp.kind !== 'numeric' && denomProp.kind !== 'percentage')) {
+      toast(t('properties.error_denominator_invalid'), 'error');
+      return;
+    }
+    if (_hasPropertyRefCycle(_propertyEditId, denominatorPropertyId)) {
+      toast(t('properties.error_cycle'), 'error');
+      return;
+    }
+  }
+
+  if (_propertyEditId) {
+    const schema = findPropertySchema(_propertyEditId);
+    if (schema) {
+      schema.name = name;
+      schema.unit = unit;
+      schema.notes = notes;
+      schema.rootLevelId = rootLevelId;
+      // Kind is locked on edit; we leave schema.kind alone.
+      if (schema.kind === 'numeric') {
+        schema.aggregation = aggregation;
+        schema.weightPropertyId = aggregation === 'weighted_average' ? weightPropertyId : null;
+        schema.autoRound = autoRound;
+      } else if (schema.kind === 'categorical') {
+        schema.rollupDistribution = rollupDistribution;
+      } else if (schema.kind === 'percentage') {
+        schema.denominatorPropertyId = denominatorPropertyId;
+      }
+    }
+  } else {
+    createPropertySchema({
+      name, unit, kind, notes,
+      aggregation, weightPropertyId,
+      rollupDistribution,
+      denominatorPropertyId,
+      autoRound,
+      rootLevelId,
+    });
+  }
+
+  save();
+  closeModal();
+  renderProperties();
+  renderDashboard();
+  toast(_propertyEditId ? t('properties.updated_toast', { name }) : t('properties.created_toast', { name }), 'success');
+  _propertyEditId = null;
+}
+
+function deleteProperty(id) {
+  const schema = findPropertySchema(id);
+  if (!schema) return;
+  const dependents = findPropertyDependents(id);
+  if (dependents.length > 0) {
+    toast(t('properties.error_has_dependents', {
+      name: schema.name,
+      deps: dependents.map(d => d.name).join(', ')
+    }), 'error');
+    return;
+  }
+  appConfirm(t('properties.confirm_delete', { name: schema.name }), () => {
+    deletePropertySchema(id);
+    save();
+    toast(t('properties.deleted_toast', { name: schema.name }), 'success');
+    renderProperties();
+    renderDashboard();
+  });
 }

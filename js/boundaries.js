@@ -60,6 +60,29 @@ function _typeChainBelow(typeId) {
   return chain;
 }
 
+// Boundary types in hierarchy order, smallest-containers-first
+// (matches the visual order in the Boundary Types tab). Walks from
+// types whose primitiveId is null (the implicit-plot leaves) upward
+// via reverse primitiveId pointers. Used by the property schema
+// editor's "Defined at" dropdown so users see Plot → Municipality →
+// Province → Country, the same direction they read the tree.
+function boundaryTypesInHierarchyOrder() {
+  const types = (data.boundaryTypes || []).slice();
+  const ordered = [];
+  const visited = new Set();
+  function walk(parentId) {
+    types
+      .filter(t => t.primitiveId === parentId && !visited.has(t.id))
+      .forEach(child => {
+        visited.add(child.id);
+        ordered.push(child);
+        walk(child.id);
+      });
+  }
+  walk(null);
+  return ordered;
+}
+
 function _typeChainReachesPlots(typeId) {
   // True if the chain from typeId bottoms out at null (plots reachable).
   let cur = data.boundaryTypes.find(t => t.id === typeId);

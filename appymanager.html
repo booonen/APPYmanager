@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>APPYmanager</title>
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;0,9..144,700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <link rel="stylesheet" href="styles.css">
@@ -30,12 +31,13 @@
       <div class="nav-item" data-tab="boundary-types" onclick="switchTab('boundary-types')"><span class="nav-icon">≡</span> <span data-t="nav.boundary_types">Boundary Types</span></div>
       <div class="nav-item" data-tab="boundaries" onclick="switchTab('boundaries')"><span class="nav-icon">⬢</span> <span data-t="nav.boundaries">Boundaries</span></div>
       <div class="nav-item" data-tab="settlements" onclick="switchTab('settlements')"><span class="nav-icon">◉</span> <span data-t="nav.settlements">Settlements</span></div>
+      <div class="nav-item" data-tab="properties" onclick="switchTab('properties')"><span class="nav-icon">◊</span> <span data-t="nav.properties">Properties</span></div>
       <div class="nav-item" data-tab="map" onclick="switchTab('map')"><span class="nav-icon">🗺</span> <span data-t="nav.map">Map</span></div>
       <div class="nav-section" data-t="nav_section.system">System</div>
       <div class="nav-item" data-tab="settings" onclick="switchTab('settings')"><span class="nav-icon">⚙</span> <span data-t="nav.settings">Settings</span></div>
       <div class="nav-item" data-tab="import-export" onclick="switchTab('import-export')"><span class="nav-icon">⇅</span> <span data-t="nav.import_export">Import / Export</span></div>
       <div class="spacer"></div>
-      <div style="padding:8px 16px;font-size:10px;color:var(--text-muted);font-family:var(--font-mono);opacity:0.6">v0.2.7</div>
+      <div style="padding:8px 16px;font-size:10px;color:var(--text-muted);font-family:var(--font-mono);opacity:0.6">v0.6.1</div>
     </nav>
     <div class="content">
 
@@ -68,6 +70,12 @@
       <div class="tab-panel" id="panel-settlements">
         <div class="page-header"><div><h1 data-t="page.settlements">Settlements</h1><div class="subtitle" data-t="subtitle.settlements">OGF place=* nodes attached to plots or boundaries</div></div></div>
         <div id="settlements-content"></div>
+      </div>
+
+      <!-- PROPERTIES -->
+      <div class="tab-panel" id="panel-properties">
+        <div class="page-header"><div><h1 data-t="page.properties">Properties</h1><div class="subtitle" data-t="subtitle.properties">Demographic data definitions for plots and boundaries</div></div></div>
+        <div id="properties-content"></div>
       </div>
 
       <!-- MAP -->
@@ -114,11 +122,13 @@
 <script src="js/plots.js"></script>
 <script src="js/boundaries.js"></script>
 <script src="js/settlements.js"></script>
+<script src="js/properties.js"></script>
 <script src="js/overpass.js"></script>
 <script src="js/subdivide.js"></script>
 <script src="js/persistence.js"></script>
 <script src="js/ui.js"></script>
 <script src="js/map.js"></script>
+<script src="js/typeahead.js"></script>
 <script src="js/views.js"></script>
 <script>
 (async () => {
