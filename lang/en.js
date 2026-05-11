@@ -328,7 +328,7 @@ registerLanguage('en', 'English', {
     "weight_label": "Weight property",
     "weight_help": "The numeric property to weight by (e.g. for an average household income, weight by population).",
     "denominator_label": "Denominator property",
-    "denominator_help": "The numeric property this percentage is taken of (e.g. for \"% urban\", denominator = Population).",
+    "denominator_help": "The property this percentage is taken of (e.g. for \"% urban\", denominator = Population). Can be a numeric property or another percentage — chains like \"Population → % Urban → % Spanish in urban\" work.",
     "rollup_distribution_label": "Roll up as distribution on boundaries",
     "rollup_distribution_help": "Off (default): boundaries don't aggregate this property. On: a boundary's value becomes the percentage breakdown across its children (e.g. 40% A / 60% B).",
     "ref_pick_placeholder": "— pick a property —",
@@ -354,9 +354,9 @@ registerLanguage('en', 'English', {
     "error_weight_required": "Pick a numeric property to weight by.",
     "error_weight_self": "A property can't weight itself.",
     "error_weight_not_numeric": "The weight must be a numeric property.",
-    "error_denominator_required": "Pick a numeric property as the denominator.",
+    "error_denominator_required": "Pick a property as the denominator.",
     "error_denominator_self": "A property can't be a percentage of itself.",
-    "error_denominator_not_numeric": "The denominator must be a numeric property.",
+    "error_denominator_invalid": "The denominator must be a numeric or percentage property.",
     "error_cycle": "That would create a cycle in the property reference graph.",
     "error_has_dependents": "Cannot delete \"{name}\": referenced by {deps}."
   },
@@ -411,5 +411,9 @@ registerLanguage('en', 'English', {
     "error_parse": "Could not parse response: {msg}",
     "error_rate_limited": "Overpass is rate-limiting you — try again in ~{seconds}s.",
     "error_rate_limited_no_eta": "Overpass is rate-limiting you — wait a bit and try again."
+  },
+
+  "typeahead": {
+    "no_match": "No matches — press Enter to use as a new value."
   }
 });

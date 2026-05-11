@@ -557,4 +557,36 @@ they come up; the plan is a living document.
   3. **Categorical inputs gain a `<datalist>`** populated from every
      distinct value already in use for that schema across all plots.
      Native browser autocomplete fights typos when reusing the same
-     category across plots.
+     category across plots. *(Replaced in v0.4.2 with the BRIXY-style
+     typeahead.)*
+- **v0.4.2** ✓ (polish round 2) — three more tweaks:
+  1. **Unit-as-suffix.** Schema's `unit` no longer renders as a chip
+     next to the name. It's a trailing `.input-suffix` span inside the
+     input frame (`.input-with-suffix`), so the unit reads as part of
+     the value. Percentage rows get two wrappers (raw side suffixed
+     with denom unit, percent side suffixed with `%`); the trailing
+     `%` glyph between inputs is gone, replaced with a single `=`
+     separator. Source-of-truth accent moves to the wrapper via
+     CSS `:has()`. The Plot area read-only row keeps its "computed"
+     chip in the label slot — that's behaviour intel, not a unit.
+  2. **Native typeahead.** New `js/typeahead.js` — a search dropdown
+     modeled on BRIXY's `nodePicker*`. Adapted for **free-text accept**
+     so categorical inputs accept novel values (Enter commits typed
+     value when no option is highlighted). Arrow keys / Enter / Esc /
+     outside-click. Mousedown on dropdown items (not click) beats the
+     input's blur. Generic component — wired via `optionsFnName` and
+     `commitFnName` data attrs looked up on `window`. Replaces the
+     browser `<datalist>` on categorical rows. CSS classes:
+     `.typeahead`, `.ta-input`, `.ta-dropdown`, `.ta-item`,
+     `.ta-item.highlighted`, `.ta-empty`. Reusable for future selectors.
+  3. **Percentage-of-percentage.** Schema editor's denominator dropdown
+     now lists percentages alongside numerics (and the virtual
+     `Plot area`). New `getDenominatorPropertyOptions` keeps weight
+     references numeric-only via the existing
+     `getNumericPropertyOptions`. Validation: `kind === 'numeric' ||
+     kind === 'percentage'`. The existing
+     `resolveNumericValueForPlot` already recurses through chains so
+     `Population → % Urban → % Spanish in urban` resolves bottom-up.
+     Plot detail modal renders chained percentages with depth-first
+     `renderChildren` (ancestors set guards against cycles).
+     `_refreshDependentPercentageRows` walks dependents transitively.

@@ -1,3 +1,48 @@
+## 0.4.2 — Brick 9 polish round 2: unit-suffix, typeahead, percentage chains
+- **Unit-as-suffix.** The schema's `unit` no longer sits as a chip next
+  to the property name. It's rendered *inside* the input frame as a
+  trailing suffix span (`.input-with-suffix` / `.input-suffix`), so the
+  unit reads as part of the value the user is typing. Numeric rows get
+  one wrapper; percentage rows get two (raw side suffixed with the
+  denominator's unit, percent side suffixed with `%`). The redundant
+  trailing `%` glyph between the two inputs is gone — replaced with a
+  single `=` separator. Source-of-truth highlight (accent border on
+  the side the user typed into) moves to the wrapper via `:has()`.
+  The Plot area read-only row keeps its "computed" chip in the label
+  slot — that chip is intel about the row's behaviour, not a unit.
+- **Native typeahead.** New `js/typeahead.js` — a search-as-you-type
+  dropdown modeled on BRIXY's `nodePicker*`, adapted for free-text
+  accept so categorical inputs can record values that don't appear in
+  the suggestions list. Arrow keys navigate (↑ / ↓), Enter commits
+  (highlighted option if any, else the typed value), Escape dismisses,
+  outside-click dismisses, mousedown on a dropdown item beats the
+  input's blur so the click registers cleanly. Replaces the
+  browser-default `<datalist>` on every categorical row. CSS classes:
+  `.typeahead`, `.ta-input`, `.ta-dropdown`, `.ta-item`,
+  `.ta-item.highlighted`, `.ta-empty`. The component is generic — wired
+  by passing `optionsFnName` and `commitFnName` as data attrs, looked
+  up on `window` at runtime. First user is categorical property
+  values; reusable for future selectors.
+- **Percentages can now be denominators of other percentages.** Schema
+  editor's denominator dropdown now lists both numerics and percentages
+  (alongside the virtual `Plot area`). `getDenominatorPropertyOptions`
+  is the new fn (the existing `getNumericPropertyOptions` stays as the
+  weight-reference source — weighting by a percentage is conceptually
+  strange). Validation accepts `kind === 'numeric' || kind ===
+  'percentage'`. Chains like `Population → % Urban → % Spanish in
+  urban` resolve bottom-up via the existing
+  `resolveNumericValueForPlot` recursion. The plot detail modal
+  renders chained percentages nested recursively (`renderChildren`
+  walks the children-by-denominator map depth-first; `ancestors` set
+  guards against cycles).
+  `_refreshDependentPercentageRows` similarly walks dependents
+  transitively so a change to A re-derives B (% of A), then C (% of B),
+  etc.
+- l10n: new `typeahead.no_match` ("No matches — press Enter to use as
+  a new value."), renamed `error_denominator_not_numeric` to
+  `error_denominator_invalid` with updated copy, updated
+  `denominator_help` to mention percentage chains.
+
 ## 0.4.1 — Brick 9 polish: nesting, Plot area, categorical autocomplete
 - **Percentage rows nest under their denominator** in the plot detail
   modal. Visual indent + left-border connector make it obvious which

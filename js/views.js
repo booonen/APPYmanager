@@ -2190,19 +2190,21 @@ function _renderPlotPropertyRows(plot) {
   }
 
   // Group percentage schemas by their denominator id so we can nest them
-  // visually under whichever numeric they pull from. Schemas without a
-  // resolvable denominator land in `orphans` and render after everything
-  // else with the existing "no denominator" warning.
+  // visually under whichever property they pull from. A percentage's
+  // denominator may itself be a percentage (chains like "Population →
+  // % Urban → % Spanish in urban"), which is why we render recursively.
+  // Schemas without a resolvable denominator land in `orphans`.
   const childrenByDenom = new Map(); // denomId → percentageSchema[]
   const orphans = [];
   for (const s of schemas) {
     if (s.kind !== 'percentage') continue;
     const denomId = s.denominatorPropertyId;
-    if (!denomId) { orphans.push(s); continue; }
-    if (!isVirtualPropertyId(denomId)) {
-      const denomSchema = (data.propertySchemas || []).find(x => x.id === denomId);
-      if (!denomSchema) { orphans.push(s); continue; }
+    let valid = false;
+    if (denomId) {
+      if (isVirtualPropertyId(denomId)) valid = true;
+      else if ((data.propertySchemas || []).some(x => x.id === denomId)) valid = true;
     }
+    if (!valid) { orphans.push(s); continue; }
     if (!childrenByDenom.has(denomId)) childrenByDenom.set(denomId, []);
     childrenByDenom.get(denomId).push(s);
   }
@@ -2210,30 +2212,37 @@ function _renderPlotPropertyRows(plot) {
     arr.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   }
 
+  // Recursively render a parent's percentage children, grandchildren, etc.
+  // All nested rows share one indent — visual chain comes from ordering
+  // (each descendant renders directly after its parent). The ancestors
+  // set guards against any cycle that schema validation might have missed.
+  const renderChildren = (parentId, ancestors) => {
+    if (ancestors.has(parentId)) return '';
+    const next = new Set(ancestors);
+    next.add(parentId);
+    let h = '';
+    for (const pct of (childrenByDenom.get(parentId) || [])) {
+      h += _renderPlotPropertyRow(plot, pct, true);
+      h += renderChildren(pct.id, next);
+    }
+    return h;
+  };
+
   const numerics    = schemas.filter(s => s.kind === 'numeric')
                              .slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   const categorical = schemas.filter(s => s.kind === 'categorical')
                              .slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
 
   let html = '';
-  // Plot area first (always visible — system row, read-only).
   html += _renderPlotAreaRow(plot);
-  for (const pct of (childrenByDenom.get(AREA_VIRTUAL_ID) || [])) {
-    html += _renderPlotPropertyRow(plot, pct, true);
-  }
-  // User numerics, each followed by its percentage children.
+  html += renderChildren(AREA_VIRTUAL_ID, new Set());
   for (const num of numerics) {
     html += _renderPlotPropertyRow(plot, num, false);
-    for (const pct of (childrenByDenom.get(num.id) || [])) {
-      html += _renderPlotPropertyRow(plot, pct, true);
-    }
+    html += renderChildren(num.id, new Set());
   }
-  // Categoricals (no children).
   for (const cat of categorical) {
     html += _renderPlotPropertyRow(plot, cat, false);
   }
-  // Orphan percentages — broken denominator reference; surface with the
-  // existing warning so the user can fix the schema.
   if (orphans.length > 0) {
     html += `<div class="plot-property-subhead">${t('plot_detail.property_orphan_section')}</div>`;
     for (const pct of orphans) html += _renderPlotPropertyRow(plot, pct, false);
@@ -2255,41 +2264,52 @@ function _renderPlotAreaRow(plot) {
   </div>`;
 }
 
+// Wrap an <input>'s HTML in a `.input-with-suffix` frame. The suffix
+// (e.g. "people", "m²", "%") sits inside the input frame, right-aligned,
+// so the unit reads as part of the value rather than as a separate
+// label-side chip.
+function _inputWithSuffix(inputHtml, suffix) {
+  if (!suffix) return `<div class="input-with-suffix">${inputHtml}</div>`;
+  return `<div class="input-with-suffix has-suffix">${inputHtml}<span class="input-suffix">${esc(suffix)}</span></div>`;
+}
+
 function _renderPlotPropertyRow(plot, schema, isNested) {
   const stored = getPlotPropertyValue(plot, schema.id);
-  const unitChip = schema.unit
-    ? `<span class="property-unit-chip">${esc(schema.unit)}</span>`
-    : '';
+  // No more label-side unit chip — the unit lives inside the input as a
+  // suffix (see _inputWithSuffix). Read-only system rows (Plot area)
+  // still carry a label chip for "computed" — handled in _renderPlotAreaRow.
   const label = `<div class="plot-property-label">
-    <span class="plot-property-name">${esc(schema.name)}</span>${unitChip}
+    <span class="plot-property-name">${esc(schema.name)}</span>
   </div>`;
   const rowClass = isNested ? 'plot-property-row plot-property-row-nested' : 'plot-property-row';
 
   if (schema.kind === 'numeric') {
     const val = stored != null && stored !== '' ? esc(String(stored)) : '';
+    const input = `<input type="number" step="any" data-schema-id="${esc(schema.id)}" data-kind="numeric"
+      value="${val}" placeholder="${t('plot_detail.property_empty_placeholder')}"
+      onblur="onPlotPropertyBlur(this)">`;
     return `<div class="${rowClass}">
       ${label}
       <div class="plot-property-input">
-        <input type="number" step="any" data-schema-id="${esc(schema.id)}" data-kind="numeric"
-          value="${val}" placeholder="${t('plot_detail.property_empty_placeholder')}"
-          onblur="onPlotPropertyBlur(this)">
+        ${_inputWithSuffix(input, schema.unit || '')}
       </div>
     </div>`;
   }
 
   if (schema.kind === 'categorical') {
-    const val = typeof stored === 'string' ? esc(stored) : '';
-    const datalistId = `dl-${schema.id}`;
-    const options = _collectCategoricalValues(schema.id, stored)
-      .map(v => `<option value="${esc(v)}"></option>`).join('');
+    const val = typeof stored === 'string' ? stored : '';
+    const taId = `ta-${plot.id}-${schema.id}`;
     return `<div class="${rowClass}">
       ${label}
       <div class="plot-property-input">
-        <input type="text" list="${datalistId}"
-          data-schema-id="${esc(schema.id)}" data-kind="categorical"
-          value="${val}" placeholder="${t('plot_detail.property_empty_placeholder')}"
-          onblur="onPlotPropertyBlur(this)">
-        <datalist id="${datalistId}">${options}</datalist>
+        ${typeaheadHTML({
+          id: taId,
+          value: val,
+          placeholder: t('plot_detail.property_empty_placeholder'),
+          optionsFnName: 'categoricalSuggestionsForInput',
+          commitFnName: 'onPlotPropertyBlur',
+          dataAttrs: { 'schema-id': schema.id, 'kind': 'categorical' }
+        })}
       </div>
     </div>`;
   }
@@ -2320,23 +2340,25 @@ function _renderPlotPropertyRow(plot, schema, isNested) {
       })}</div>`;
     }
 
+    const rawInput = `<input type="number" step="any"
+      data-schema-id="${esc(schema.id)}" data-kind="percentage" data-mode="raw"
+      value="${rawVal}" placeholder="${t('plot_detail.property_raw_placeholder')}"
+      ${rawSourceIsRaw ? 'data-source="1"' : ''}
+      oninput="onPlotPropertyPercentInput(this)"
+      onblur="onPlotPropertyPercentBlur(this)">`;
+    const pctInput = `<input type="number" step="any"
+      data-schema-id="${esc(schema.id)}" data-kind="percentage" data-mode="percent"
+      value="${pctVal}" placeholder="${t('plot_detail.property_percent_placeholder')}"
+      ${rawSourceIsPct ? 'data-source="1"' : ''}
+      oninput="onPlotPropertyPercentInput(this)"
+      onblur="onPlotPropertyPercentBlur(this)">`;
+
     return `<div class="${rowClass} plot-property-row-percent">
       ${label}
       <div class="plot-property-input plot-property-input-percent">
-        <input type="number" step="any"
-          data-schema-id="${esc(schema.id)}" data-kind="percentage" data-mode="raw"
-          value="${rawVal}" placeholder="${t('plot_detail.property_raw_placeholder')}"
-          ${rawSourceIsRaw ? 'data-source="1"' : ''}
-          oninput="onPlotPropertyPercentInput(this)"
-          onblur="onPlotPropertyPercentBlur(this)">
-        <span class="plot-property-eq">${esc(denomUnit) || '·'}</span>
-        <input type="number" step="any"
-          data-schema-id="${esc(schema.id)}" data-kind="percentage" data-mode="percent"
-          value="${pctVal}" placeholder="${t('plot_detail.property_percent_placeholder')}"
-          ${rawSourceIsPct ? 'data-source="1"' : ''}
-          oninput="onPlotPropertyPercentInput(this)"
-          onblur="onPlotPropertyPercentBlur(this)">
-        <span class="plot-property-eq">%</span>
+        ${_inputWithSuffix(rawInput, denomUnit || '')}
+        <span class="plot-property-eq">=</span>
+        ${_inputWithSuffix(pctInput, '%')}
         ${denomNote}
       </div>
     </div>`;
@@ -2345,9 +2367,8 @@ function _renderPlotPropertyRow(plot, schema, isNested) {
 }
 
 // Distinct non-empty categorical values seen across all plots for the
-// given schema. Drives the <datalist> autocomplete to fight typos.
-// We include the in-flight value too so it shows in the list right
-// after the user enters it.
+// given schema. Drives the typeahead's suggestions on categorical
+// rows — fights typos when reusing the same category across plots.
 function _collectCategoricalValues(schemaId, currentVal) {
   const values = new Set();
   for (const plot of (data.plots || [])) {
@@ -2358,14 +2379,26 @@ function _collectCategoricalValues(schemaId, currentVal) {
   return Array.from(values).sort((a, b) => a.localeCompare(b));
 }
 
+// Suggestion source for typeaheadHTML on categorical rows. Looked up by
+// name via the typeahead's `data-options-fn` attribute — must stay a
+// top-level (global) function. Reads the schema id off the input.
+function categoricalSuggestionsForInput(input) {
+  const schemaId = input.getAttribute('data-schema-id');
+  if (!schemaId) return [];
+  return _collectCategoricalValues(schemaId, input.value);
+}
+
 // Re-render every percentage row whose schema depends on `changedSchemaId`
-// as its denominator. Used after a numeric value changes — the dependent
-// percentage rows recompute their derived side without disturbing the
-// source side. We re-render *only* the dependent percentage rows so the
-// numeric/categorical inputs and focus state of the row the user just
-// edited stay intact.
-function _refreshDependentPercentageRows(changedSchemaId) {
+// as its denominator. Used after a numeric (or percentage!) value
+// changes — dependents recompute their derived side without disturbing
+// the source side. Walks transitively: when A changes, B (% of A)
+// refreshes, then C (% of B) also refreshes, etc. `visited` guards
+// against any cycle that schema validation might have missed.
+function _refreshDependentPercentageRows(changedSchemaId, visited) {
   if (!_detailPlotId) return;
+  visited = visited || new Set();
+  if (visited.has(changedSchemaId)) return;
+  visited.add(changedSchemaId);
   const plot = data.plots.find(p => p.id === _detailPlotId);
   if (!plot) return;
   const dependents = (data.propertySchemas || []).filter(s =>
@@ -2392,6 +2425,9 @@ function _refreshDependentPercentageRows(changedSchemaId) {
       rawInput.value = '';
       pctInput.value = '';
     }
+    // This dep's resolved value just changed, so anything that uses it
+    // as a denominator needs to recompute too.
+    _refreshDependentPercentageRows(dep.id, visited);
   }
 }
 
@@ -2639,6 +2675,7 @@ function _openPropertyModal(title, schema) {
 function _renderPropertyKindFields(kind, opts) {
   // opts: { aggregation, weightId, denominatorId, rollup }
   const numericOpts = getNumericPropertyOptions(_propertyEditId);
+  const denomOpts   = getDenominatorPropertyOptions(_propertyEditId);
   if (kind === 'numeric') {
     const aggSel = `
       <select id="property-aggregation" onchange="onPropertyAggregationChange(this.value)">
@@ -2674,7 +2711,7 @@ function _renderPropertyKindFields(kind, opts) {
       <div class="form-group">
         <label>${t('properties.denominator_label')}</label>
         <p class="text-dim" style="font-size:12px;margin-bottom:6px">${t('properties.denominator_help')}</p>
-        ${_propertyRefSelect('property-denominator', numericOpts, opts.denominatorId, t('properties.ref_pick_placeholder'))}
+        ${_propertyRefSelect('property-denominator', denomOpts, opts.denominatorId, t('properties.ref_pick_placeholder'))}
       </div>`;
   }
   return '';
@@ -2801,8 +2838,8 @@ function saveProperty() {
       return;
     }
     const denomProp = findPropertySchema(denominatorPropertyId);
-    if (!denomProp || denomProp.kind !== 'numeric') {
-      toast(t('properties.error_denominator_not_numeric'), 'error');
+    if (!denomProp || (denomProp.kind !== 'numeric' && denomProp.kind !== 'percentage')) {
+      toast(t('properties.error_denominator_invalid'), 'error');
       return;
     }
     if (_hasPropertyRefCycle(_propertyEditId, denominatorPropertyId)) {

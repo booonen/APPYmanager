@@ -171,12 +171,26 @@ function findPropertyDependents(id) {
   });
 }
 
-// Numeric properties are the only valid choice for weights/denominators.
-// The virtual "Plot area" is included at the head of the list so users
-// can pick "% of plot area" without having to declare an Area schema.
+// Weight references (weighted-average numerics) only accept true numerics
+// — weighting by a percentage is conceptually strange. The virtual
+// "Plot area" is included at the head of the list so users can pick
+// "weighted by plot area" without having to declare an Area schema.
 function getNumericPropertyOptions(excludeId) {
   const userOpts = (data.propertySchemas || []).filter(p =>
     p.kind === 'numeric' && p.id !== excludeId
+  );
+  return [_virtualAreaSchema(), ...userOpts];
+}
+
+// Denominator references (percentage schemas) accept numerics *and*
+// percentages. A percentage resolves to its raw computed value, so
+// chains like "Population → % Urban → % Spanish-in-urban" work
+// bottom-up via `resolveNumericValueForPlot` recursion. Cycle detection
+// already walks `_refPropertyId` arbitrarily deep, so chained
+// percentages can't form a loop.
+function getDenominatorPropertyOptions(excludeId) {
+  const userOpts = (data.propertySchemas || []).filter(p =>
+    (p.kind === 'numeric' || p.kind === 'percentage') && p.id !== excludeId
   );
   return [_virtualAreaSchema(), ...userOpts];
 }
