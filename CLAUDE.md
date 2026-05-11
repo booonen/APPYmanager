@@ -293,29 +293,58 @@ which rules it implements but does not re-state them in full. Read the
   **over-sum** (boundary > sum of children) = acceptable warning
   because OGF mapping is often incomplete. Inline flagging in the
   inspector; central listing arrives in Brick 14.
-- **Brick 9c** *(deferred, needs scoping session)* — **Calculated**
-  property source. Adds a fourth "kind" (or, more likely, a new
-  *source* axis orthogonal to numeric/categorical/percentage) for
-  properties whose value is derived from a small expression referencing
-  other properties — e.g. `density = {Population} / {Plot area}`, or
-  conditionals like "predominant: cows or chickens" (`{Cows} > {Chickens}
-  ? "cows" : "chickens"`). Open design calls before we build: home-grown
-  mini-language vs. embed a tiny safe expression evaluator; how to
-  reference Plot area / categorical values / aggregated boundary values;
-  how derived values participate in boundary roll-up (Brick 10).
-- **Brick 9d** *(deferred, needs scoping session)* — **Overpass-derived**
-  property source. A property whose value is pulled per-plot (and per-
-  boundary) from an Overpass query template — e.g. count of `highway=
-  bus_stop` features inside the plot's bounding polygon, or a tag
-  lookup like `name:1600` on the imported OGF relation. Open design
-  calls: per-property query template UX, how the spatial filter binds
-  to the plot/boundary geometry, refresh / cache semantics (when do we
-  re-fetch?), rate-limit accounting against the existing Overpass
-  budget, and how the resulting values participate in aggregation.
-  Both 9c and 9d will probably justify a UI shift in the schema editor
-  (an extra "Source" selector under Kind, or a separate "Derived
-  properties" sub-section in the Properties tab) — to be designed when
-  we pick them up.
+  **Schema-side prerequisite** (decided 2026-05-11, not yet built —
+  lands as a Brick 8 follow-up or first sub-step of Brick 10): each
+  property schema grows an `appliesTo: string[]` — a **free-form
+  multi-select** of `'plot'` plus each boundary-type id. Default is
+  every level (so existing schemas don't change behaviour). When a
+  level is unchecked, the property row doesn't render in that level's
+  inspector and is excluded from roll-up in/out of that level.
+  Motivating cases: voting results live on Province / Country only;
+  population lives everywhere. The "applies to" set is what makes
+  boundary-only properties possible without polluting every plot's
+  inspector with N/A rows.
+- **Brick 9c** *(deferred, scoped 2026-05-11)* — **Calculated** property
+  *source*. Source is a new axis on the schema, orthogonal to Kind
+  (numeric / categorical / percentage). Three sources: `'manual'`
+  (today's behaviour, value typed by user), `'calculated'` (derived
+  from a formula referencing other properties), `'overpass'` (pulled
+  from an Overpass query — Brick 9d). Default `'manual'` for all
+  existing schemas. Schema editor grows a "Source" selector under
+  Kind; source-conditional fields appear below.
+  **Mini-language sketch for `'calculated'`:**
+  - Refs: `{Property Name}` resolves per entity (plot / boundary).
+    `{Plot area}` uses the virtual id.
+  - Operators: `+ - * / ( )`; comparison `> < >= <= == !=`;
+    ternary `cond ? a : b`.
+  - Functions: `min`, `max`, `abs`, `sum`, `if(cond, a, b)`.
+  - Literals: numbers; `"strings"` for categorical outputs.
+  - Context refs we may want: `{my level}` for level-aware formulas.
+  - Example calculated numeric: `{Population} / ({Plot area} / 1000000)`
+    (density per km²).
+  - Example calculated categorical: `{Cows} > {Chickens} ? "cattle"
+    : "poultry"`.
+  Cycle detection: extend the current `_propertyRefId` walker to walk
+  every `{…}` in the formula's parsed AST, not just the single
+  `weightPropertyId` / `denominatorPropertyId` pointer.
+  Boundary roll-up: a calculated value on a boundary is computed from
+  that boundary's resolved input properties — *not* aggregated from
+  children. (i.e. density is computed from boundary's population and
+  boundary's area, not summed from children's densities.)
+- **Brick 9d** *(deferred, scoped 2026-05-11)* — **Overpass-derived**
+  property source. Per-property query template; spatial filter binds
+  to the entity's polygon via Overpass `poly:` form (`{{geometry}}`
+  placeholder substituted at fetch time). Result reduction: an
+  "aggregator" picker — `count` / `sum of tag` / `average of tag` /
+  `first tag value`. Manual "Refresh values" button on the schema;
+  results cached alongside the property value (no auto-refresh).
+  Counts against the existing Overpass rate-limit budget. Boundary
+  roll-up: same default as manual — sum / weighted-avg per the
+  schema's aggregation rule, *unless* the schema opts into "refetch
+  for boundary geometry" (treat the boundary's own polygon as the
+  query target instead of summing children).
+  Both 9c and 9d will likely justify a "Derived properties" subsection
+  in the Properties tab — to be designed when we pick them up.
 
 ### Phase 4 — Plot operations
 
