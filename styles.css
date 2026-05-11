@@ -446,6 +446,28 @@ input[type="checkbox"]:checked::after {
   grid-column: 1 / -1; font-size: 11px; color: var(--warn); margin-top: 2px;
 }
 
+/* Read-only system rows (e.g. Plot area) */
+.plot-property-row-readonly { background: var(--bg-input); }
+.plot-property-readonly-value {
+  font-size: 13px; color: var(--text); padding: 6px 0;
+}
+
+/* Nested rows: indented under their parent (percentage-of) row.
+   The left border acts as a visual connector linking the child to its
+   parent's row above. */
+.plot-property-row-nested {
+  padding-left: 20px;
+  border-left: 2px solid var(--border);
+  margin-left: 8px;
+}
+.plot-property-row-nested .plot-property-name { font-size: 12px; color: var(--text-dim); }
+
+/* Section subheader for orphan percentages (denominator missing/broken). */
+.plot-property-subhead {
+  font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--text-muted); margin: 12px 0 4px;
+}
+
 /* ============================================================
    BOUNDARIES (Brick 6a)
    ============================================================ */

@@ -210,7 +210,10 @@ registerLanguage('en', 'English', {
     "property_percent_placeholder": "%",
     "property_no_denominator": "No denominator property set on this schema — values can't be linked.",
     "property_denominator_unset": "{name} is not set on this plot — values won't link until it is.",
-    "property_denominator_of": "of {name} = {value}"
+    "property_denominator_of": "of {name} = {value}",
+    "property_orphan_section": "Percentages with missing denominator",
+    "area_label": "Plot area",
+    "computed_chip": "computed"
   },
   "boundary_types": {
     "hierarchy_title": "Hierarchy",
@@ -330,6 +333,7 @@ registerLanguage('en', 'English', {
     "rollup_distribution_help": "Off (default): boundaries don't aggregate this property. On: a boundary's value becomes the percentage breakdown across its children (e.g. 40% A / 60% B).",
     "ref_pick_placeholder": "— pick a property —",
     "ref_no_numerics": "(no numeric properties exist yet)",
+    "ref_computed_suffix": "(computed)",
     "notes_label": "Notes",
     "notes_placeholder": "Free-form notes about this property.",
     "beh_sum": "Sum across children",

@@ -1,3 +1,41 @@
+## 0.4.1 — Brick 9 polish: nesting, Plot area, categorical autocomplete
+- **Percentage rows nest under their denominator** in the plot detail
+  modal. Visual indent + left-border connector make it obvious which
+  numeric a percentage is pulling from. The redundant
+  "of {name} = {value}" hint is dropped when the parent row sits
+  directly above; the "denominator unset on this plot" and "no
+  denominator schema" notes still surface (they describe problems the
+  user needs to act on). Orphan percentages whose denominator schema
+  was deleted or never linked collect under a small subheader at the
+  bottom of the section.
+- **`Plot area` as a virtual denominator** — new `AREA_VIRTUAL_ID =
+  '__plot_area__'` in `js/properties.js`:
+  - `findPropertySchema` returns a synthetic numeric schema
+    (`name: 'Plot area'`, `unit: 'm²'`, `__virtual: true`).
+  - `getNumericPropertyOptions` prepends the virtual so it's
+    selectable as a percentage denominator in the schema editor.
+  - `resolveNumericValueForPlot` special-cases the virtual id and
+    returns `plotArea(plot)` (m²).
+  - `_propertyRefSelect` (schema editor dropdown) pins virtual entries
+    to the top of the list with a "(computed)" suffix.
+  - Plot detail modal now also surfaces Area as a read-only row at the
+    top of the Properties section, so the user can see what their
+    `% urbanised`-style children pull from.
+  - Brick 10 will need a parallel `resolveNumericValueForBoundary`
+    that returns `boundaryArea(boundary)` for the same magic id.
+- **Categorical inputs gain a `<datalist>`** populated from every
+  distinct non-empty value already in use for that schema across all
+  plots (the in-flight value on this plot is included too so it shows
+  up immediately). Native browser autocomplete — fights typos when
+  reusing the same category across plots.
+- New CSS: `.plot-property-row-readonly`, `.plot-property-row-nested`,
+  `.plot-property-subhead`.
+- CLAUDE.md log + long-term plan updated: **Brick 9c (Calculated source)**
+  and **Brick 9d (Overpass-derived source)** added as deferred bricks
+  with brief scoping notes — both need a design session before we
+  build (expression language, query templates, refresh semantics,
+  rate-limit accounting).
+
 ## 0.4.0 — Brick 9: Property values on plots
 - Plot detail modal gains a **Properties** section listing every
   property schema with a kind-appropriate input. Auto-saves on blur

@@ -2181,19 +2181,81 @@ function closePlotDetail() {
 // delete the value entirely.
 
 function _renderPlotPropertyRows(plot) {
-  const schemas = (data.propertySchemas || []).slice().sort((a, b) =>
-    (a.name || '').localeCompare(b.name || '')
-  );
+  const schemas = data.propertySchemas || [];
   if (schemas.length === 0) {
     return `<div class="text-dim" style="font-size:12px;padding:8px 0">
       ${t('plot_detail.properties_empty')}
       <a href="javascript:void(0)" onclick="closePlotDetail();switchTab('properties')">${t('plot_detail.properties_empty_link')}</a>
     </div>`;
   }
-  return schemas.map(schema => _renderPlotPropertyRow(plot, schema)).join('');
+
+  // Group percentage schemas by their denominator id so we can nest them
+  // visually under whichever numeric they pull from. Schemas without a
+  // resolvable denominator land in `orphans` and render after everything
+  // else with the existing "no denominator" warning.
+  const childrenByDenom = new Map(); // denomId → percentageSchema[]
+  const orphans = [];
+  for (const s of schemas) {
+    if (s.kind !== 'percentage') continue;
+    const denomId = s.denominatorPropertyId;
+    if (!denomId) { orphans.push(s); continue; }
+    if (!isVirtualPropertyId(denomId)) {
+      const denomSchema = (data.propertySchemas || []).find(x => x.id === denomId);
+      if (!denomSchema) { orphans.push(s); continue; }
+    }
+    if (!childrenByDenom.has(denomId)) childrenByDenom.set(denomId, []);
+    childrenByDenom.get(denomId).push(s);
+  }
+  for (const arr of childrenByDenom.values()) {
+    arr.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  }
+
+  const numerics    = schemas.filter(s => s.kind === 'numeric')
+                             .slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  const categorical = schemas.filter(s => s.kind === 'categorical')
+                             .slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+
+  let html = '';
+  // Plot area first (always visible — system row, read-only).
+  html += _renderPlotAreaRow(plot);
+  for (const pct of (childrenByDenom.get(AREA_VIRTUAL_ID) || [])) {
+    html += _renderPlotPropertyRow(plot, pct, true);
+  }
+  // User numerics, each followed by its percentage children.
+  for (const num of numerics) {
+    html += _renderPlotPropertyRow(plot, num, false);
+    for (const pct of (childrenByDenom.get(num.id) || [])) {
+      html += _renderPlotPropertyRow(plot, pct, true);
+    }
+  }
+  // Categoricals (no children).
+  for (const cat of categorical) {
+    html += _renderPlotPropertyRow(plot, cat, false);
+  }
+  // Orphan percentages — broken denominator reference; surface with the
+  // existing warning so the user can fix the schema.
+  if (orphans.length > 0) {
+    html += `<div class="plot-property-subhead">${t('plot_detail.property_orphan_section')}</div>`;
+    for (const pct of orphans) html += _renderPlotPropertyRow(plot, pct, false);
+  }
+  return html;
 }
 
-function _renderPlotPropertyRow(plot, schema) {
+function _renderPlotAreaRow(plot) {
+  const a = (typeof plotArea === 'function') ? plotArea(plot) : 0;
+  const formatted = (typeof formatArea === 'function') ? formatArea(a) : '—';
+  return `<div class="plot-property-row plot-property-row-readonly" data-area-row="1">
+    <div class="plot-property-label">
+      <span class="plot-property-name">${t('plot_detail.area_label')}</span>
+      <span class="property-unit-chip">${t('plot_detail.computed_chip')}</span>
+    </div>
+    <div class="plot-property-input">
+      <span class="plot-property-readonly-value mono">${esc(formatted)}</span>
+    </div>
+  </div>`;
+}
+
+function _renderPlotPropertyRow(plot, schema, isNested) {
   const stored = getPlotPropertyValue(plot, schema.id);
   const unitChip = schema.unit
     ? `<span class="property-unit-chip">${esc(schema.unit)}</span>`
@@ -2201,10 +2263,11 @@ function _renderPlotPropertyRow(plot, schema) {
   const label = `<div class="plot-property-label">
     <span class="plot-property-name">${esc(schema.name)}</span>${unitChip}
   </div>`;
+  const rowClass = isNested ? 'plot-property-row plot-property-row-nested' : 'plot-property-row';
 
   if (schema.kind === 'numeric') {
     const val = stored != null && stored !== '' ? esc(String(stored)) : '';
-    return `<div class="plot-property-row">
+    return `<div class="${rowClass}">
       ${label}
       <div class="plot-property-input">
         <input type="number" step="any" data-schema-id="${esc(schema.id)}" data-kind="numeric"
@@ -2216,12 +2279,17 @@ function _renderPlotPropertyRow(plot, schema) {
 
   if (schema.kind === 'categorical') {
     const val = typeof stored === 'string' ? esc(stored) : '';
-    return `<div class="plot-property-row">
+    const datalistId = `dl-${schema.id}`;
+    const options = _collectCategoricalValues(schema.id, stored)
+      .map(v => `<option value="${esc(v)}"></option>`).join('');
+    return `<div class="${rowClass}">
       ${label}
       <div class="plot-property-input">
-        <input type="text" data-schema-id="${esc(schema.id)}" data-kind="categorical"
+        <input type="text" list="${datalistId}"
+          data-schema-id="${esc(schema.id)}" data-kind="categorical"
           value="${val}" placeholder="${t('plot_detail.property_empty_placeholder')}"
           onblur="onPlotPropertyBlur(this)">
+        <datalist id="${datalistId}">${options}</datalist>
       </div>
     </div>`;
   }
@@ -2235,16 +2303,24 @@ function _renderPlotPropertyRow(plot, schema) {
     const rawSourceIsPct = stored?.mode === 'percent';
     const rawVal = display.raw    != null ? formatPropertyNumber(display.raw)    : '';
     const pctVal = display.percent != null ? formatPropertyNumber(display.percent) : '';
-    const noDenomNote = !display.denomSchema
-      ? `<div class="plot-property-warning">${t('plot_detail.property_no_denominator')}</div>`
-      : (display.denomVal == null
-          ? `<div class="plot-property-hint">${t('plot_detail.property_denominator_unset', { name: esc(denomName) })}</div>`
-          : `<div class="plot-property-hint">${t('plot_detail.property_denominator_of', {
-              name: esc(denomName),
-              value: formatPropertyNumber(display.denomVal) + esc(denomUnitTxt)
-            })}</div>`);
+    // When the percentage is nested under its denominator's row, the
+    // "of <denom> = <value>" hint is redundant — the denominator row sits
+    // directly above. We still show the "denominator unset on this plot"
+    // hint and the "no denominator schema" warning, since those describe
+    // a problem the user needs to know about.
+    let denomNote = '';
+    if (!display.denomSchema) {
+      denomNote = `<div class="plot-property-warning">${t('plot_detail.property_no_denominator')}</div>`;
+    } else if (display.denomVal == null) {
+      denomNote = `<div class="plot-property-hint">${t('plot_detail.property_denominator_unset', { name: esc(denomName) })}</div>`;
+    } else if (!isNested) {
+      denomNote = `<div class="plot-property-hint">${t('plot_detail.property_denominator_of', {
+        name: esc(denomName),
+        value: formatPropertyNumber(display.denomVal) + esc(denomUnitTxt)
+      })}</div>`;
+    }
 
-    return `<div class="plot-property-row plot-property-row-percent">
+    return `<div class="${rowClass} plot-property-row-percent">
       ${label}
       <div class="plot-property-input plot-property-input-percent">
         <input type="number" step="any"
@@ -2261,11 +2337,25 @@ function _renderPlotPropertyRow(plot, schema) {
           oninput="onPlotPropertyPercentInput(this)"
           onblur="onPlotPropertyPercentBlur(this)">
         <span class="plot-property-eq">%</span>
-        ${noDenomNote}
+        ${denomNote}
       </div>
     </div>`;
   }
   return '';
+}
+
+// Distinct non-empty categorical values seen across all plots for the
+// given schema. Drives the <datalist> autocomplete to fight typos.
+// We include the in-flight value too so it shows in the list right
+// after the user enters it.
+function _collectCategoricalValues(schemaId, currentVal) {
+  const values = new Set();
+  for (const plot of (data.plots || [])) {
+    const v = plot.propertyValues?.[schemaId];
+    if (typeof v === 'string' && v.trim()) values.add(v.trim());
+  }
+  if (typeof currentVal === 'string' && currentVal.trim()) values.add(currentVal.trim());
+  return Array.from(values).sort((a, b) => a.localeCompare(b));
 }
 
 // Re-render every percentage row whose schema depends on `changedSchemaId`
@@ -2596,11 +2686,20 @@ function _propertyRefSelect(id, numericOpts, currentValue, placeholderLabel) {
         <option value="">${esc(t('properties.ref_no_numerics'))}</option>
       </select>`;
   }
-  const options = numericOpts
-    .slice()
-    .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
-    .map(p => `<option value="${esc(p.id)}"${p.id === currentValue ? ' selected' : ''}>${esc(p.name)}</option>`)
-    .join('');
+  // Virtual entries (e.g. Plot area) pin to the top with a "(computed)"
+  // suffix so users can spot them; user-defined numerics follow,
+  // alphabetical.
+  const sorted = numericOpts.slice().sort((a, b) => {
+    if (a.__virtual && !b.__virtual) return -1;
+    if (!a.__virtual && b.__virtual) return 1;
+    return (a.name || '').localeCompare(b.name || '');
+  });
+  const options = sorted.map(p => {
+    const label = p.__virtual
+      ? `${p.name} ${t('properties.ref_computed_suffix')}`
+      : p.name;
+    return `<option value="${esc(p.id)}"${p.id === currentValue ? ' selected' : ''}>${esc(label)}</option>`;
+  }).join('');
   return `<select id="${id}">
       <option value=""${!currentValue ? ' selected' : ''}>${esc(placeholderLabel)}</option>
       ${options}

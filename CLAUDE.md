@@ -293,6 +293,29 @@ which rules it implements but does not re-state them in full. Read the
   **over-sum** (boundary > sum of children) = acceptable warning
   because OGF mapping is often incomplete. Inline flagging in the
   inspector; central listing arrives in Brick 14.
+- **Brick 9c** *(deferred, needs scoping session)* — **Calculated**
+  property source. Adds a fourth "kind" (or, more likely, a new
+  *source* axis orthogonal to numeric/categorical/percentage) for
+  properties whose value is derived from a small expression referencing
+  other properties — e.g. `density = {Population} / {Plot area}`, or
+  conditionals like "predominant: cows or chickens" (`{Cows} > {Chickens}
+  ? "cows" : "chickens"`). Open design calls before we build: home-grown
+  mini-language vs. embed a tiny safe expression evaluator; how to
+  reference Plot area / categorical values / aggregated boundary values;
+  how derived values participate in boundary roll-up (Brick 10).
+- **Brick 9d** *(deferred, needs scoping session)* — **Overpass-derived**
+  property source. A property whose value is pulled per-plot (and per-
+  boundary) from an Overpass query template — e.g. count of `highway=
+  bus_stop` features inside the plot's bounding polygon, or a tag
+  lookup like `name:1600` on the imported OGF relation. Open design
+  calls: per-property query template UX, how the spatial filter binds
+  to the plot/boundary geometry, refresh / cache semantics (when do we
+  re-fetch?), rate-limit accounting against the existing Overpass
+  budget, and how the resulting values participate in aggregation.
+  Both 9c and 9d will probably justify a UI shift in the schema editor
+  (an extra "Source" selector under Kind, or a separate "Derived
+  properties" sub-section in the Properties tab) — to be designed when
+  we pick them up.
 
 ### Phase 4 — Plot operations
 
@@ -485,3 +508,24 @@ they come up; the plan is a living document.
   deletes the entry (no `''`/NaN persisted). `deletePropertySchema`
   now cascades to clear every plot's value for the deleted schema.
   Boundary user-set values + the override semantics arrive in Brick 10.
+- **v0.4.1** ✓ (polish on Brick 9) — three UX tweaks:
+  1. **Percentage rows nest under their denominator** in the plot
+     detail modal. Visual indent + left-border connector. The redundant
+     "of {name} = {value}" hint is dropped when the parent row sits
+     directly above; the "denominator unset" / "no denominator schema"
+     notes still surface. Orphan percentages (broken denom ref) collect
+     under a small subheader at the bottom of the section.
+  2. **`Plot area` as a virtual denominator** — new
+     `AREA_VIRTUAL_ID = '__plot_area__'` in properties.js. The
+     percentage schema editor's denominator dropdown lists "Plot area
+     (computed)" pinned to the top. `findPropertySchema` returns a
+     synthetic schema for the id; `resolveNumericValueForPlot`
+     special-cases it to `plotArea(plot)` (m²). Plot detail modal now
+     also shows Area as a read-only row at the top of the Properties
+     section so users can see what their `% urbanised`-style children
+     are pulling from. On boundaries (Brick 10) the same magic id
+     should resolve via `boundaryArea(boundary)`.
+  3. **Categorical inputs gain a `<datalist>`** populated from every
+     distinct value already in use for that schema across all plots.
+     Native browser autocomplete fights typos when reusing the same
+     category across plots.

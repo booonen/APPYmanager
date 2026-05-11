@@ -28,6 +28,33 @@
 const PROPERTY_KINDS = ['numeric', 'categorical', 'percentage'];
 const NUMERIC_AGGREGATIONS = ['sum', 'weighted_average'];
 
+// ============================================================
+// VIRTUAL PROPERTIES (Brick 9 polish, v0.4.1)
+// ============================================================
+// Some numeric "properties" don't live in `data.propertySchemas` —
+// they're computed from geometry. We expose them as virtual schemas
+// so percentage properties can use them as denominators (e.g.
+// "% Urbanised" = % of Plot area).
+//
+// AREA_VIRTUAL_ID — the plot's computed area in m². On boundaries
+// (Brick 10) it'll resolve via `boundaryArea`.
+
+const AREA_VIRTUAL_ID = '__plot_area__';
+
+function _virtualAreaSchema() {
+  return {
+    id:          AREA_VIRTUAL_ID,
+    name:        'Plot area',
+    unit:        'm²',
+    kind:        'numeric',
+    aggregation: 'sum',
+    notes:       '',
+    __virtual:   true,
+  };
+}
+
+function isVirtualPropertyId(id) { return id === AREA_VIRTUAL_ID; }
+
 function createPropertySchema({ name, unit, kind, notes,
                                 aggregation, weightPropertyId,
                                 rollupDistribution,
@@ -64,6 +91,7 @@ function deletePropertySchema(id) {
 }
 
 function findPropertySchema(id) {
+  if (id === AREA_VIRTUAL_ID) return _virtualAreaSchema();
   return (data.propertySchemas || []).find(p => p.id === id) || null;
 }
 
@@ -144,10 +172,13 @@ function findPropertyDependents(id) {
 }
 
 // Numeric properties are the only valid choice for weights/denominators.
+// The virtual "Plot area" is included at the head of the list so users
+// can pick "% of plot area" without having to declare an Area schema.
 function getNumericPropertyOptions(excludeId) {
-  return (data.propertySchemas || []).filter(p =>
+  const userOpts = (data.propertySchemas || []).filter(p =>
     p.kind === 'numeric' && p.id !== excludeId
   );
+  return [_virtualAreaSchema(), ...userOpts];
 }
 
 // ============================================================
@@ -196,6 +227,11 @@ function clearPlotPropertyValue(plot, schemaId) {
 // so the linked input can derive in real time.
 function resolveNumericValueForPlot(plot, schema) {
   if (!plot || !schema) return null;
+  // Virtual schemas come from geometry, not data.propertyValues.
+  if (schema.id === AREA_VIRTUAL_ID) {
+    const a = (typeof plotArea === 'function') ? plotArea(plot) : 0;
+    return Number.isFinite(a) ? a : null;
+  }
   const raw = getPlotPropertyValue(plot, schema.id);
   if (raw === undefined || raw === null || raw === '') return null;
   if (schema.kind === 'numeric') {
