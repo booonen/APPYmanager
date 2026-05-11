@@ -1,3 +1,92 @@
+## 0.6.0 — Brick 10c: aggregation, override, mismatch flags (Brick 10 complete)
+Third and final sub-step of Brick 10. Boundaries now display a rolled-up
+value alongside their user-set value, with mismatch flags surfacing the
+data-quality cases agreed in the plan.
+
+### Aggregation engine (`js/properties.js`)
+
+- **"Effective" value semantics** — `resolveEffectiveForPlot(plot, schema)`
+  is just the plot's user-stored value (plots are leaves). For
+  boundaries, `resolveEffectiveForBoundary(boundary, schema)` returns
+  the user-set value if any (override) and otherwise rolls up from
+  members. A `visited` Set is threaded through recursive calls to
+  guard against any cycle that schema validation might miss.
+- **Roll-up rules per kind:**
+  - Numeric / sum → sum of members' effective values.
+  - Numeric / weighted_average → ∑(value × weight) / ∑(weight). The
+    weight is resolved per-member via the schema's
+    `weightPropertyId`.
+  - Percentage → sum members' effective raws, then divide by the
+    boundary's effective denominator. The percent at the boundary is
+    `(rawSum / denomVal) * 100`; the raw is `_maybeRound(rawSum,
+    schema)`.
+  - Categorical / `rollupDistribution: true` → `Map<value, count>`
+    over members' user-set categorical values.
+  - Categorical / no rollup → null (no roll-up shown).
+- **Cross-schema effect:** `resolveNumericValueForBoundary` and
+  `derivePercentageDisplayForBoundary` now resolve denominators via
+  `resolveEffectiveForBoundary`. So a `% Urban` row on a Province
+  uses the *rolled-up* Population as its denominator when the user
+  hasn't overridden Population on that Province.
+
+### Mismatch classification
+
+`classifyRollupMismatch(userVal, rollupVal)` → `'match' | 'under' |
+'over' | null`. Tolerance is `max(|user|, |rollup|, 1) × 1e-9` to
+absorb floating-point noise on what should be exact-match cases.
+
+### UI (`js/views.js`)
+
+- Each boundary property row gets a new `.plot-property-rollup-hint`
+  wrapper after the inputs, carrying `data-rollup-container=<schemaId>`
+  so we can refresh in place. At the schema's root level (this
+  boundary IS the source of truth) the wrapper renders empty — CSS
+  `:empty` hides it.
+- Above-root rows show:
+  - "Rolled up: 12,345 people" hint for numerics.
+  - "Rolled up: 12,345 people = 30%" for percentages.
+  - "Distribution: Spanish 40%, Quechua 60%" for opt-in categorical
+    distributions.
+- Mismatch badge appears when the user-set value is non-null:
+  - `match` (green) — green for "everything reconciles."
+  - `under` (red, bold) — critical: user-set is below rollup, which
+    means we're claiming less than the children sum to.
+  - `over` (warn-yellow) — acceptable: user-set is above rollup,
+    typical OGF-incomplete case.
+- New helper `_refreshAllBoundaryRollups()` re-renders every row's
+  rollup block after any value commit. Cheap full sweep — cleaner
+  than computing exact dependents (effective denom changes can
+  cascade to percentage rollup-percents, etc.).
+- Wired into `onBoundaryPropertyBlur`, `onBoundaryPropertyPercentInput`,
+  `onBoundaryPropertyPercentBlur` so live updates fire as the user
+  edits.
+
+### CSS
+
+- `.plot-property-rollup-hint` (with `:empty` hide rule).
+- `.rollup-mismatch-badge` + `match` / `under` / `over` variants using
+  existing `--success`, `--accent`, `--warn` tokens.
+
+### l10n
+
+- `boundary_detail.rollup_value`, `rollup_distribution`, `rollup_match`,
+  `rollup_under`, `rollup_over`.
+
+### What's NOT in 10c (intentional)
+
+- **Central issues panel.** The mismatch badges are inline in the
+  inspector; a project-wide list of all current under/over-sum flags
+  is Brick 14.
+- **Categorical distribution-of-distributions.** When rolling up
+  categorical with distribution-on into a Country boundary, we count
+  each sub-boundary's *user-set* category, not its rolled-up
+  distribution. Future polish if it matters.
+- **"Use rollup value" / clear-override button.** The user can type
+  the rollup value manually or clear their input. Not worth a
+  dedicated control yet.
+
+Brick 10 (boundary aggregation) is now complete.
+
 ## 0.5.3 — Typeahead suggestions sort by prevalence
 `_collectCategoricalValues` previously returned distinct values
 alphabetically. The typeahead preserved that order, so a category used

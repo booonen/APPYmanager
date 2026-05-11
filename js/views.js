@@ -2501,6 +2501,10 @@ function _renderBoundaryPropertyRow(boundary, schema, isNested) {
     <span class="plot-property-name">${esc(schema.name)}</span>
   </div>`;
   const rowClass = isNested ? 'plot-property-row plot-property-row-nested' : 'plot-property-row';
+  // Brick 10c: rollup hint + mismatch badge live in a stable wrapper so
+  // we can refresh just the rollup region in place when a value
+  // changes (no row re-render = no focus loss).
+  const rollupBlock = _renderBoundaryRollupBlock(boundary, schema);
 
   if (schema.kind === 'numeric') {
     const val = stored != null && stored !== '' ? esc(String(stored)) : '';
@@ -2511,6 +2515,7 @@ function _renderBoundaryPropertyRow(boundary, schema, isNested) {
       ${label}
       <div class="plot-property-input">
         ${_inputWithSuffix(input, schema.unit || '')}
+        ${rollupBlock}
       </div>
     </div>`;
   }
@@ -2529,6 +2534,7 @@ function _renderBoundaryPropertyRow(boundary, schema, isNested) {
           commitFnName: 'onBoundaryPropertyBlur',
           dataAttrs: { 'schema-id': schema.id, 'kind': 'categorical' }
         })}
+        ${rollupBlock}
       </div>
     </div>`;
   }
@@ -2574,10 +2580,99 @@ function _renderBoundaryPropertyRow(boundary, schema, isNested) {
         <span class="plot-property-eq">=</span>
         ${_inputWithSuffix(pctInput, '%')}
         ${denomNote}
+        ${rollupBlock}
       </div>
     </div>`;
   }
   return '';
+}
+
+// Brick 10c — rollup hint + mismatch badge for a single property row
+// on a boundary. The wrapper is always rendered (carries
+// `data-rollup-container="<schemaId>"`) so we can refresh it in place
+// when values change. CSS `:empty` hides it when nothing to show.
+function _renderBoundaryRollupBlock(boundary, schema) {
+  return `<div class="plot-property-rollup-hint"
+    data-rollup-container="${esc(schema.id)}">${
+      _renderBoundaryRollupBlockInner(boundary, schema)
+    }</div>`;
+}
+
+function _renderBoundaryRollupBlockInner(boundary, schema) {
+  if (!boundary || !schema) return '';
+  const root = schema.rootLevelId || 'plot';
+  // At the source-of-truth level: no rollup hint (this IS where the
+  // value is recorded). Rollups only make sense at LARGER levels.
+  if (root === boundary.typeId) return '';
+
+  if (schema.kind === 'numeric') {
+    const rollup = computeRollupNumeric(boundary, schema, new Set([boundary.id]));
+    if (rollup == null) return '';
+    const unitTxt = schema.unit ? ` ${esc(schema.unit)}` : '';
+    const hint = t('boundary_detail.rollup_value', {
+      value: formatPropertyNumber(rollup) + unitTxt,
+    });
+    const userVal = resolveNumericValueForBoundary(boundary, schema);
+    const mm = classifyRollupMismatch(userVal, rollup);
+    return hint + _renderMismatchBadge(mm);
+  }
+
+  if (schema.kind === 'percentage') {
+    const r = computeRollupPercentage(boundary, schema, new Set([boundary.id]));
+    if (!r) return '';
+    const denomUnit = r.denomSchema?.unit || '';
+    const denomUnitTxt = denomUnit ? ` ${esc(denomUnit)}` : '';
+    const parts = [];
+    if (r.raw != null)     parts.push(formatPropertyNumber(r.raw) + denomUnitTxt);
+    if (r.percent != null) parts.push(formatPropertyNumber(r.percent) + '%');
+    const hint = parts.length > 0
+      ? t('boundary_detail.rollup_value', { value: parts.join(' = ') })
+      : '';
+    const userVal = resolveNumericValueForBoundary(boundary, schema); // raw
+    const mm = classifyRollupMismatch(userVal, r.raw);
+    return hint + _renderMismatchBadge(mm);
+  }
+
+  if (schema.kind === 'categorical' && schema.rollupDistribution) {
+    const dist = computeRollupCategoricalDistribution(boundary, schema, new Set([boundary.id]));
+    if (!dist || dist.size === 0) return '';
+    const total = Array.from(dist.values()).reduce((a, b) => a + b, 0);
+    if (total === 0) return '';
+    const formatted = Array.from(dist.entries())
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([val, count]) => `${esc(val)} ${Math.round((count / total) * 100)}%`)
+      .join(', ');
+    return t('boundary_detail.rollup_distribution', { dist: formatted });
+  }
+  return '';
+}
+
+function _renderMismatchBadge(cls) {
+  if (!cls) return '';
+  if (cls === 'match') return `<span class="rollup-mismatch-badge rollup-mismatch-match">${t('boundary_detail.rollup_match')}</span>`;
+  if (cls === 'under') return `<span class="rollup-mismatch-badge rollup-mismatch-under">${t('boundary_detail.rollup_under')}</span>`;
+  if (cls === 'over')  return `<span class="rollup-mismatch-badge rollup-mismatch-over">${t('boundary_detail.rollup_over')}</span>`;
+  return '';
+}
+
+// Refresh every rollup block on the open boundary inspector. Called
+// after any value commit on the boundary, because:
+//   - The boundary's user-set value just changed → mismatch may shift.
+//   - Effective denom of this boundary may change → percentage rows'
+//     rollup percents may shift even though their rollup raws don't.
+// Cheap to walk all rows; the alternative (computing exact deps) isn't
+// worth the complexity.
+function _refreshAllBoundaryRollups() {
+  if (!_boundaryDetailId) return;
+  const boundary = data.boundaries.find(b => b.id === _boundaryDetailId);
+  if (!boundary) return;
+  const schemas = (data.propertySchemas || []).filter(s => appliesAtLevel(s, boundary.typeId));
+  for (const s of schemas) {
+    const container = document.querySelector(
+      `#boundary-detail-properties [data-rollup-container="${s.id}"]`
+    );
+    if (container) container.innerHTML = _renderBoundaryRollupBlockInner(boundary, s);
+  }
 }
 
 // Distinct non-empty categorical values seen across all plots AND
@@ -2852,6 +2947,7 @@ function onBoundaryPropertyBlur(inputEl) {
     }
     save();
     _refreshDependentBoundaryPercentageRows(schemaId);
+    _refreshAllBoundaryRollups();
   } else if (kind === 'categorical') {
     if (raw === '' || raw == null) {
       clearBoundaryPropertyValue(boundary, schemaId);
@@ -2859,6 +2955,7 @@ function onBoundaryPropertyBlur(inputEl) {
       setBoundaryPropertyValue(boundary, schemaId, raw);
     }
     save();
+    _refreshAllBoundaryRollups();
   }
 }
 
@@ -2883,6 +2980,8 @@ function onBoundaryPropertyPercentInput(inputEl) {
       `#boundary-detail-properties input[data-schema-id="${schemaId}"]`
     ).forEach(el => el.removeAttribute('data-source'));
     save();
+    _refreshDependentBoundaryPercentageRows(schemaId);
+    _refreshAllBoundaryRollups();
     return;
   }
 
@@ -2907,6 +3006,8 @@ function onBoundaryPropertyPercentInput(inputEl) {
     sibling.value = derived != null ? formatPropertyNumber(derived) : '';
   }
   save();
+  _refreshDependentBoundaryPercentageRows(schemaId);
+  _refreshAllBoundaryRollups();
 }
 
 function onBoundaryPropertyPercentBlur(inputEl) {
@@ -2935,6 +3036,9 @@ function onBoundaryPropertyPercentBlur(inputEl) {
     }
   }
   save();
+  // Always refresh rollup display on commit — covers any user-set change
+  // even if no rounding happened.
+  _refreshAllBoundaryRollups();
 }
 
 // ============================================================

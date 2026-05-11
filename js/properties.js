@@ -381,6 +381,11 @@ function resolveNumericValueForPlot(plot, schema) {
 // separate (rather than DRY'd through a context-passing refactor) so
 // the existing plot inspector code keeps its proven hot paths.
 
+// USER-SET resolver for a boundary. Reads only what the user has stored
+// on this boundary (no roll-up fallback). For percentage's percent mode,
+// the denominator IS resolved via `resolveEffectiveForBoundary` (Brick
+// 10c) so the percent-to-raw conversion uses the rolled-up denom when
+// the denom isn't user-set on this boundary.
 function resolveNumericValueForBoundary(boundary, schema) {
   if (!boundary || !schema) return null;
   if (schema.id === AREA_VIRTUAL_ID) {
@@ -401,7 +406,8 @@ function resolveNumericValueForBoundary(boundary, schema) {
     }
     const denomSchema = findPropertySchema(schema.denominatorPropertyId);
     if (!denomSchema) return null;
-    const denomVal = resolveNumericValueForBoundary(boundary, denomSchema);
+    // Effective denom: user-set on this boundary if any, else rolled up.
+    const denomVal = resolveEffectiveForBoundary(boundary, denomSchema);
     if (denomVal == null) return null;
     const pct = Number(raw.value);
     if (!Number.isFinite(pct)) return null;
@@ -413,7 +419,9 @@ function resolveNumericValueForBoundary(boundary, schema) {
 function derivePercentageDisplayForBoundary(boundary, schema, storedValue) {
   if (!schema || schema.kind !== 'percentage') return { raw: null, percent: null };
   const denomSchema = findPropertySchema(schema.denominatorPropertyId);
-  const denomVal = denomSchema ? resolveNumericValueForBoundary(boundary, denomSchema) : null;
+  // Effective denom: user-set if any, else rolled up — so chained %
+  // rows on a boundary see the correct denominator (Brick 10c).
+  const denomVal = denomSchema ? resolveEffectiveForBoundary(boundary, denomSchema) : null;
   let raw = null;
   let percent = null;
   if (storedValue && typeof storedValue === 'object') {
@@ -430,6 +438,181 @@ function derivePercentageDisplayForBoundary(boundary, schema, storedValue) {
   }
   raw = _maybeRound(raw, schema);
   return { raw, percent, denomVal, denomSchema };
+}
+
+// ============================================================
+// AGGREGATION ENGINE (Brick 10c)
+// ============================================================
+// "Effective" value semantics:
+//   - For a plot: just the user-stored value (plots are leaves).
+//   - For a boundary: user-set value if any (override); else the
+//     value rolled up from its members.
+//
+// Roll-up rules per schema kind:
+//   - numeric / sum               : sum of members' effective values
+//   - numeric / weighted_average  : ∑(value × weight) / ∑(weight)
+//                                   weight resolved per-member via the
+//                                   schema's weightPropertyId
+//   - percentage                  : sum members' effective raws, then
+//                                   divide by the boundary's effective
+//                                   denominator
+//   - categorical / no rollup     : null (no aggregation)
+//   - categorical / distribution  : Map<value, count> across members
+//
+// All walks carry a `visited` set of boundary ids to guard against
+// cycles in the membership graph (which schema validation shouldn't
+// allow, but defense in depth is cheap).
+
+function resolveEffectiveForPlot(plot, schema) {
+  return resolveNumericValueForPlot(plot, schema);
+}
+
+function resolveEffectiveForBoundary(boundary, schema, visited) {
+  if (!boundary || !schema) return null;
+  visited = visited || new Set();
+  if (visited.has(boundary.id)) return null;
+  // Area is always computed from geometry — no user-set on boundaries.
+  if (schema.id === AREA_VIRTUAL_ID) {
+    const a = (typeof boundaryArea === 'function') ? boundaryArea(boundary) : 0;
+    return Number.isFinite(a) ? _maybeRound(a, schema) : null;
+  }
+  // User-set wins.
+  const stored = getBoundaryPropertyValue(boundary, schema.id);
+  if (stored !== undefined && stored !== null && stored !== '') {
+    return resolveNumericValueForBoundary(boundary, schema);
+  }
+  // Else roll up from members.
+  const next = new Set(visited);
+  next.add(boundary.id);
+  return computeRollupNumeric(boundary, schema, next);
+}
+
+// Public: returns the rolled-up numeric value (numeric, or percentage's
+// raw side). Walks members; doesn't consider this boundary's own
+// user-set value. Callers wanting "user-set OR rollup" should use
+// resolveEffectiveForBoundary.
+function computeRollupNumeric(boundary, schema, visited) {
+  if (!boundary || !schema) return null;
+  visited = visited || new Set();
+  if (schema.kind === 'numeric')   return _aggregateNumeric(boundary, schema, visited);
+  if (schema.kind === 'percentage') {
+    const r = computeRollupPercentage(boundary, schema, visited);
+    return r ? r.raw : null;
+  }
+  return null;
+}
+
+function _aggregateNumeric(boundary, schema, visited) {
+  const members = boundary.members || [];
+  const weightSchema = schema.aggregation === 'weighted_average'
+    ? findPropertySchema(schema.weightPropertyId)
+    : null;
+  let sum = 0;
+  let weightSum = 0;
+  let weightedSum = 0;
+  let contributors = 0;
+  for (const m of members) {
+    const member = (typeof resolveMember === 'function') ? resolveMember(m) : null;
+    if (!member) continue;
+    const isPlot = m.kind === 'plot';
+    const val = isPlot
+      ? resolveEffectiveForPlot(member, schema)
+      : resolveEffectiveForBoundary(member, schema, visited);
+    if (val == null) continue;
+    if (weightSchema) {
+      const w = isPlot
+        ? resolveEffectiveForPlot(member, weightSchema)
+        : resolveEffectiveForBoundary(member, weightSchema, visited);
+      if (w == null || w === 0) continue;
+      weightedSum += val * w;
+      weightSum   += w;
+      contributors++;
+    } else {
+      sum += val;
+      contributors++;
+    }
+  }
+  if (contributors === 0) return null;
+  if (weightSchema) {
+    return weightSum === 0 ? null : _maybeRound(weightedSum / weightSum, schema);
+  }
+  return _maybeRound(sum, schema);
+}
+
+// Returns { raw, percent, denomVal, denomSchema, contributors } or null.
+// `contributors` is the count of members that supplied a non-null raw
+// (so the caller can distinguish "no children contribute" from
+// "children contribute zero").
+function computeRollupPercentage(boundary, schema, visited) {
+  if (!boundary || !schema || schema.kind !== 'percentage') return null;
+  visited = visited || new Set();
+  const members = boundary.members || [];
+  let rawSum = 0;
+  let contributors = 0;
+  for (const m of members) {
+    const member = (typeof resolveMember === 'function') ? resolveMember(m) : null;
+    if (!member) continue;
+    const isPlot = m.kind === 'plot';
+    const memberRaw = isPlot
+      ? resolveEffectiveForPlot(member, schema)
+      : resolveEffectiveForBoundary(member, schema, visited);
+    if (memberRaw == null) continue;
+    rawSum += memberRaw;
+    contributors++;
+  }
+  if (contributors === 0) return null;
+  const denomSchema = findPropertySchema(schema.denominatorPropertyId);
+  // Resolve denom on THIS boundary (effective: user-set if any, else
+  // rolled-up). Note: we don't want to recurse back into this boundary
+  // for the same schema, but the denom is a DIFFERENT schema so passing
+  // an empty visited set is fine — `resolveEffectiveForBoundary` will
+  // independently guard its own recursion.
+  const denomVal = denomSchema ? resolveEffectiveForBoundary(boundary, denomSchema) : null;
+  if (denomVal == null || denomVal === 0) {
+    return { raw: _maybeRound(rawSum, schema), percent: null, denomVal, denomSchema, contributors };
+  }
+  return {
+    raw: _maybeRound(rawSum, schema),
+    percent: (rawSum / denomVal) * 100,
+    denomVal,
+    denomSchema,
+    contributors,
+  };
+}
+
+// Distribution roll-up for categorical schemas with rollupDistribution.
+// Counts members' user-set values. Sub-boundaries' values are read as
+// their stored single category (we don't currently roll up a distribution
+// of distributions — that's a future polish if it's worth the
+// complexity).
+function computeRollupCategoricalDistribution(boundary, schema, visited) {
+  if (!boundary || !schema || schema.kind !== 'categorical') return null;
+  if (!schema.rollupDistribution) return null;
+  const members = boundary.members || [];
+  const dist = new Map();
+  for (const m of members) {
+    const member = (typeof resolveMember === 'function') ? resolveMember(m) : null;
+    if (!member) continue;
+    const raw = m.kind === 'plot'
+      ? getPlotPropertyValue(member, schema.id)
+      : getBoundaryPropertyValue(member, schema.id);
+    if (typeof raw === 'string' && raw.trim()) {
+      const key = raw.trim();
+      dist.set(key, (dist.get(key) || 0) + 1);
+    }
+  }
+  return dist.size > 0 ? dist : null;
+}
+
+// Classify a user-set vs rolled-up numeric. Tolerance keeps
+// floating-point noise from spuriously flagging matches. Returns
+// 'match' | 'under' | 'over' | null (null when either side is null).
+function classifyRollupMismatch(userVal, rollupVal) {
+  if (userVal == null || rollupVal == null) return null;
+  if (!Number.isFinite(userVal) || !Number.isFinite(rollupVal)) return null;
+  const tol = Math.max(Math.abs(rollupVal), Math.abs(userVal), 1) * 1e-9;
+  if (Math.abs(userVal - rollupVal) <= tol) return 'match';
+  return userVal < rollupVal ? 'under' : 'over';
 }
 
 // Compute the "other side" of a percentage value given the current

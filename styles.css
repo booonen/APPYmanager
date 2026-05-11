@@ -492,6 +492,41 @@ input[type="checkbox"]:checked::after {
   grid-column: 1 / -1; font-size: 11px; color: var(--warn); margin-top: 2px;
 }
 
+/* Brick 10c — rollup hint + mismatch badge on boundary property rows.
+   Always rendered (empty wrapper kept so we can update in place); the
+   `:empty` selector hides it when there's nothing to show. */
+.plot-property-rollup-hint {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 4px;
+}
+.plot-property-row-percent .plot-property-rollup-hint {
+  grid-column: 1 / -1;
+}
+.plot-property-rollup-hint:empty { display: none; }
+
+.rollup-mismatch-badge {
+  display: inline-block;
+  font-size: 10px;
+  padding: 1px 6px;
+  margin-left: 6px;
+  border-radius: 8px;
+  white-space: nowrap;
+}
+.rollup-mismatch-match {
+  color: var(--success);
+  background: var(--success-dim);
+}
+.rollup-mismatch-under {
+  color: var(--accent);
+  background: var(--accent-glow);
+  font-weight: 600; /* under-sum is a critical signal */
+}
+.rollup-mismatch-over {
+  color: var(--warn);
+  background: var(--warn-dim);
+}
+
 /* Read-only system rows (e.g. Plot area) */
 .plot-property-row-readonly { background: var(--bg-input); }
 .plot-property-readonly-value {

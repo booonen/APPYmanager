@@ -670,6 +670,33 @@ they come up; the plan is a living document.
      (because half-people don't exist) and the virtual Area schema;
      **off** for any newly-created numeric (user opts in via the
      schema editor's "Round to whole numbers" checkbox).
+- **Brick 10c** ✓ (PR open on `claude/brick-8-start-qJz0D`) — aggregation,
+  override semantics, mismatch flags. Closes Brick 10.
+  New "effective value" semantics in `js/properties.js`:
+  `resolveEffectiveForPlot` (just user-stored — plots are leaves) and
+  `resolveEffectiveForBoundary` (user-set if any, else rolled up from
+  members; `visited` set guards cycles). Roll-up rules per kind:
+  numeric/sum sums members, numeric/weighted_average uses the
+  `weightPropertyId` schema, percentage sums raws and divides by the
+  boundary's effective denominator, categorical-with-distribution
+  returns `Map<value, count>`, categorical-no-rollup returns null.
+  `resolveNumericValueForBoundary` and
+  `derivePercentageDisplayForBoundary` now resolve denominators via
+  the Effective resolver so a `% Urban` row sees rolled-up Population
+  as its denom on a Province. Mismatch detection via
+  `classifyRollupMismatch(userVal, rollupVal)` → `'match' | 'under' |
+  'over' | null` with floating-point tolerance. UI: each boundary
+  property row gets a `.plot-property-rollup-hint` wrapper with
+  `data-rollup-container=<schemaId>` so we can refresh in place; at
+  the schema's root level the wrapper renders empty (CSS `:empty`
+  hides it). Above-root rows show a "Rolled up: …" hint plus a
+  mismatch badge: match (green), under (accent red, bold — critical
+  per spec), over (warn yellow — acceptable per spec).
+  `_refreshAllBoundaryRollups()` re-renders every rollup block on any
+  value commit (cheap full sweep — handles denom-cascade across
+  percentages without exact dep tracking).
+  Categorical distribution-of-distributions is deferred; central
+  issues panel arrives in Brick 14.
 - **Brick 10b** ✓ (PR open on `claude/brick-8-start-qJz0D`) — boundary
   inspector with property values. Boundary detail modal grows a
   Properties section parallel to the plot one (same row layout,
