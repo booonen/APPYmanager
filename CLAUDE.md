@@ -304,28 +304,54 @@ which rules it implements but does not re-state them in full. Read the
   population lives everywhere. The "applies to" set is what makes
   boundary-only properties possible without polluting every plot's
   inspector with N/A rows.
-- **Brick 9c** *(deferred, scoped 2026-05-11)* — **Calculated** property
-  *source*. Source is a new axis on the schema, orthogonal to Kind
-  (numeric / categorical / percentage). Three sources: `'manual'`
-  (today's behaviour, value typed by user), `'calculated'` (derived
-  from a formula referencing other properties), `'overpass'` (pulled
-  from an Overpass query — Brick 9d). Default `'manual'` for all
-  existing schemas. Schema editor grows a "Source" selector under
-  Kind; source-conditional fields appear below.
+- **Brick 9c** *(deferred, scoped 2026-05-11, refined 2026-05-11)* —
+  **Calculated** property *source*. Source is a new axis on the schema,
+  orthogonal to Kind (numeric / categorical / percentage). Three
+  sources: `'manual'` (today's behaviour, value typed by user),
+  `'calculated'` (derived from a formula referencing other properties),
+  `'overpass'` (pulled from an Overpass query — Brick 9d). Default
+  `'manual'` for all existing schemas. Schema editor grows a "Source"
+  selector under Kind; source-conditional fields appear below.
   **Mini-language sketch for `'calculated'`:**
-  - Refs: `{Property Name}` resolves per entity (plot / boundary).
-    `{Plot area}` uses the virtual id.
+  - Refs: `{Property Name}` resolves per entity (plot / boundary). The
+    virtual area schema is referenced as `{Area}` — every entity (plot
+    or boundary) has one, no need to disambiguate "plot area" vs
+    "boundary area".
   - Operators: `+ - * / ( )`; comparison `> < >= <= == !=`;
-    ternary `cond ? a : b`.
-  - Functions: `min`, `max`, `abs`, `sum`, `if(cond, a, b)`.
+    ternary `cond ? a else b`. (Using `else` instead of `:` to make
+    the branch boundary unambiguous — slightly unusual but more
+    readable than the C-style colon. No separate `if()` function — the
+    ternary covers it.)
+  - Functions:
+    - `min(a, b, …)`, `max(a, b, …)` — variadic.
+    - `abs(x)`.
+    - `sum(a, b, …)`, `avg(a, b, …)` — variadic numeric helpers.
+    - `round(value)` (to integer), `round(value, digits)` (to N
+      decimals, negative digits round to tens/hundreds — `round(4657,
+      -2) → 4700`). `ceil(x)`, `floor(x)`.
   - Literals: numbers; `"strings"` for categorical outputs.
   - Context refs we may want: `{my level}` for level-aware formulas.
-  - Example calculated numeric: `{Population} / ({Plot area} / 1000000)`
-    (density per km²).
-  - Example calculated categorical: `{Cows} > {Chickens} ? "cattle"
-    : "poultry"`.
+  - Example calculated numeric (density per km²):
+    `{Population} / ({Area} / 1000000)`
+  - Example calculated categorical:
+    `{Cows} > {Chickens} ? "cattle" else "poultry"`
+  - **Open question — short-name aliases.** Should `{Pop}` work as
+    shorthand for `Population`? Hardcoded aliases are fragile (user can
+    rename / delete `Population`). Better: each schema grows an
+    `aliases: string[]` field; the user declares short forms
+    themselves. Schema editor would surface this as an "Aliases"
+    text input. Refs in formulas resolve by name OR alias. Deferred
+    decision — open to just "name your schema 'Pop' if you want short
+    refs" instead, which is simpler.
+  - **Open question — `{{Property}}` name-of operator.** Idea: double
+    curlies return the schema *name* as a string literal, so formulas
+    like `{Cows} > {Chickens} ? {{Cows}} else {{Chickens}}` produce
+    `"Cows"` or `"Chickens"`. Useful when the output is categorical
+    derived from numeric comparisons. Alternative: `argmax(a, b)` /
+    `argmin(a, b)` return the *name* of the larger / smaller ref.
+    Both are workable; we'll pick when we build.
   Cycle detection: extend the current `_propertyRefId` walker to walk
-  every `{…}` in the formula's parsed AST, not just the single
+  every `{…}` ref in the formula's parsed AST, not just the single
   `weightPropertyId` / `denominatorPropertyId` pointer.
   Boundary roll-up: a calculated value on a boundary is computed from
   that boundary's resolved input properties — *not* aggregated from
@@ -590,3 +616,30 @@ they come up; the plan is a living document.
      Plot detail modal renders chained percentages with depth-first
      `renderChildren` (ancestors set guards against cycles).
      `_refreshDependentPercentageRows` walks dependents transitively.
+- **v0.4.3** ✓ (polish round 3) — three more tweaks:
+  1. **Typeahead dropdown background fix.** v0.4.2's `.ta-dropdown` was
+     styled `background: var(--bg-card)` — a token that doesn't exist
+     in the palette, so the dropdown rendered transparently over the
+     modal. Now `var(--bg-input)` (the same shade as input fields), and
+     highlighted/hovered items get `var(--bg-hover)` for a visible
+     contrast. Items themselves also carry the bg so they don't show
+     through to the modal underneath.
+  2. **Plot area → Area.** The virtual schema's user-facing `name`
+     changed from `"Plot area"` to `"Area"` — every entity (plot
+     *or* boundary) has one, no disambiguation needed. The underlying
+     `AREA_VIRTUAL_ID` id (`__plot_area__`) is unchanged so loaded
+     saves don't break. L10n `plot_detail.area_label` also flipped to
+     "Area". Brick 9c scoping refs accordingly switched from
+     `{Plot area}` to `{Area}`.
+  3. **Auto-round on numeric schemas.** New schema field `autoRound:
+     boolean` (numeric kind only). On: the property's values are
+     stored / displayed as integers — rounding happens on commit
+     (`onPlotPropertyBlur`, `onPlotPropertyPercentBlur` for the raw
+     side) and in `derivePercentageDisplay` / `resolveNumericValueForPlot`.
+     New helper `_effectiveAutoRound(schema)` walks a percentage's
+     denom chain to the terminal numeric — so `% Urban` of an
+     auto-rounded Population also rounds its raw side without needing
+     its own flag. Defaults: **on** for the bootstrapped Population
+     (because half-people don't exist) and the virtual Area schema;
+     **off** for any newly-created numeric (user opts in via the
+     schema editor's "Round to whole numbers" checkbox).

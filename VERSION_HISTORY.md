@@ -1,3 +1,52 @@
+## 0.4.3 — Brick 9 polish round 3: typeahead fix, Area rename, auto-round
+- **Typeahead dropdown background fix.** v0.4.2's `.ta-dropdown` was
+  styled `background: var(--bg-card)` — a token that doesn't exist in
+  the APPY palette, so the dropdown rendered transparently over the
+  modal (unselected rows were invisible against the modal background).
+  Switched to `var(--bg-input)` for the dropdown + items, and
+  `var(--bg-hover)` for the highlight state, so hovered/keyboard-
+  highlighted rows now stand out cleanly. Items themselves also carry
+  an explicit background so they don't show through to whatever sits
+  underneath.
+- **Plot area → Area.** Renamed the virtual schema's user-facing name
+  from "Plot area" to "Area". Every entity (plot or boundary) has one,
+  so no need to disambiguate. The underlying `AREA_VIRTUAL_ID`
+  (`__plot_area__`) stays put so saves from older versions still load
+  correctly. The "Area" virtual now also carries `autoRound: true`
+  (m² values are naturally integers for our purposes).
+- **Auto-round on numeric properties.** New schema field
+  `autoRound: boolean` (numeric kind only). When on:
+  - Numeric input commit rounds the entered value to integer before
+    storing — and reflects the rounded value back into the input so
+    the user sees the snap.
+  - Percentage's RAW side rounds via `_effectiveAutoRound(schema)`,
+    which walks the denominator chain to its terminal numeric. So
+    `% Urban` of an auto-rounded Population rounds its raw side
+    automatically — no per-percentage flag needed.
+  - `resolveNumericValueForPlot` and `derivePercentageDisplay` round
+    via the same helper, so any downstream consumer (chained
+    percentages, future boundary roll-up) sees the rounded value.
+  - On commit of the percent side: no rounding (percent values are in
+    %, not subject to this flag).
+  - On commit of the raw side: round via `_effectiveAutoRound`, then
+    re-derive the percent sibling from the rounded raw.
+  Defaults: **on** for the bootstrapped Population schema and the
+  virtual Area schema; **off** for new user-created numerics. The
+  schema editor's numeric kind block gains a "Round to whole numbers"
+  checkbox (with explanatory help text).
+- CLAUDE.md: Brick 9c scoping refined per discussion —
+  - `{Plot area}` → `{Area}` (matches the rename).
+  - Ternary uses `? else` instead of `? :` (more readable; no separate
+    `if()` function).
+  - `round(value, digits)`, `ceil`, `floor`, `avg` added to the
+    proposed function list.
+  - Two **open questions** flagged:
+    - `{Pop}` shorthand for `Population` — fragile if hardcoded.
+      Proposed: per-schema `aliases: string[]` declared by the user.
+    - `{{Property}}` to return the schema's name as a string literal
+      (for "predominant animal"-style outputs). Alternative:
+      `argmax / argmin` returning the name of the larger / smaller ref.
+
 ## 0.4.2 — Brick 9 polish round 2: unit-suffix, typeahead, percentage chains
 - **Unit-as-suffix.** The schema's `unit` no longer sits as a chip next
   to the property name. It's rendered *inside* the input frame as a

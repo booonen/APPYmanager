@@ -512,7 +512,7 @@ input[type="checkbox"]:checked::after {
   z-index: 50;
   margin-top: 2px;
   max-height: 220px; overflow-y: auto;
-  background: var(--bg-card);
+  background: var(--bg-input);
   border: 1px solid var(--border);
   border-radius: 4px;
   box-shadow: 0 6px 16px rgba(0,0,0,0.4);
@@ -522,11 +522,12 @@ input[type="checkbox"]:checked::after {
   padding: 6px 10px;
   font-size: 13px;
   color: var(--text);
+  background: var(--bg-input);
   cursor: pointer;
 }
 .typeahead .ta-item:hover,
 .typeahead .ta-item.highlighted {
-  background: var(--bg-input);
+  background: var(--bg-hover);
   color: var(--accent);
 }
 .typeahead .ta-empty {

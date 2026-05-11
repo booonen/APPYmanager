@@ -212,7 +212,7 @@ registerLanguage('en', 'English', {
     "property_denominator_unset": "{name} is not set on this plot — values won't link until it is.",
     "property_denominator_of": "of {name} = {value}",
     "property_orphan_section": "Percentages with missing denominator",
-    "area_label": "Plot area",
+    "area_label": "Area",
     "computed_chip": "computed"
   },
   "boundary_types": {
@@ -327,6 +327,8 @@ registerLanguage('en', 'English', {
     "agg_weighted_average": "Weighted average",
     "weight_label": "Weight property",
     "weight_help": "The numeric property to weight by (e.g. for an average household income, weight by population).",
+    "auto_round_label": "Round to whole numbers",
+    "auto_round_help": "Values in this property's units snap to integers — on commit and on display. Useful for counts (people, buildings) where fractions don't make sense. Also applies to any percentage's raw side that chains back to this property (e.g. a \"% urban\" of Population would round its raw side to whole people).",
     "denominator_label": "Denominator property",
     "denominator_help": "The property this percentage is taken of (e.g. for \"% urban\", denominator = Population). Can be a numeric property or another percentage — chains like \"Population → % Urban → % Spanish in urban\" work.",
     "rollup_distribution_label": "Roll up as distribution on boundaries",

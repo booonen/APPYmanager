@@ -2445,7 +2445,13 @@ function onPlotPropertyBlur(inputEl) {
     } else {
       const n = Number(raw);
       if (!Number.isFinite(n)) return; // invalid — leave previous value alone
-      setPlotPropertyValue(plot, schemaId, n);
+      const schema = findPropertySchema(schemaId);
+      const stored = schema?.autoRound ? Math.round(n) : n;
+      setPlotPropertyValue(plot, schemaId, stored);
+      // Reflect the rounded value back into the input so the user sees
+      // what got persisted (rather than 50.8 silently becoming 51 in
+      // the next render).
+      if (stored !== n) inputEl.value = String(stored);
     }
     save();
     _refreshDependentPercentageRows(schemaId);
@@ -2518,7 +2524,36 @@ function onPlotPropertyPercentInput(inputEl) {
 // for every keystroke (debounced 300 ms by save()), so blur is just a
 // belt-and-braces flush in case focus loss happens without a final
 // input event.
-function onPlotPropertyPercentBlur(_inputEl) {
+function onPlotPropertyPercentBlur(inputEl) {
+  // Apply auto-round on commit (not on each keystroke — that would
+  // interfere with typing decimals). Only the raw side participates
+  // in auto-round: the percent side is in % and isn't rounded by the
+  // `autoRound` flag.
+  if (_detailPlotId && inputEl?.dataset?.mode === 'raw') {
+    const plot = data.plots.find(p => p.id === _detailPlotId);
+    const schemaId = inputEl.dataset.schemaId;
+    const schema = schemaId ? findPropertySchema(schemaId) : null;
+    if (plot && schema && _effectiveAutoRound(schema)) {
+      const stored = getPlotPropertyValue(plot, schemaId);
+      if (stored && typeof stored === 'object' && stored.mode === 'raw'
+          && Number.isFinite(Number(stored.value))) {
+        const rounded = Math.round(Number(stored.value));
+        if (rounded !== Number(stored.value)) {
+          setPlotPropertyValue(plot, schemaId, { mode: 'raw', value: rounded });
+          inputEl.value = String(rounded);
+          // The percent sibling derives from the now-rounded raw — refresh it.
+          const sibling = document.querySelector(
+            `#plot-detail-properties input[data-schema-id="${schemaId}"][data-mode="percent"]`
+          );
+          if (sibling) {
+            const display = derivePercentageDisplay(plot, schema, { mode: 'raw', value: rounded });
+            sibling.value = display.percent != null ? formatPropertyNumber(display.percent) : '';
+          }
+          _refreshDependentPercentageRows(schemaId);
+        }
+      }
+    }
+  }
   save();
 }
 
@@ -2625,6 +2660,7 @@ function _openPropertyModal(title, schema) {
   const weightId = schema?.weightPropertyId || '';
   const denominatorId = schema?.denominatorPropertyId || '';
   const rollup = !!schema?.rollupDistribution;
+  const autoRound = !!schema?.autoRound;
 
   // Kind dropdown is locked on edit (data-integrity hedge for Brick 9).
   // Add: dropdown is enabled and onchange swaps the kind-specific block.
@@ -2655,7 +2691,7 @@ function _openPropertyModal(title, schema) {
       ${kindSelectHtml}
     </div>
     <div id="property-kind-fields">
-      ${_renderPropertyKindFields(kind, { aggregation, weightId, denominatorId, rollup })}
+      ${_renderPropertyKindFields(kind, { aggregation, weightId, denominatorId, rollup, autoRound })}
     </div>
     <div class="form-group">
       <label>${t('properties.notes_label')}</label>
@@ -2673,7 +2709,7 @@ function _openPropertyModal(title, schema) {
 }
 
 function _renderPropertyKindFields(kind, opts) {
-  // opts: { aggregation, weightId, denominatorId, rollup }
+  // opts: { aggregation, weightId, denominatorId, rollup, autoRound }
   const numericOpts = getNumericPropertyOptions(_propertyEditId);
   const denomOpts   = getDenominatorPropertyOptions(_propertyEditId);
   if (kind === 'numeric') {
@@ -2688,13 +2724,22 @@ function _renderPropertyKindFields(kind, opts) {
         <p class="text-dim" style="font-size:12px;margin-bottom:6px">${t('properties.weight_help')}</p>
         ${_propertyRefSelect('property-weight', numericOpts, opts.weightId, t('properties.ref_pick_placeholder'))}
       </div>`;
+    const autoRoundBlock = `
+      <div class="form-group">
+        <label style="display:inline-flex;align-items:center;gap:8px;cursor:pointer">
+          <input type="checkbox" id="property-auto-round"${opts.autoRound ? ' checked' : ''} style="margin:0">
+          <span>${t('properties.auto_round_label')}</span>
+        </label>
+        <p class="text-dim" style="font-size:12px;margin-top:4px">${t('properties.auto_round_help')}</p>
+      </div>`;
     return `
       <div class="form-group">
         <label>${t('properties.aggregation_label')}</label>
         <p class="text-dim" style="font-size:12px;margin-bottom:6px">${t('properties.aggregation_help')}</p>
         ${aggSel}
       </div>
-      ${weightSelect}`;
+      ${weightSelect}
+      ${autoRoundBlock}`;
   }
   if (kind === 'categorical') {
     return `
@@ -2798,9 +2843,11 @@ function saveProperty() {
   let weightPropertyId = null;
   let denominatorPropertyId = null;
   let rollupDistribution = false;
+  let autoRound = false;
 
   if (kind === 'numeric') {
     aggregation = document.getElementById('property-aggregation')?.value || 'sum';
+    autoRound = !!document.getElementById('property-auto-round')?.checked;
     if (!NUMERIC_AGGREGATIONS.includes(aggregation)) {
       toast(t('properties.error_aggregation_invalid'), 'error');
       return;
@@ -2858,6 +2905,7 @@ function saveProperty() {
       if (schema.kind === 'numeric') {
         schema.aggregation = aggregation;
         schema.weightPropertyId = aggregation === 'weighted_average' ? weightPropertyId : null;
+        schema.autoRound = autoRound;
       } else if (schema.kind === 'categorical') {
         schema.rollupDistribution = rollupDistribution;
       } else if (schema.kind === 'percentage') {
@@ -2870,6 +2918,7 @@ function saveProperty() {
       aggregation, weightPropertyId,
       rollupDistribution,
       denominatorPropertyId,
+      autoRound,
     });
   }
 

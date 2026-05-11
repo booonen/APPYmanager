@@ -36,29 +36,60 @@ const NUMERIC_AGGREGATIONS = ['sum', 'weighted_average'];
 // so percentage properties can use them as denominators (e.g.
 // "% Urbanised" = % of Plot area).
 //
-// AREA_VIRTUAL_ID — the plot's computed area in m². On boundaries
-// (Brick 10) it'll resolve via `boundaryArea`.
+// AREA_VIRTUAL_ID — the entity's computed area in m². Resolves via
+// `plotArea` for plots; on boundaries (Brick 10) via `boundaryArea`.
+// The id keeps its `__plot_area__` underscore form so older saves don't
+// break when re-loaded, but the user-facing name is just "Area" — every
+// entity (plot or boundary) has one, no need to disambiguate.
 
 const AREA_VIRTUAL_ID = '__plot_area__';
 
 function _virtualAreaSchema() {
   return {
     id:          AREA_VIRTUAL_ID,
-    name:        'Plot area',
+    name:        'Area',
     unit:        'm²',
     kind:        'numeric',
     aggregation: 'sum',
     notes:       '',
+    autoRound:   true,
     __virtual:   true,
   };
 }
 
 function isVirtualPropertyId(id) { return id === AREA_VIRTUAL_ID; }
 
+// `autoRound` is declared per-numeric-schema. For a percentage, its raw
+// side is in its denominator's units — so we walk the denom chain until
+// we hit a numeric, and use that numeric's flag. Returns false if the
+// chain is broken (no denom, deleted denom, etc.) or the terminal is
+// not numeric.
+function _effectiveAutoRound(schema) {
+  if (!schema) return false;
+  if (schema.kind === 'numeric') return !!schema.autoRound;
+  if (schema.kind === 'percentage') {
+    const seen = new Set();
+    let cur = schema;
+    while (cur && cur.kind === 'percentage') {
+      if (seen.has(cur.id)) return false;
+      seen.add(cur.id);
+      cur = findPropertySchema(cur.denominatorPropertyId);
+    }
+    return !!(cur && cur.kind === 'numeric' && cur.autoRound);
+  }
+  return false;
+}
+
+function _maybeRound(value, schema) {
+  if (value == null || !Number.isFinite(value)) return value;
+  return _effectiveAutoRound(schema) ? Math.round(value) : value;
+}
+
 function createPropertySchema({ name, unit, kind, notes,
                                 aggregation, weightPropertyId,
                                 rollupDistribution,
-                                denominatorPropertyId }) {
+                                denominatorPropertyId,
+                                autoRound }) {
   const schema = {
     id:                    uid(),
     name:                  name || '',
@@ -71,6 +102,7 @@ function createPropertySchema({ name, unit, kind, notes,
                              : null,
     rollupDistribution:    kind === 'categorical' ? !!rollupDistribution : false,
     denominatorPropertyId: kind === 'percentage' ? (denominatorPropertyId || null) : null,
+    autoRound:             kind === 'numeric' ? !!autoRound : false,
   };
   data.propertySchemas = data.propertySchemas || [];
   data.propertySchemas.push(schema);
@@ -106,6 +138,7 @@ function bootstrapPropertySchemas() {
     unit: 'people',
     kind: 'numeric',
     aggregation: 'sum',
+    autoRound: true,
   });
   createPropertySchema({
     name: 'Predominant language',
@@ -244,20 +277,20 @@ function resolveNumericValueForPlot(plot, schema) {
   // Virtual schemas come from geometry, not data.propertyValues.
   if (schema.id === AREA_VIRTUAL_ID) {
     const a = (typeof plotArea === 'function') ? plotArea(plot) : 0;
-    return Number.isFinite(a) ? a : null;
+    return Number.isFinite(a) ? _maybeRound(a, schema) : null;
   }
   const raw = getPlotPropertyValue(plot, schema.id);
   if (raw === undefined || raw === null || raw === '') return null;
   if (schema.kind === 'numeric') {
     const n = Number(raw);
-    return Number.isFinite(n) ? n : null;
+    return Number.isFinite(n) ? _maybeRound(n, schema) : null;
   }
   if (schema.kind === 'percentage') {
     // Percent schemas store { mode, value }. Resolve to the raw amount.
     if (typeof raw !== 'object') return null;
     if (raw.mode === 'raw') {
       const n = Number(raw.value);
-      return Number.isFinite(n) ? n : null;
+      return Number.isFinite(n) ? _maybeRound(n, schema) : null;
     }
     // mode = 'percent' — need the denominator to compute raw.
     const denomSchema = findPropertySchema(schema.denominatorPropertyId);
@@ -266,7 +299,7 @@ function resolveNumericValueForPlot(plot, schema) {
     if (denomVal == null) return null;
     const pct = Number(raw.value);
     if (!Number.isFinite(pct)) return null;
-    return (pct / 100) * denomVal;
+    return _maybeRound((pct / 100) * denomVal, schema);
   }
   return null;
 }
@@ -294,6 +327,9 @@ function derivePercentageDisplay(plot, schema, storedValue) {
       }
     }
   }
+  // Round the raw side if the chain's terminal numeric is auto-rounded.
+  // (Percent side is always in %, not auto-rounded by this flag.)
+  raw = _maybeRound(raw, schema);
 
   return { raw, percent, denomVal, denomSchema };
 }
