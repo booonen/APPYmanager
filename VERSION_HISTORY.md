@@ -1,3 +1,10 @@
+## 0.6.1 — Rollup hint visual weight matches input
+v0.6.0's `.plot-property-rollup-hint` was 11px / `--text-dim` — read
+too muted next to the 13px / `--text` input. Bumped to 13px / `--text`
+so the rolled-up value sits as a peer to the user-set input value
+rather than a footnote. Mismatch badges keep their 10px chip size
+(they're meta-labels, not values).
+
 ## 0.6.0 — Brick 10c: aggregation, override, mismatch flags (Brick 10 complete)
 Third and final sub-step of Brick 10. Boundaries now display a rolled-up
 value alongside their user-set value, with mismatch flags surfacing the

@@ -494,10 +494,13 @@ input[type="checkbox"]:checked::after {
 
 /* Brick 10c — rollup hint + mismatch badge on boundary property rows.
    Always rendered (empty wrapper kept so we can update in place); the
-   `:empty` selector hides it when there's nothing to show. */
+   `:empty` selector hides it when there's nothing to show.
+   Sized to match the input text (13px / --text) so the rolled-up
+   value reads as a peer value to the user-set input, not as a muted
+   footnote. */
 .plot-property-rollup-hint {
-  font-size: 11px;
-  color: var(--text-dim);
+  font-size: 13px;
+  color: var(--text);
   margin-top: 4px;
 }
 .plot-property-row-percent .plot-property-rollup-hint {
