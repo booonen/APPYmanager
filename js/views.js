@@ -344,7 +344,19 @@ function deleteBoundaryType(id) {
     : t('boundary_types.confirm_delete', { name: type.name });
 
   appConfirm(msg, () => {
-    // Detach dependents: set their primitiveId to what the deleted type pointed at
+    // Schema-root promotion (Brick 10a). A property schema rooted at the
+    // deleted type promotes to that type's *parent* (a type whose
+    // primitiveId pointed at the deleted one) — least-impact relink, so
+    // data stays at the higher / more-aggregate level rather than
+    // sliding down into a smaller-than-intended one. If the deleted type
+    // was top-level (no parent), fall back to 'plot'. In a branching
+    // hierarchy with multiple parents we pick the first deterministically
+    // (`dependents` is the list of types that pointed at this one).
+    const promotedRoot = dependents.length > 0 ? dependents[0].id : 'plot';
+    (data.propertySchemas || []).forEach(s => {
+      if (s.rootLevelId === id) s.rootLevelId = promotedRoot;
+    });
+    // Detach type dependents: set their primitiveId to what the deleted type pointed at
     dependents.forEach(dep => { dep.primitiveId = type.primitiveId; });
     data.boundaryTypes = data.boundaryTypes.filter(t => t.id !== id);
     save();
@@ -2181,8 +2193,13 @@ function closePlotDetail() {
 // delete the value entirely.
 
 function _renderPlotPropertyRows(plot) {
-  const schemas = data.propertySchemas || [];
-  if (schemas.length === 0) {
+  // Plot inspector only shows schemas rooted at 'plot' — anything
+  // rooted at a boundary type doesn't apply here. The "empty" message
+  // refers to the unfiltered list so users don't get a misleading
+  // "no properties" when they've only got boundary-only schemas.
+  const allSchemas = data.propertySchemas || [];
+  const schemas = allSchemas.filter(s => (s.rootLevelId || 'plot') === 'plot');
+  if (allSchemas.length === 0) {
     return `<div class="text-dim" style="font-size:12px;padding:8px 0">
       ${t('plot_detail.properties_empty')}
       <a href="javascript:void(0)" onclick="closePlotDetail();switchTab('properties')">${t('plot_detail.properties_empty_link')}</a>
@@ -2626,6 +2643,17 @@ function _renderPropertyRow(schema) {
                                                 : `<span class="text-muted">${t('properties.beh_percent_unset')}</span>`;
   else                                      behLabel = '<span class="text-muted">—</span>';
 
+  // Append a "Defined at: <type>" chip when the schema is rooted at a
+  // boundary type. Plot-rooted schemas (the common default) stay quiet
+  // so the column doesn't get noisy for the typical case.
+  const root = schema.rootLevelId || 'plot';
+  if (root !== 'plot') {
+    const rootType = (data.boundaryTypes || []).find(bt => bt.id === root);
+    if (rootType) {
+      behLabel += ` <span class="property-root-chip">${t('properties.defined_at_chip', { name: esc(rootType.name) })}</span>`;
+    }
+  }
+
   return `<tr>
     <td><strong>${esc(schema.name)}</strong></td>
     <td>${esc(kindLabel)}</td>
@@ -2661,6 +2689,7 @@ function _openPropertyModal(title, schema) {
   const denominatorId = schema?.denominatorPropertyId || '';
   const rollup = !!schema?.rollupDistribution;
   const autoRound = !!schema?.autoRound;
+  const rootLevelId = schema?.rootLevelId || 'plot';
 
   // Kind dropdown is locked on edit (data-integrity hedge for Brick 9).
   // Add: dropdown is enabled and onchange swaps the kind-specific block.
@@ -2689,6 +2718,11 @@ function _openPropertyModal(title, schema) {
       <label>${t('properties.kind_label')}</label>
       <p class="text-dim" style="font-size:12px;margin-bottom:6px">${t('properties.kind_help')}</p>
       ${kindSelectHtml}
+    </div>
+    <div class="form-group">
+      <label>${t('properties.defined_at_label')}</label>
+      <p class="text-dim" style="font-size:12px;margin-bottom:6px">${t('properties.defined_at_help')}</p>
+      ${_definedAtSelect(rootLevelId)}
     </div>
     <div id="property-kind-fields">
       ${_renderPropertyKindFields(kind, { aggregation, weightId, denominatorId, rollup, autoRound })}
@@ -2760,6 +2794,22 @@ function _renderPropertyKindFields(kind, opts) {
       </div>`;
   }
   return '';
+}
+
+// "Defined at" dropdown — single select of the boundary level where this
+// property is normally recorded. Plot (the implicit lowest level) pins
+// at the top; user-defined boundary types follow in hierarchy order
+// (smallest containers first, matching the Boundary Types tab).
+function _definedAtSelect(currentValue) {
+  const types = (typeof boundaryTypesInHierarchyOrder === 'function')
+    ? boundaryTypesInHierarchyOrder()
+    : [];
+  const current = currentValue || 'plot';
+  const plotOpt = `<option value="plot"${current === 'plot' ? ' selected' : ''}>${t('properties.defined_at_plot')}</option>`;
+  const typeOpts = types.map(bt =>
+    `<option value="${esc(bt.id)}"${bt.id === current ? ' selected' : ''}>${esc(bt.name)}</option>`
+  ).join('');
+  return `<select id="property-defined-at">${plotOpt}${typeOpts}</select>`;
 }
 
 function _propertyRefSelect(id, numericOpts, currentValue, placeholderLabel) {
@@ -2844,6 +2894,9 @@ function saveProperty() {
   let denominatorPropertyId = null;
   let rollupDistribution = false;
   let autoRound = false;
+  // Common across all kinds: which level this property is defined at.
+  // Empty / unknown id falls back to 'plot'.
+  const rootLevelId = document.getElementById('property-defined-at')?.value || 'plot';
 
   if (kind === 'numeric') {
     aggregation = document.getElementById('property-aggregation')?.value || 'sum';
@@ -2901,6 +2954,7 @@ function saveProperty() {
       schema.name = name;
       schema.unit = unit;
       schema.notes = notes;
+      schema.rootLevelId = rootLevelId;
       // Kind is locked on edit; we leave schema.kind alone.
       if (schema.kind === 'numeric') {
         schema.aggregation = aggregation;
@@ -2919,6 +2973,7 @@ function saveProperty() {
       rollupDistribution,
       denominatorPropertyId,
       autoRound,
+      rootLevelId,
     });
   }
 

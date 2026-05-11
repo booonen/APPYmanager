@@ -293,17 +293,27 @@ which rules it implements but does not re-state them in full. Read the
   **over-sum** (boundary > sum of children) = acceptable warning
   because OGF mapping is often incomplete. Inline flagging in the
   inspector; central listing arrives in Brick 14.
-  **Schema-side prerequisite** (decided 2026-05-11, not yet built —
-  lands as a Brick 8 follow-up or first sub-step of Brick 10): each
-  property schema grows an `appliesTo: string[]` — a **free-form
-  multi-select** of `'plot'` plus each boundary-type id. Default is
-  every level (so existing schemas don't change behaviour). When a
-  level is unchecked, the property row doesn't render in that level's
-  inspector and is excluded from roll-up in/out of that level.
-  Motivating cases: voting results live on Province / Country only;
-  population lives everywhere. The "applies to" set is what makes
-  boundary-only properties possible without polluting every plot's
-  inspector with N/A rows.
+  **Schema-side prerequisite (Brick 10a)** — each property schema grows
+  a `rootLevelId: 'plot' | <boundaryTypeId>` field (default `'plot'`).
+  A property defined at root `R` appears at level `T` iff `T === R` OR
+  `R` is reachable from `T` downward through the `primitiveId` chain
+  (i.e. `T` is `R` itself or sits above `R` in a chain containing it).
+  Smaller-than-R levels and unrelated chains don't show the row at
+  all. At larger-than-R levels the row appears as a roll-up (with the
+  user-set override semantics intact). Default of `'plot'` means
+  every existing property behaves exactly as before (recorded on
+  plots, rolled up everywhere else). Motivating cases: voting lives
+  on Province / Country only (rootLevelId = Province); population
+  lives on plots (rootLevelId = 'plot'). When a boundary type is
+  deleted, schemas rooted at it promote to that type's parent — the
+  type whose `primitiveId` pointed at it — so data stays at a
+  higher / more-aggregate level rather than sliding down. Top-level
+  deletions fall back to `'plot'`.
+  *(Earlier scoping floated an `appliesTo: string[]` multi-select;
+  superseded by the simpler single-root model on 2026-05-11. The
+  multi-select would have been more flexible but the single root
+  matches the natural "data lives at one level, rolls up" mental
+  model for ~all real cases.)*
   *(Calculated and Overpass-derived property sources — formerly
   scoped here as Brick 9c / 9d — were moved to Phase 8 in the
   2026-05-11 plan refresh. See below.)*
@@ -660,3 +670,23 @@ they come up; the plan is a living document.
      (because half-people don't exist) and the virtual Area schema;
      **off** for any newly-created numeric (user opts in via the
      schema editor's "Round to whole numbers" checkbox).
+- **Brick 10a** ✓ (PR open on `claude/brick-8-start-qJz0D`) — Brick 10
+  schema-side prerequisite. Property schemas gain `rootLevelId`
+  (default `'plot'`). Schema editor grows a "Defined at" dropdown
+  between Kind and the kind-specific block, options: Plot, then
+  every boundary type in hierarchy order (smallest-containers-first,
+  matching the Boundary Types tab). New helper
+  `boundaryTypesInHierarchyOrder()` lives in `boundaries.js` and
+  walks reverse-`primitiveId` from the type with `primitiveId=null`
+  upward. Plot inspector filters its property rows to schemas with
+  `rootLevelId === 'plot'`. Properties-tab Behaviour column gains a
+  small accent-tinted "Defined at: \<type\>" chip when the schema is
+  rooted at a boundary type (Plot-rooted schemas stay quiet — keeps
+  the table calm for the common default). On boundary-type deletion,
+  schemas rooted at the deleted type **promote to that type's parent**
+  (a type whose `primitiveId` pointed at it) — least-impact relink so
+  data stays at a higher / more-aggregate level rather than sliding
+  down. Top-level deletions fall back to `'plot'`. Bootstrap fills in
+  `rootLevelId: 'plot'` explicitly on Population + Predominant
+  language. No boundary-side rendering or aggregation yet — that's
+  Brick 10b / 10c.

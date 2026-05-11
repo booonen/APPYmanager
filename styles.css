@@ -424,6 +424,17 @@ input[type="checkbox"]:checked::after {
   font-size: 10px; color: var(--text-muted); background: var(--bg-input);
   padding: 1px 6px; border-radius: 10px; flex-shrink: 0; font-family: var(--font-mono);
 }
+/* Properties-tab Behaviour column chip — surfaces a non-default root level
+   (e.g. "Defined at: Province"). Tinted with the accent so the eye picks it
+   out from the unit chip above. */
+.property-root-chip {
+  display: inline-block;
+  font-size: 10px;
+  color: var(--accent);
+  background: var(--accent-glow);
+  padding: 1px 6px; margin-left: 6px;
+  border-radius: 10px; white-space: nowrap;
+}
 .plot-property-input input[type="text"],
 .plot-property-input input[type="number"] {
   width: 100%; box-sizing: border-box;

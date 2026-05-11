@@ -1,3 +1,51 @@
+## 0.5.0 — Brick 10a: rootLevelId schema field
+First sub-step of Brick 10 (property aggregation on boundaries). Pure
+schema-side prerequisite — no boundary-side rendering or aggregation
+engine yet (those land as 10b and 10c).
+
+- **New schema field `rootLevelId`** (default `'plot'`). The boundary
+  level where a property is normally recorded. Replaces the
+  multi-select `appliesTo` model floated earlier on 2026-05-11 — the
+  single-root version is much simpler and matches the natural "data
+  lives at one level, rolls up" mental model. The rule for whether
+  a property appears at level T: T must be `R` itself, or `R` must
+  be reachable from T downward through the `primitiveId` chain.
+  Smaller-than-R and unrelated-chain levels don't show the row.
+- **Schema editor: "Defined at" dropdown** between Kind and the
+  kind-specific block. Options: Plot (the implicit default, pinned at
+  the top), then every boundary type in hierarchy order
+  (smallest-containers-first, mirroring the Boundary Types tab).
+  Powered by new helper `boundaryTypesInHierarchyOrder()` in
+  `boundaries.js` — walks reverse-`primitiveId` from the type with
+  `primitiveId=null` upward.
+- **Plot inspector filter.** The plot detail modal's Properties
+  section now hides any schema with `rootLevelId !== 'plot'`. The
+  "no properties defined" empty state still references the
+  unfiltered schema list so the user doesn't get a misleading message
+  when they've got boundary-only schemas defined.
+- **Properties tab chip.** When a schema is rooted at a boundary
+  type, the Behaviour column gets a small accent-tinted
+  "Defined at: \<type name\>" chip. Plot-rooted schemas (the common
+  default) show nothing — keeps the table quiet for the typical case.
+- **Boundary-type deletion cleanup.** `deleteBoundaryType` now
+  promotes any schema rooted at the deleted type to that type's
+  *parent* (the type whose `primitiveId` pointed at it). Least-impact
+  relink so data stays at a higher / more-aggregate level rather than
+  sliding down into a smaller one. Top-level deletions (no parent)
+  fall back to `'plot'`. Branching hierarchies: pick the first parent
+  deterministically.
+- **Bootstrap.** Population + Predominant language now seed with
+  explicit `rootLevelId: 'plot'` (matches the default, but makes
+  intent clear in the bootstrap code).
+- **Migration.** Schemas loaded from older saves with no
+  `rootLevelId` default to `'plot'` via the `|| 'plot'` fallback at
+  every read site — no destructive migration.
+- l10n: `properties.defined_at_label`, `defined_at_help`,
+  `defined_at_plot`, `defined_at_chip`.
+- CLAUDE.md: Brick 10 plan rewritten around the new model; the old
+  `appliesTo` scoping note preserved as a "superseded" sentence so
+  future-me can see why we picked this shape.
+
 ## 0.4.3 — Brick 9 polish round 3: typeahead fix, Area rename, auto-round
 - **Typeahead dropdown background fix.** v0.4.2's `.ta-dropdown` was
   styled `background: var(--bg-card)` — a token that doesn't exist in

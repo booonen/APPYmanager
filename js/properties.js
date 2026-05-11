@@ -89,7 +89,8 @@ function createPropertySchema({ name, unit, kind, notes,
                                 aggregation, weightPropertyId,
                                 rollupDistribution,
                                 denominatorPropertyId,
-                                autoRound }) {
+                                autoRound,
+                                rootLevelId }) {
   const schema = {
     id:                    uid(),
     name:                  name || '',
@@ -103,6 +104,11 @@ function createPropertySchema({ name, unit, kind, notes,
     rollupDistribution:    kind === 'categorical' ? !!rollupDistribution : false,
     denominatorPropertyId: kind === 'percentage' ? (denominatorPropertyId || null) : null,
     autoRound:             kind === 'numeric' ? !!autoRound : false,
+    // The boundary level where this property is normally recorded. The
+    // property rolls up to larger levels and is hidden on smaller /
+    // unrelated ones. 'plot' is the implicit-lowest level used as the
+    // default. Brick 10a.
+    rootLevelId:           rootLevelId || 'plot',
   };
   data.propertySchemas = data.propertySchemas || [];
   data.propertySchemas.push(schema);
@@ -139,12 +145,14 @@ function bootstrapPropertySchemas() {
     kind: 'numeric',
     aggregation: 'sum',
     autoRound: true,
+    rootLevelId: 'plot',
   });
   createPropertySchema({
     name: 'Predominant language',
     unit: '',
     kind: 'categorical',
     rollupDistribution: false,
+    rootLevelId: 'plot',
   });
   // Reference pop so future weighted-avg seeds can link without re-querying.
   void pop;
