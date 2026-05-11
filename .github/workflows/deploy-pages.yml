@@ -1,0 +1,49 @@
+name: Deploy to GitHub Pages
+
+# APPYmanager has no build step — every file in the repo is a static asset.
+# We just upload the whole tree (minus .git, which the upload action excludes
+# automatically) and let Pages serve it. index.html redirects to
+# appymanager.html, which is the actual shell.
+#
+# Trigger: push to main (= after a brick PR is merged), plus manual dispatch
+# for ad-hoc redeploys. Feature branches don't auto-deploy — open the HTML
+# file locally for WIP testing instead.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only one Pages deploy at a time. Don't cancel an in-flight deploy if a new
+# commit lands while it's running — let it finish and then deploy the newer
+# state.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: '.'
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
