@@ -1,3 +1,104 @@
+## 0.7.0 — Brick 11: manual plot split editor (Phase 4 opens)
+
+Phase 4 (plot operations) kicks off. A new `Split…` button on the plot
+detail modal opens a two-step wizard for cutting one plot into many.
+
+### Two split flavours
+
+- **Cut-line** (contiguous plots) — user clicks vertices on an inset
+  Leaflet map; the cut polyline must enter and exit the outer ring
+  exactly twice. The plot becomes two new plots joined along the cut.
+- **Component** (non-contiguous plots) — each polygon in
+  `resolvePlotGeometry().polygons` becomes its own new plot. No
+  drawing needed; the modal opens in this mode automatically when the
+  plot has more than one ring. (Cut-line on non-contiguous plots is
+  out of scope for v1 — split into pieces first, then cut individual
+  pieces.)
+
+### Geometry engine — `js/split.js` (new)
+
+- `computeCutLineSplit(plot, latLngs)` — Turf-powered. Uses
+  `lineIntersect` to find ring crossings (deduped for vertex-coincident
+  hits), `nearestPointOnLine` to project both intersections onto the
+  ring AND the cut line, then `lineSliceAlong` to extract the two ring
+  arcs plus the in-polygon cut segment. Two output polygons are built
+  by joining each arc with the cut (in either orientation). Holes ride
+  along with whichever piece contains their first vertex.
+- `computeComponentSplit(plot)` — splits `resolvePlotGeometry`'s
+  pre-computed polygons array.
+- `executeSplit(plot, pieces, names, propertyValuesPerPiece)` — writes
+  new geometry via the existing `storeSubdivisionGeometry` (Brick 5),
+  creates new plots, copies redistributed property values onto them,
+  rewrites every boundary's `members` to swap the old plot for the new
+  ids, and calls `invalidateBoundaryGeometry()` (which transitively
+  re-anchors settlements via `reconcileSettlementParents()`).
+
+Local OSM ids for the new geometry use the existing negative-id pool
+(`nextLocalOsmId`). New plots get `ogfRelationId = null` — the split
+breaks the round-trip mapping until Brick 16's re-sync.
+
+### Property redistribution — `proposePlotSplitValues` (in `properties.js`)
+
+Seeds the redistribution table with sensible defaults per kind:
+
+- **numeric** (sum AND weighted_average) — area-proportional split.
+  Phase 7 will add density-aware nuance via the population estimator;
+  the design assumes calculated properties (Brick 19) will carry
+  densities, so splitting raw numerics linearly is the right v1.
+- **categorical** — every piece inherits the parent value verbatim.
+- **percentage** — `mode: 'percent'` is inherited as-is on every piece
+  (the linked raw side re-derives from the smaller effective
+  denominator at read time). `mode: 'raw'` is split area-proportionally.
+
+The function skips schemas not applicable at `'plot'` level, the
+virtual Area schema, and any schema the parent doesn't have a stored
+value for. Output: `{ [schemaId]: [valueForPiece0, ...] }`.
+
+### Modal UI — `js/views.js`
+
+Two-step flow inside a single 820px modal:
+
+- **Step 1 — Input.** Inset map shows the plot. Cut mode: each map
+  click adds a vertex (cross-hair cursor, accent-coloured polyline
+  with dashed style + small dot markers). Component mode is a
+  no-drawing confirmation step. `Preview →` is disabled until the cut
+  has ≥2 vertices.
+- **Step 2 — Preview + redistribute.** Pieces drawn in distinct
+  rotating colours (`_SPLIT_PIECE_COLORS`); seam from the cut overlaid
+  in dark dashed line so users can see what got joined where. Below
+  the map: per-piece name input + area read-out. Then the
+  redistribution table — one row per applicable schema with a parent-
+  value reference column and an editable cell per piece. Percentage
+  cells include the right unit suffix (`%` or the denominator's unit
+  for raw mode). `← Back` preserves the cut.
+
+### Plumbing
+
+- `js/map.js` gains `ensureSplitMap` / `drawSplitPlot` / `drawSplitCut`
+  / `drawSplitPieces` / `destroySplitMap` (mirroring the existing
+  detail-map helpers). Three feature-group layers stack: plot baseline,
+  cut overlay, pieces.
+- `js/split.js` is registered after `subdivide.js` in
+  `appymanager.html` so it can reuse `storeSubdivisionGeometry`.
+- `Split…` button on the plot detail modal sits between `Delete plot`
+  and `Close`.
+- L10n strings live under `plot_split.*`. Error messages cover every
+  guard the geometry engine raises (`cut_does_not_cross`,
+  `cut_crosses_too_many_times`, `degenerate_split`, …).
+- Styling in `styles.css` under `.split-*`.
+
+### Out of scope for Brick 11
+
+- Cut-line on non-contiguous plots (rejected with a translated toast).
+- Holes crossed by the cut don't sub-split — they ride along with the
+  first-vertex's containing piece. Real-world OGF plots rarely have
+  holes that the user wants to cut through.
+- Population estimator integration (Brick 17) — areas are shown per
+  piece, but no density-aware redistribution yet.
+- Weighted-average redistribution gets the same area-proportional
+  treatment as `sum` per the agreed Phase 7 plan; densities will live
+  as calculated properties (Brick 19) so this works out.
+
 ## 0.6.1 — Rollup hint visual weight matches input
 v0.6.0's `.plot-property-rollup-hint` was 11px / `--text-dim` — read
 too muted next to the 13px / `--text` input. Bumped to 13px / `--text`

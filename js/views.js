@@ -2141,8 +2141,9 @@ function openPlotDetail(plotId) {
     </div>` : ''}
     <div id="plot-detail-map" style="height:240px;margin-top:12px;border-radius:var(--radius);border:1px solid var(--border);overflow:hidden"></div>
   `, `
-    <button class="btn btn-danger" style="margin-right:auto" onclick="onPlotDetailDelete()">${t('plot_detail.delete_btn')}</button>
-    <button class="btn" onclick="closePlotDetail()">${t('btn.close')}</button>
+    <button class="btn btn-danger" onclick="onPlotDetailDelete()">${t('plot_detail.delete_btn')}</button>
+    <button class="btn" onclick="onPlotDetailSplit()">${t('plot_detail.split_btn')}</button>
+    <button class="btn" style="margin-left:auto" onclick="closePlotDetail()">${t('btn.close')}</button>
   `);
 
   const modalEl = document.getElementById('modal');
@@ -3470,4 +3471,375 @@ function deleteProperty(id) {
     renderProperties();
     renderDashboard();
   });
+}
+
+// ============================================================
+// PLOT SPLIT MODAL (Brick 11)
+// ============================================================
+// Two-step flow inside a single modal:
+//   step 1 — INPUT.   Cut mode: user clicks vertices on the inset map.
+//                     Component mode: just a confirmation step (no
+//                     drawing needed; the geometry is implicit).
+//   step 2 — PREVIEW. Map shows the pieces in distinct colours; per-piece
+//                     name + area read-out; property redistribution table
+//                     seeded from proposePlotSplitValues. User can override
+//                     any cell. Confirm executes; Back returns to step 1
+//                     (preserving the cut).
+//
+// Mode is picked automatically: contiguous plot → 'cut'; non-contiguous
+// → 'component'. Cut-line splits of non-contiguous plots are out of
+// scope for Brick 11 (user can split into pieces first, then re-open
+// the modal on a piece).
+
+let _splitState = null;
+
+function onPlotDetailSplit() {
+  if (!_detailPlotId) return;
+  const plot = data.plots.find(p => p.id === _detailPlotId);
+  if (!plot) return;
+  // Capture any pending name/notes edits before tearing down the detail modal.
+  onPlotDetailSave();
+  destroyDetailMap();
+  _splitState = {
+    plotId:        plot.id,
+    mode:          isPlotNonContiguous(plot) ? 'component' : 'cut',
+    step:          1,
+    cutLatLngs:    [],
+    pieces:        null,
+    cutInside:     null,
+    names:         [],
+    propertyValues: [],
+  };
+  _openSplitStep1();
+}
+
+function closeSplitModal() {
+  _splitState = null;
+  destroySplitMap();
+  closeModal();
+}
+
+function _splitPlot() {
+  return _splitState ? data.plots.find(p => p.id === _splitState.plotId) : null;
+}
+
+// ----- STEP 1 ----------------------------------------------------------
+
+function _openSplitStep1() {
+  const state = _splitState;
+  const plot = _splitPlot();
+  if (!plot) { closeSplitModal(); return; }
+
+  const plotName = plot.name || t('plots.unnamed');
+
+  let bodyHtml;
+  if (state.mode === 'cut') {
+    bodyHtml = `
+      <div class="split-step">
+        <div class="split-hint">${t('plot_split.cut_hint')}</div>
+        <div id="split-map" class="split-map"></div>
+        <div class="split-status">
+          <span id="split-cut-vertex-count">${t('plot_split.cut_vertices', { n: 0 })}</span>
+          <button class="btn btn-sm" id="split-clear-btn" onclick="onSplitClearCut()" disabled>${t('plot_split.clear_cut')}</button>
+        </div>
+      </div>`;
+  } else {
+    const geo = resolvePlotGeometry(plot);
+    bodyHtml = `
+      <div class="split-step">
+        <div class="split-hint">${t('plot_split.component_hint', { n: geo.polygons.length })}</div>
+        <div id="split-map" class="split-map"></div>
+      </div>`;
+  }
+
+  const previewDisabled = state.mode === 'cut' && state.cutLatLngs.length < 2;
+  openModal(t('plot_split.title', { name: plotName }), bodyHtml, `
+    <button class="btn" onclick="closeSplitModal()">${t('btn.cancel')}</button>
+    <button class="btn btn-primary" id="split-preview-btn" onclick="onSplitPreview()"${previewDisabled ? ' disabled' : ''}>${t('plot_split.preview_btn')}</button>
+  `);
+
+  const modalEl = document.getElementById('modal');
+  if (modalEl) modalEl.style.width = '820px';
+
+  ensureSplitMap('split-map', state.mode === 'cut' ? _onSplitMapClick : null);
+  drawSplitPlot(plot);
+  if (state.mode === 'cut' && state.cutLatLngs.length > 0) {
+    drawSplitCut(state.cutLatLngs);
+    _refreshSplitStep1Status();
+  }
+}
+
+function _onSplitMapClick(e) {
+  if (!_splitState || _splitState.mode !== 'cut' || _splitState.step !== 1) return;
+  _splitState.cutLatLngs.push([e.latlng.lat, e.latlng.lng]);
+  drawSplitCut(_splitState.cutLatLngs);
+  _refreshSplitStep1Status();
+}
+
+function onSplitClearCut() {
+  if (!_splitState) return;
+  _splitState.cutLatLngs = [];
+  drawSplitCut([]);
+  _refreshSplitStep1Status();
+}
+
+function _refreshSplitStep1Status() {
+  if (!_splitState) return;
+  const n = _splitState.cutLatLngs.length;
+  const countEl = document.getElementById('split-cut-vertex-count');
+  if (countEl) countEl.textContent = t('plot_split.cut_vertices', { n });
+  const clearBtn = document.getElementById('split-clear-btn');
+  if (clearBtn) clearBtn.disabled = n === 0;
+  const previewBtn = document.getElementById('split-preview-btn');
+  if (previewBtn) previewBtn.disabled = n < 2;
+}
+
+// ----- STEP 1 → 2 ------------------------------------------------------
+
+function onSplitPreview() {
+  if (!_splitState) return;
+  const plot = _splitPlot();
+  if (!plot) return;
+
+  let result;
+  if (_splitState.mode === 'cut') {
+    result = computeCutLineSplit(plot, _splitState.cutLatLngs);
+  } else {
+    result = computeComponentSplit(plot);
+  }
+  if (!result.pieces || result.pieces.length < 2) {
+    toast(t('plot_split.error_' + (result.error || 'unknown')), 'error');
+    return;
+  }
+
+  _splitState.pieces    = result.pieces;
+  _splitState.cutInside = result.cutInside || null;
+
+  const baseName = plot.name || t('plots.unnamed');
+  _splitState.names = result.pieces.map((_, i) => `${baseName} (${i + 1})`);
+
+  const proposed = proposePlotSplitValues(plot, result.pieces.map(p => p.area || 0));
+  _splitState.propertyValues = result.pieces.map((_, i) => {
+    const obj = {};
+    for (const [schemaId, values] of Object.entries(proposed)) {
+      if (values[i] !== undefined) obj[schemaId] = values[i];
+    }
+    return obj;
+  });
+
+  _splitState.step = 2;
+  _openSplitStep2();
+}
+
+// ----- STEP 2 ----------------------------------------------------------
+
+function _openSplitStep2() {
+  const state = _splitState;
+  const plot = _splitPlot();
+  if (!plot) { closeSplitModal(); return; }
+
+  const plotName = plot.name || t('plots.unnamed');
+
+  const piecesHtml = state.pieces.map((piece, i) => {
+    const color = _SPLIT_PIECE_COLORS[i % _SPLIT_PIECE_COLORS.length];
+    return `
+      <div class="split-piece-row">
+        <span class="split-piece-swatch" style="background:${color}"></span>
+        <input type="text" class="split-piece-name" value="${esc(state.names[i] || '')}" data-piece-idx="${i}" oninput="onSplitNameInput(this)">
+        <span class="split-piece-area mono">${esc(formatArea(piece.area || 0))}</span>
+      </div>
+    `;
+  }).join('');
+
+  const tableHtml = _renderSplitRedistributionTable(plot, state);
+  const sectionLabel = (text) => `<div class="split-section-label">${text}</div>`;
+
+  openModal(t('plot_split.title_preview', { name: plotName }), `
+    <div class="split-step">
+      <div id="split-map" class="split-map split-map-preview"></div>
+      ${sectionLabel(t('plot_split.pieces_label'))}
+      <div class="split-pieces-list">${piecesHtml}</div>
+      ${tableHtml ? sectionLabel(t('plot_split.redistribute_label')) + tableHtml
+        : `<div class="split-empty-redist">${t('plot_split.no_properties')}</div>`}
+    </div>
+  `, `
+    <button class="btn" style="margin-right:auto" onclick="onSplitBack()">${t('plot_split.back_btn')}</button>
+    <button class="btn" onclick="closeSplitModal()">${t('btn.cancel')}</button>
+    <button class="btn btn-primary" onclick="onSplitConfirm()">${t('plot_split.confirm_btn')}</button>
+  `);
+
+  const modalEl = document.getElementById('modal');
+  if (modalEl) modalEl.style.width = '820px';
+
+  ensureSplitMap('split-map', null);
+  drawSplitPieces(state.pieces, state.cutInside);
+}
+
+function _renderSplitRedistributionTable(plot, state) {
+  const schemas = (data.propertySchemas || []).filter(s => {
+    if (!appliesAtLevel(s, 'plot')) return false;
+    if (isVirtualPropertyId(s.id)) return false;
+    const v = getPlotPropertyValue(plot, s.id);
+    return v !== undefined && v !== null && v !== '';
+  });
+  if (schemas.length === 0) return '';
+
+  const headerCols = state.pieces.map((_, i) => {
+    const color = _SPLIT_PIECE_COLORS[i % _SPLIT_PIECE_COLORS.length];
+    return `<th style="color:${color}">${t('plot_split.piece_label', { n: i + 1 })}</th>`;
+  }).join('');
+
+  const rowsHtml = schemas.map(schema => {
+    const parentVal  = getPlotPropertyValue(plot, schema.id);
+    const parentDisp = _splitFormatParentValue(schema, parentVal);
+    const unitChip   = schema.unit ? ` <span class="split-unit-chip">${esc(schema.unit)}</span>` : '';
+    const pieceCells = state.pieces.map((_, i) => {
+      const val = state.propertyValues[i] ? state.propertyValues[i][schema.id] : undefined;
+      return `<td>${_renderSplitInputCell(schema, val, i)}</td>`;
+    }).join('');
+    return `
+      <tr>
+        <td class="split-prop-name">${esc(schema.name)}${unitChip}</td>
+        <td class="split-parent-cell mono">${esc(parentDisp)}</td>
+        ${pieceCells}
+      </tr>
+    `;
+  }).join('');
+
+  return `
+    <table class="split-redist-table">
+      <thead>
+        <tr>
+          <th>${t('plot_split.col_property')}</th>
+          <th>${t('plot_split.col_parent')}</th>
+          ${headerCols}
+        </tr>
+      </thead>
+      <tbody>${rowsHtml}</tbody>
+    </table>
+  `;
+}
+
+function _renderSplitInputCell(schema, val, pieceIdx) {
+  const base = `data-piece-idx="${pieceIdx}" data-schema-id="${esc(schema.id)}" data-kind="${schema.kind}"`;
+  if (schema.kind === 'numeric') {
+    const n = Number(val);
+    const display = Number.isFinite(n) ? formatPropertyNumber(n) : '';
+    return `<input type="number" step="any" class="split-cell-input" value="${esc(display)}" ${base} oninput="onSplitPropertyInput(this)">`;
+  }
+  if (schema.kind === 'categorical') {
+    return `<input type="text" class="split-cell-input" value="${esc(val || '')}" ${base} oninput="onSplitPropertyInput(this)">`;
+  }
+  if (schema.kind === 'percentage') {
+    const obj = (val && typeof val === 'object') ? val : { mode: 'percent', value: '' };
+    const mode = obj.mode === 'raw' ? 'raw' : 'percent';
+    const n = Number(obj.value);
+    const display = Number.isFinite(n) ? formatPropertyNumber(n) : '';
+    const denomSchema = findPropertySchema(schema.denominatorPropertyId);
+    const suffix = mode === 'percent' ? '%' : (denomSchema?.unit || '');
+    return `
+      <span class="split-cell-pct">
+        <input type="number" step="any" class="split-cell-input" value="${esc(display)}" ${base} data-mode="${mode}" oninput="onSplitPropertyInput(this)">
+        ${suffix ? `<span class="split-cell-suffix">${esc(suffix)}</span>` : ''}
+      </span>
+    `;
+  }
+  return '';
+}
+
+function _splitFormatParentValue(schema, val) {
+  if (schema.kind === 'numeric') {
+    const n = Number(val);
+    if (!Number.isFinite(n)) return '—';
+    return formatPropertyNumber(n) + (schema.unit ? ' ' + schema.unit : '');
+  }
+  if (schema.kind === 'categorical') {
+    return val ? String(val) : '—';
+  }
+  if (schema.kind === 'percentage') {
+    if (typeof val !== 'object') return '—';
+    const n = Number(val.value);
+    if (!Number.isFinite(n)) return '—';
+    if (val.mode === 'percent') return formatPropertyNumber(n) + '%';
+    const denom = findPropertySchema(schema.denominatorPropertyId);
+    return formatPropertyNumber(n) + (denom?.unit ? ' ' + denom.unit : '');
+  }
+  return '—';
+}
+
+function onSplitNameInput(inputEl) {
+  if (!_splitState) return;
+  const idx = parseInt(inputEl.dataset.pieceIdx, 10);
+  if (!Number.isFinite(idx)) return;
+  _splitState.names[idx] = inputEl.value;
+}
+
+function onSplitPropertyInput(inputEl) {
+  if (!_splitState) return;
+  const idx      = parseInt(inputEl.dataset.pieceIdx, 10);
+  const schemaId = inputEl.dataset.schemaId;
+  const kind     = inputEl.dataset.kind;
+  if (!Number.isFinite(idx) || !schemaId) return;
+  const obj = _splitState.propertyValues[idx];
+  if (!obj) return;
+  const raw = inputEl.value;
+
+  if (raw === '' || raw == null) {
+    delete obj[schemaId];
+    return;
+  }
+  if (kind === 'numeric') {
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return;
+    const schema = findPropertySchema(schemaId);
+    obj[schemaId] = schema?.autoRound ? Math.round(n) : n;
+    return;
+  }
+  if (kind === 'categorical') {
+    obj[schemaId] = String(raw);
+    return;
+  }
+  if (kind === 'percentage') {
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return;
+    const mode = inputEl.dataset.mode === 'raw' ? 'raw' : 'percent';
+    obj[schemaId] = { mode, value: n };
+    return;
+  }
+}
+
+// ----- STEP 2 → 1 (Back) / Commit -------------------------------------
+
+function onSplitBack() {
+  if (!_splitState) return;
+  _splitState.step = 1;
+  // Keep cutLatLngs intact so the user doesn't have to redraw.
+  // Pieces / names / propertyValues are discarded — recomputed on next Preview.
+  _splitState.pieces         = null;
+  _splitState.cutInside      = null;
+  _splitState.names          = [];
+  _splitState.propertyValues = [];
+  _openSplitStep1();
+}
+
+function onSplitConfirm() {
+  if (!_splitState || !_splitState.pieces) return;
+  const plot = _splitPlot();
+  if (!plot) { closeSplitModal(); return; }
+
+  const newIds = executeSplit(
+    plot,
+    _splitState.pieces,
+    _splitState.names,
+    _splitState.propertyValues
+  );
+  if (!newIds || newIds.length < 2) {
+    toast(t('plot_split.error_execute'), 'error');
+    return;
+  }
+  const n = newIds.length;
+  closeSplitModal();
+  refreshAll();
+  redrawMapPlots();
+  toast(t('plot_split.success_toast', { n }), 'success');
 }

@@ -741,6 +741,41 @@ they come up; the plan is a living document.
   `rootLevelId: 'plot'` explicitly on Population + Predominant
   language. No boundary-side rendering or aggregation yet — that's
   Brick 10b / 10c.
+- **Brick 11** ✓ (PR open on `claude/phase-4-start-ERSAM`) — manual
+  plot split editor. Two split flavours, both routed through a
+  shared two-step modal. **Cut-line** (contiguous plots): user clicks
+  a multi-vertex polyline on an inset Leaflet; the cut must enter and
+  exit the outer ring exactly twice. `js/split.js` (new) drives the
+  geometry: `turf.lineIntersect` finds the ring crossings (deduped
+  for vertex-coincident hits), `turf.nearestPointOnLine` projects
+  them onto both the ring and the cut to get distance parameters,
+  `turf.lineSliceAlong` cuts the two ring arcs + the in-polygon cut
+  segment, and each piece is reassembled by joining an arc to the cut
+  in alternating orientations. Holes ride along with whichever piece
+  contains their first vertex. **Component** (non-contiguous plots):
+  each polygon in `resolvePlotGeometry().polygons` becomes its own
+  new plot; no drawing. The modal auto-picks the mode by inspecting
+  the plot's geometry. Cut-line on a non-contiguous plot is rejected
+  with a translated toast (split into pieces first). `executeSplit`
+  reuses `storeSubdivisionGeometry` for OSM write-back, rewrites
+  boundary `members` (any boundary holding the old plot as a direct
+  member gets the new plot ids in its place), nulls `ogfRelationId`
+  on the new plots (Brick 16 re-sync re-attaches), and invokes
+  `invalidateBoundaryGeometry()` which re-anchors settlements.
+  Property redistribution proposed by `proposePlotSplitValues` in
+  `properties.js`: numeric (sum AND weighted_average) split area-
+  proportionally; categorical inherited to all pieces; percentage
+  in mode='percent' inherited verbatim (raw side re-derives via the
+  smaller effective denominator at read time), mode='raw' split
+  area-proportionally. Weighted-average gets the same area-
+  proportional treatment for v1 — Phase 7's population estimator
+  will add nuance, and densities will live as calculated properties
+  (Brick 19), so splitting raw values linearly works as the v1
+  default. Step 1 (input) and Step 2 (preview + redistribute) share
+  one modal; `← Back` preserves the cut. Map-side helpers
+  (`ensureSplitMap`, `drawSplitPlot`, `drawSplitCut`,
+  `drawSplitPieces`, `destroySplitMap`) mirror the detail-map
+  pattern. L10n under `plot_split.*`.
 
 ### Phase 3 — Properties — **complete** (2026-05-11)
 

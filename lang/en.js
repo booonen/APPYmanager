@@ -200,6 +200,7 @@ registerLanguage('en', 'English', {
     "flags": "Flags",
     "flag_subdivision_remainder": "Subdivision remainder — review recommended (merge, accept, or re-split).",
     "delete_btn": "Delete plot",
+    "split_btn": "Split…",
     "confirm_delete": "Delete plot \"{name}\"?\nThis cannot be undone.",
     "deleted_toast": "Deleted \"{name}\"",
     "properties_label": "Properties",
@@ -428,5 +429,35 @@ registerLanguage('en', 'English', {
 
   "typeahead": {
     "no_match": "No matches — press Enter to use as a new value."
+  },
+
+  "plot_split": {
+    "title": "Split plot: {name}",
+    "title_preview": "Split plot: {name} — preview",
+    "cut_hint": "Click on the map to add cut-line vertices. The cut must enter and exit the plot's boundary. Drag the map to pan, scroll to zoom.",
+    "component_hint": "This plot is non-contiguous ({n} pieces). Splitting will turn each piece into its own plot.",
+    "cut_vertices": "{n} cut vertex/vertices",
+    "clear_cut": "Clear cut",
+    "preview_btn": "Preview →",
+    "back_btn": "← Back",
+    "confirm_btn": "Confirm split",
+    "pieces_label": "New plots",
+    "redistribute_label": "Redistribute property values",
+    "no_properties": "No property values to redistribute (the parent plot has none set).",
+    "piece_label": "Piece {n}",
+    "col_property": "Property",
+    "col_parent": "Parent",
+    "success_toast": "Split into {n} new plot(s)",
+    "error_no_plot": "Plot is gone — close and try again.",
+    "error_no_geometry": "Plot has no geometry to split.",
+    "error_cut_too_short": "Add at least two cut vertices.",
+    "error_cut_does_not_cross": "The cut line must enter AND exit the plot's outer boundary.",
+    "error_cut_crosses_too_many_times": "The cut crosses the plot's boundary more than twice — keep it simple (in then out).",
+    "error_non_contiguous": "This plot is non-contiguous; split it into pieces first, then cut individual pieces.",
+    "error_contiguous": "This plot is contiguous — nothing to split into components.",
+    "error_cut_slice_failed": "Couldn't slice the geometry — try moving the cut slightly.",
+    "error_degenerate_split": "The cut grazes the boundary without dividing it. Try a cleaner crossing.",
+    "error_execute": "Split failed — no changes made.",
+    "error_unknown": "Could not compute the split."
   }
 });

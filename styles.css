@@ -859,3 +859,69 @@ summary.map-toolbar-control:hover {
   background: var(--bg-input); border: 1px solid var(--border);
   border-radius: 10px; padding: 1px 7px; flex-shrink: 0;
 }
+
+/* ============================================================
+   PLOT SPLIT MODAL (Brick 11)
+   ============================================================ */
+.split-step { display: flex; flex-direction: column; gap: 12px; }
+.split-hint {
+  font-size: 13px; color: var(--text-muted); line-height: 1.5;
+  background: var(--bg-input); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 8px 12px;
+}
+.split-map {
+  height: 380px;
+  border-radius: var(--radius); border: 1px solid var(--border); overflow: hidden;
+  cursor: crosshair;
+}
+.split-map-preview { height: 280px; cursor: default; }
+.split-status {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  font-size: 13px; color: var(--text-muted);
+}
+.split-section-label {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--text-muted); margin-top: 4px;
+}
+.split-pieces-list { display: flex; flex-direction: column; gap: 6px; }
+.split-piece-row {
+  display: flex; align-items: center; gap: 10px;
+}
+.split-piece-swatch {
+  width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0;
+  border: 1px solid rgba(0,0,0,0.4);
+}
+.split-piece-name { flex: 1; }
+.split-piece-area {
+  font-size: 13px; color: var(--text-muted); min-width: 80px; text-align: right;
+}
+.split-redist-table {
+  width: 100%; border-collapse: collapse; font-size: 13px;
+}
+.split-redist-table th, .split-redist-table td {
+  padding: 6px 8px; border-bottom: 1px solid var(--border); text-align: left;
+  vertical-align: middle;
+}
+.split-redist-table th {
+  font-weight: 500; font-size: 11px; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--text-muted);
+}
+.split-prop-name { white-space: nowrap; }
+.split-unit-chip {
+  font-size: 11px; color: var(--text-muted); margin-left: 4px;
+}
+.split-parent-cell { color: var(--text-muted); white-space: nowrap; }
+.split-cell-input {
+  width: 100%; min-width: 0; padding: 4px 8px;
+  font-family: var(--font-mono); font-size: 13px;
+}
+.split-cell-pct { position: relative; display: block; }
+.split-cell-pct .split-cell-input { padding-right: 26px; }
+.split-cell-suffix {
+  position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+  font-size: 11px; color: var(--text-muted); pointer-events: none;
+}
+.split-empty-redist {
+  font-size: 13px; color: var(--text-muted); font-style: italic;
+  padding: 8px 0;
+}

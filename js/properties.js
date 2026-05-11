@@ -277,6 +277,73 @@ function clearPlotPropertyValue(plot, schemaId) {
 }
 
 // ============================================================
+// PLOT-SPLIT REDISTRIBUTION (Brick 11)
+// ============================================================
+// Given a plot and the areas of N proposed split pieces (m²), propose
+// a stored value for each piece per schema. The split modal seeds its
+// redistribution table with this; the user can override any cell.
+//
+// Rules per kind (per CLAUDE.md, Brick 11 scope):
+//   - numeric:     area-proportional split. Applies to both `sum` and
+//                  `weighted_average` aggregations — Phase 7 (population
+//                  estimator) will add nuance; densities live as
+//                  calculated properties (Brick 19) so a raw
+//                  weighted-average value can be split linearly without
+//                  hurting downstream resolves.
+//   - categorical: every piece inherits the parent's value verbatim.
+//   - percentage:  if parent stored mode='raw' value=v, split v area-
+//                  proportionally on each piece. If parent stored
+//                  mode='percent' value=p, every piece inherits p
+//                  verbatim — the linked raw side re-derives from the
+//                  piece's (smaller) effective denominator at read time.
+//
+// Schemas the function SKIPS:
+//   - schemas not applicable at the 'plot' level (rootLevelId above
+//     'plot' in the boundary chain),
+//   - the virtual Area schema (computed from geometry, never stored),
+//   - schemas with no stored value on the parent (the pieces stay
+//     unset too; no need to write zeros).
+//
+// Returns: { [schemaId]: [valueForPiece0, valueForPiece1, ...] }
+
+function proposePlotSplitValues(plot, pieceAreasM2) {
+  const out = {};
+  if (!plot || !Array.isArray(pieceAreasM2) || pieceAreasM2.length < 2) return out;
+  const totalArea = pieceAreasM2.reduce((s, a) => s + (a > 0 ? a : 0), 0);
+  if (totalArea <= 0) return out;
+
+  for (const schema of (data.propertySchemas || [])) {
+    if (!appliesAtLevel(schema, 'plot')) continue;
+    if (isVirtualPropertyId(schema.id)) continue;
+
+    const stored = getPlotPropertyValue(plot, schema.id);
+    if (stored === undefined || stored === null || stored === '') continue;
+
+    if (schema.kind === 'numeric') {
+      const n = Number(stored);
+      if (!Number.isFinite(n)) continue;
+      out[schema.id] = pieceAreasM2.map(a => _maybeRound(n * (a / totalArea), schema));
+    } else if (schema.kind === 'categorical') {
+      const s = String(stored);
+      out[schema.id] = pieceAreasM2.map(() => s);
+    } else if (schema.kind === 'percentage') {
+      if (typeof stored !== 'object') continue;
+      const v = Number(stored.value);
+      if (!Number.isFinite(v)) continue;
+      if (stored.mode === 'raw') {
+        out[schema.id] = pieceAreasM2.map(a => ({
+          mode: 'raw',
+          value: _maybeRound(v * (a / totalArea), schema),
+        }));
+      } else if (stored.mode === 'percent') {
+        out[schema.id] = pieceAreasM2.map(() => ({ mode: 'percent', value: v }));
+      }
+    }
+  }
+  return out;
+}
+
+// ============================================================
 // BOUNDARY VALUES (Brick 10b)
 // ============================================================
 // Boundaries carry property values in the same shape as plots:

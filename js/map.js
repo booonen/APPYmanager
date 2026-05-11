@@ -291,6 +291,101 @@ function destroyDetailMap() {
 }
 
 // ============================================================
+// SPLIT MAP (inset, inside the plot-split modal — Brick 11)
+// ============================================================
+// Three layers stacked: the plot's polygon (faded baseline), the cut
+// polyline + vertex markers (drawn while the user is clicking), and
+// the proposed pieces (rendered in step 2). Each layer can be redrawn
+// independently so the plot stays visible while the cut grows.
+
+let _splitMap = null;
+let _splitPlotLayer = null;
+let _splitCutLayer = null;
+let _splitPiecesLayer = null;
+
+const _SPLIT_PIECE_COLORS = ['#c1272d', '#0d8a8a', '#b58300', '#5a4ea3', '#3f7e3f', '#8a4c8a'];
+
+function ensureSplitMap(containerId, onMapClick) {
+  const el = document.getElementById(containerId);
+  if (!el) return null;
+  if (_splitMap) {
+    if (_splitMap._appyContainer === el) return _splitMap;
+    destroySplitMap();
+  }
+  _splitMap = L.map(el, {
+    center: [0, 0], zoom: 1, minZoom: 1, maxZoom: 19,
+    zoomControl: true, attributionControl: false,
+    // Disable Leaflet's default double-click-to-zoom so a fast double
+    // click doesn't yank the user mid-cut.
+    doubleClickZoom: false,
+  });
+  _splitMap._appyContainer = el;
+  L.tileLayer(OGF_TILE_URL, { maxZoom: 19 }).addTo(_splitMap);
+  _splitPlotLayer   = L.featureGroup().addTo(_splitMap);
+  _splitCutLayer    = L.featureGroup().addTo(_splitMap);
+  _splitPiecesLayer = L.featureGroup().addTo(_splitMap);
+  if (typeof onMapClick === 'function') _splitMap.on('click', onMapClick);
+  setTimeout(() => _splitMap && _splitMap.invalidateSize(), 50);
+  return _splitMap;
+}
+
+function drawSplitPlot(plot) {
+  if (!_splitMap || !_splitPlotLayer) return;
+  _splitPlotLayer.clearLayers();
+  const geo = resolvePlotGeometry(plot);
+  if (!geo.polygons.length) return;
+  const poly = L.polygon(geo.polygons, plotPolygonStyle(false));
+  _splitPlotLayer.addLayer(poly);
+  _splitMap.fitBounds(poly.getBounds(), { padding: [12, 12] });
+}
+
+function drawSplitCut(latLngs) {
+  if (!_splitMap || !_splitCutLayer) return;
+  _splitCutLayer.clearLayers();
+  if (!Array.isArray(latLngs) || latLngs.length === 0) return;
+  if (latLngs.length >= 2) {
+    const line = L.polyline(latLngs, { color: '#c1272d', weight: 2.5, dashArray: '5,4' });
+    _splitCutLayer.addLayer(line);
+  }
+  for (const ll of latLngs) {
+    const m = L.circleMarker(ll, {
+      radius: 4, color: '#c1272d', weight: 2, fillColor: '#c1272d', fillOpacity: 1
+    });
+    _splitCutLayer.addLayer(m);
+  }
+}
+
+function drawSplitPieces(pieces, cutInsideLatLngs) {
+  if (!_splitMap || !_splitPiecesLayer) return;
+  _splitPiecesLayer.clearLayers();
+  _splitPlotLayer && _splitPlotLayer.clearLayers();
+  _splitCutLayer  && _splitCutLayer.clearLayers();
+  const all = L.latLngBounds([]);
+  pieces.forEach((piece, i) => {
+    const color = _SPLIT_PIECE_COLORS[i % _SPLIT_PIECE_COLORS.length];
+    const polyLatLngs = [piece.outer, ...(piece.holes || [])];
+    const poly = L.polygon(polyLatLngs, {
+      color, weight: 2, fillColor: color, fillOpacity: 0.30,
+    });
+    _splitPiecesLayer.addLayer(poly);
+    all.extend(poly.getBounds());
+  });
+  // Cut line, if known (cut mode only), drawn on top so the seam is visible.
+  if (Array.isArray(cutInsideLatLngs) && cutInsideLatLngs.length >= 2) {
+    const seam = L.polyline(cutInsideLatLngs, { color: '#0f1117', weight: 1, dashArray: '3,3' });
+    _splitPiecesLayer.addLayer(seam);
+  }
+  if (all.isValid()) _splitMap.fitBounds(all, { padding: [12, 12] });
+}
+
+function destroySplitMap() {
+  if (_splitPlotLayer)   { _splitPlotLayer.clearLayers();   _splitPlotLayer = null; }
+  if (_splitCutLayer)    { _splitCutLayer.clearLayers();    _splitCutLayer = null; }
+  if (_splitPiecesLayer) { _splitPiecesLayer.clearLayers(); _splitPiecesLayer = null; }
+  if (_splitMap) { _splitMap.remove(); _splitMap = null; }
+}
+
+// ============================================================
 // HIERARCHICAL MAP RENDERING (Brick 6c)
 // ============================================================
 // Two view modes:
