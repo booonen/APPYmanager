@@ -793,6 +793,35 @@ they come up; the plan is a living document.
   `_splitMapBoundsSet` flag so `fitBounds` runs once per overlay
   open. `interactive: false` on the pieces polygons routes clicks
   through to the cut polyline / map.
+  **v0.7.3 follow-up:** crash fix (Leaflet's `dragend` event has no
+  `latlng`; `_onSplitVertexDragEnd` now reads `e.target.getLatLng()`,
+  same for `_onSplitVertexDrag` — the v0.7.2 throw was leaving
+  `_splitDraggingVertex` set, which silently froze the vertex layer
+  so subsequent appends rendered nothing); ghost midpoint markers
+  (`.split-vertex-ghost`) — clickable to insert at midpoint; property
+  overrides split out into a second "override" phase with per-piece
+  cards (vertical layout, full-width inputs) — primary header button
+  now reads "Continue →" in cut phase and "Confirm split" in override
+  phase, dispatched via `onSplitPrimaryAction()`; `← Back to cut`
+  link in the override panel preserves `manualOverrides` across the
+  round-trip. `_renderSplitProposedTable` replaces the editable redist
+  table in cut phase with a compact read-only preview.
+  **v0.7.4 polish:** ghosts are now `draggable: true` (drag inserts at
+  dragstart and trails the cursor until release; plain click still
+  inserts at midpoint; Leaflet's drag threshold disambiguates).
+  Real-vertex and ghost markers moved to separate Leaflet layers
+  (`_splitVertexLayer` + `_splitGhostLayer`) so `_refreshSplitMap`
+  can freeze whichever layer is being grabbed and redraw the other —
+  ghost midpoints now follow real-vertex drags live. New
+  `_splitHoverLayer` + `mousemove`/`mouseout` wiring shows a dashed
+  preview line from the cut's nearest endpoint to the cursor; the
+  empty-map-click handler also extends from the nearest endpoint
+  (`unshift` vs `push` based on `_pointDistance`), so the preview
+  matches the click outcome.
+  **Deferred to Brick 11b** (multi-cut + piece grouping + cut on
+  non-contiguous plots): the v0.7.4 hover-preview line is a touch
+  visually noisy; will likely be tamed when 11b reworks the cut model
+  anyway. Filed there with the other multi-cut items.
 
 ### Phase 3 — Properties — **complete** (2026-05-11)
 
