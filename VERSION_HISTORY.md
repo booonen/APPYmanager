@@ -1,3 +1,43 @@
+## 0.8.2 — Brick 12a fixes: robust sea-side detection + longer Overpass timeout
+
+v0.8.1 fixed the direction-sign bug but the user's second dataset
+still came back with "everything except closed coastline rings is
+water." Root cause: the single right-side test point only works when
+the source data follows OSM convention (land on left). Some OGF
+mappers draw coastlines with water-on-left; for those, the
+"right-side" probe lands on the LAND side and the closure check picks
+the land closure as "sea". The result: SEA = entire bbox minus the
+small CCW-island patches.
+
+### Multi-point voting + plot-centroid robustness anchor
+
+`_closeClippedSegmentAsSea` now scores each candidate closure rather
+than picking the first to contain a single test point:
+
+1. **Multi-point vote (primary):** 5 right-side probe points along
+   the chain (instead of 1 at the midpoint). Each adds +1 to the
+   closure containing it. Reduces sensitivity to one-vertex
+   weirdness at the midpoint.
+2. **Plot-centroid penalty (anchor):** plots are almost always on
+   land, so if a closure contains ≥ 70% of the project's plot
+   centroids, it's almost certainly the LAND closure — heavy penalty
+   (-100 score). Recovers from non-canonical coastline direction in
+   the source data without the user needing to flip a setting.
+
+Probe step bumped from 0.5% to 1% of the bbox diagonal so the test
+points stay well clear of the chain itself.
+
+Limitation: if a project has zero plots, the plot-centroid anchor
+contributes nothing and we fall back to chain-direction alone. New
+projects fetching coastlines before importing plots will still be
+vulnerable to reversed-direction OGF data.
+
+### Longer Overpass timeout
+
+`[timeout:60]` → `[timeout:120]`. v0.8.1 was timing out for the
+user's bbox. Two minutes is still well under typical browser
+fetch limits and matches what coastline-heavy queries actually need.
+
 ## 0.8.1 — Brick 12a fixes: sea-side direction sign, multi-segment chains, non-blocking fetch
 
 Three correctness + UX bugs surfaced by the first real-world test:

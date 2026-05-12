@@ -131,8 +131,10 @@ function _landwaterProjectBbox() {
 
 function _buildLandWaterQuery(bbox) {
   const [s, w, n, e] = bbox; // [minLat, minLng, maxLat, maxLng]
-  // Overpass bbox is (south, west, north, east).
-  return `[out:json][timeout:60][bbox:${s},${w},${n},${e}];
+  // Overpass bbox is (south, west, north, east). Generous timeout
+  // because coastline + water for a typical country bbox can pull
+  // tens of thousands of vertices and the server is often slow.
+  return `[out:json][timeout:120][bbox:${s},${w},${n},${e}];
 (
   way["natural"="coastline"];
   way["natural"="water"];
@@ -177,6 +179,13 @@ function _parseLandWaterResponse(json) {
 async function _buildSeaGeometry(coastlineWays, nodes, bbox) {
   if (!Array.isArray(coastlineWays) || coastlineWays.length === 0) return null;
   const chains = _stitchCoastlineChains(coastlineWays, nodes);
+  // Plot centroids are used as a robustness anchor: plots are almost
+  // always on LAND, so the SEA closure should contain few of them. If
+  // chain direction in the source data is non-canonical (some OGF
+  // mappers draw coastlines with water-on-left), the right-side test
+  // point alone picks the wrong closure; the plot-avoidance penalty
+  // recovers from that.
+  const plotCentroids = _computePlotCentroids();
   const seaPolys = [];
   const islandPolys = [];
 
@@ -193,13 +202,9 @@ async function _buildSeaGeometry(coastlineWays, nodes, bbox) {
       if (sa > 0) islandPolys.push(poly);
       else        seaPolys.push(poly);
     } else {
-      // Open chain → one OR MORE inside subchains. A chain that dips
-      // in and out of the bbox multiple times produces multiple
-      // subchains, each entry/exit pair its own sea polygon. v0.8.0
-      // kept only the longest subchain — fixed in v0.8.1.
       const segs = _clipChainToBboxAll(chain.coords, bbox);
       for (const seg of segs) {
-        const closed = _closeClippedSegmentAsSea(seg, bbox);
+        const closed = _closeClippedSegmentAsSea(seg, bbox, plotCentroids);
         if (closed) seaPolys.push(closed);
       }
     }
@@ -216,6 +221,28 @@ async function _buildSeaGeometry(coastlineWays, nodes, bbox) {
     }
   }
   return sea;
+}
+
+// Approximate centroid (vertex-average) for each plot. Cheap; used only
+// as a robustness hint for sea-side detection.
+function _computePlotCentroids() {
+  const out = [];
+  for (const plot of (data.plots || [])) {
+    if (typeof resolvePlotGeometry !== 'function') break;
+    let geo;
+    try { geo = resolvePlotGeometry(plot); } catch (e) { continue; }
+    if (!geo || !geo.polygons || geo.polygons.length === 0) continue;
+    let latSum = 0, lngSum = 0, count = 0;
+    for (const poly of geo.polygons) {
+      const outerRing = poly[0];
+      if (!Array.isArray(outerRing)) continue;
+      for (const [lat, lng] of outerRing) {
+        latSum += lat; lngSum += lng; count++;
+      }
+    }
+    if (count > 0) out.push([latSum / count, lngSum / count]);
+  }
+  return out;
 }
 
 function _stitchCoastlineChains(ways, nodes) {
@@ -283,31 +310,62 @@ function _signedAreaLngLat(ringLngLat) {
   return area / 2;
 }
 
-// Closes a single inside-the-bbox subchain into a sea polygon. The
-// subchain must have both endpoints lying on a bbox edge — i.e. it
-// represents one entry/exit pair through the bbox boundary. Returns
-// a turf Feature<Polygon> or null.
-function _closeClippedSegmentAsSea(segCoords, bbox) {
+// Closes a single inside-the-bbox subchain into a sea polygon. Both
+// endpoints must lie on a bbox edge.
+//
+// Picks between the CW and CCW bbox-walk closures via a SCORE:
+//   • Primary: 5 right-side test points along the chain. Each is a small
+//     perpendicular step "right" of the chain — the SEA side per OSM
+//     convention. The closure containing more test points scores higher.
+//   • Robustness anchor: if a closure contains a strong majority (≥ 70%)
+//     of plot centroids, it's almost certainly the LAND closure (plots
+//     are almost always on land), and we apply a heavy penalty. This
+//     recovers from non-canonical OGF coastlines (water on left), where
+//     the right-side test point would otherwise pick the wrong closure.
+//
+// Returns turf Feature<Polygon> or null.
+function _closeClippedSegmentAsSea(segCoords, bbox, plotCentroids) {
   if (!segCoords || segCoords.length < 2) return null;
   if (!_onBboxEdge(segCoords[0], bbox) || !_onBboxEdge(segCoords[segCoords.length - 1], bbox)) {
     return null;
   }
-  const testPt = _rightSideTestPoint(segCoords, bbox);
-  if (!testPt) return null;
+  const testPts = _rightSideTestPoints(segCoords, bbox, 5);
+  if (testPts.length === 0) return null;
 
-  for (const dir of [+1, -1]) { // try CW first, then CCW
+  const closures = [];
+  for (const dir of [+1, -1]) {
     const closure = _closeChainAlongBbox(segCoords, bbox, dir);
     if (!closure || closure.length < 4) continue;
     const ringLngLat = _toLngLatRing(closure);
     if (!ringLngLat) continue;
-    let poly;
-    try { poly = turf.polygon([ringLngLat]); } catch (e) { continue; }
-    const pt = turf.point([testPt[1], testPt[0]]);
-    try {
-      if (turf.booleanPointInPolygon(pt, poly)) return poly;
-    } catch (e) { /* fall through */ }
+    try { closures.push(turf.polygon([ringLngLat])); } catch (e) { /* skip degenerate */ }
   }
-  return null;
+  if (closures.length === 0) return null;
+
+  let bestPoly = null;
+  let bestScore = -Infinity;
+  for (const poly of closures) {
+    let score = 0;
+    // Right-side test point votes.
+    for (const tp of testPts) {
+      try {
+        if (turf.booleanPointInPolygon(turf.point([tp[1], tp[0]]), poly)) score += 1;
+      } catch (e) { /* skip */ }
+    }
+    // Plot-centroid penalty.
+    if (plotCentroids && plotCentroids.length > 0) {
+      let plotsInside = 0;
+      for (const [lat, lng] of plotCentroids) {
+        try {
+          if (turf.booleanPointInPolygon(turf.point([lng, lat]), poly)) plotsInside++;
+        } catch (e) { /* skip */ }
+      }
+      const fraction = plotsInside / plotCentroids.length;
+      if (fraction >= 0.7) score -= 100; // heavy penalty: this closure is LAND
+    }
+    if (score > bestScore) { bestScore = score; bestPoly = poly; }
+  }
+  return bestPoly;
 }
 
 // Returns ALL inside-the-bbox subchains, not just the longest. A
@@ -383,27 +441,33 @@ function _onBboxEdge([lat, lng], bbox, tol = 1e-7) {
   );
 }
 
-function _rightSideTestPoint(coordsLatLng, bbox) {
-  // Tiny step perpendicular-right of the chain's mid-segment.
-  if (coordsLatLng.length < 2) return null;
-  const mid = Math.floor((coordsLatLng.length - 1) / 2);
-  const a = coordsLatLng[mid];
-  const b = coordsLatLng[mid + 1] || coordsLatLng[mid - 1];
-  if (!a || !b) return null;
-  const dlat = b[0] - a[0], dlng = b[1] - a[1];
-  const len = Math.hypot(dlat, dlng);
-  if (len < 1e-15) return null;
-  // Rotate direction (dlat, dlng) by -90° in the (lng,lat) plane → right
-  // direction = (-dlng, +dlat). v0.8.0 had this with reversed signs,
-  // which put the test point on the LAND side; the closure check then
-  // selected the polygon containing land, and "sea" came back as the
-  // entire bbox minus the small land patch. Reported in user testing.
-  const rlat = -dlng / len, rlng = dlat / len;
+// Returns N small "right side" perpendicular-step probe points sampled
+// along the chain. Each is a small step to the right of a local chain
+// segment, which under canonical OSM convention is the SEA side. We
+// use this AND a plot-centroid sanity check to score candidate
+// closures — v0.8.2 robustness fix vs. v0.8.1's single-point logic.
+function _rightSideTestPoints(coordsLatLng, bbox, n) {
+  if (!coordsLatLng || coordsLatLng.length < 2) return [];
+  const out = [];
   const [minLat, minLng, maxLat, maxLng] = bbox;
-  const stepDeg = Math.max(maxLat - minLat, maxLng - minLng) * 0.005;
-  const mlat = (a[0] + b[0]) / 2;
-  const mlng = (a[1] + b[1]) / 2;
-  return [mlat + rlat * stepDeg, mlng + rlng * stepDeg];
+  const stepDeg = Math.max(maxLat - minLat, maxLng - minLng) * 0.01;
+  for (let i = 1; i <= n; i++) {
+    const frac = i / (n + 1);
+    const idx = Math.min(coordsLatLng.length - 2, Math.floor(frac * (coordsLatLng.length - 1)));
+    const a = coordsLatLng[idx];
+    const b = coordsLatLng[idx + 1];
+    if (!a || !b) continue;
+    const dlat = b[0] - a[0], dlng = b[1] - a[1];
+    const len = Math.hypot(dlat, dlng);
+    if (len < 1e-15) continue;
+    // Right of (dlat, dlng) = (-dlng, +dlat) — rotation -90° in the
+    // (lng, lat) plane.
+    const rlat = -dlng / len, rlng = dlat / len;
+    const mlat = (a[0] + b[0]) / 2;
+    const mlng = (a[1] + b[1]) / 2;
+    out.push([mlat + rlat * stepDeg, mlng + rlng * stepDeg]);
+  }
+  return out;
 }
 
 function _closeChainAlongBbox(chainCoords, bbox, dir) {
