@@ -733,15 +733,67 @@ function _drawPlotPoly(plot) {
   const geo = resolvePlotGeometry(plot);
   if (!geo.polygons.length) return;
   const isSelected = _selectedItemKind === 'plot' && _selectedItemId === plot.id;
-  const poly = L.polygon(geo.polygons, plotPolygonStyle(isSelected));
-  poly._appyPlotId = plot.id;
-  if (plot.name) poly.bindTooltip(plot.name);
-  poly.on('click', (e) => {
+
+  // Brick 12b: when the project's land/water split is enabled AND a
+  // water cache exists AND this plot intersects water, render the
+  // plot split into a clickable LAND polygon plus a non-interactive
+  // WATER overlay. `waterDisposition === 'removed'` further clips the
+  // plot's rendered shape to land only — clicking water no longer
+  // selects the plot (the water is conceptually outside the plot's
+  // effective extent).
+  let renderedAsSplit = false;
+  let mainPoly = null;
+  if (getSetting('landWaterSplitEnabled', false)
+      && data.waterCache && data.waterCache.waterGeometry
+      && typeof getPlotLandWater === 'function') {
+    const lw = getPlotLandWater(plot);
+    if (lw && lw.water) {
+      const disposition = plot.waterDisposition || 'split';
+      if (disposition === 'removed' && lw.land) {
+        // Land-only render: clipped polygon IS the plot on the map.
+        const landPolys = landWaterFeatureToLeafletPolygons(lw.land);
+        if (landPolys.length > 0) {
+          mainPoly = L.polygon(landPolys, plotPolygonStyle(isSelected));
+          renderedAsSplit = true;
+        }
+      } else if (disposition === 'split') {
+        // Default split: full plot polygon stays as the clickable main
+        // shape; water overlay sits on top, non-interactive.
+        mainPoly = L.polygon(geo.polygons, plotPolygonStyle(isSelected));
+        renderedAsSplit = true;
+      }
+    }
+  }
+
+  if (!mainPoly) {
+    mainPoly = L.polygon(geo.polygons, plotPolygonStyle(isSelected));
+  }
+  mainPoly._appyPlotId = plot.id;
+  if (plot.name) mainPoly.bindTooltip(plot.name);
+  mainPoly.on('click', (e) => {
     L.DomEvent.stopPropagation(e);
     _selectItem('plot', plot.id);
   });
-  _mapPlotLayer.addLayer(poly);
-  _polyIndex.set('plot:' + plot.id, poly);
+  _mapPlotLayer.addLayer(mainPoly);
+  _polyIndex.set('plot:' + plot.id, mainPoly);
+
+  // Water overlay (only in 'split' disposition).
+  if (renderedAsSplit
+      && (plot.waterDisposition || 'split') === 'split'
+      && typeof getPlotLandWater === 'function') {
+    const lw = getPlotLandWater(plot);
+    if (lw && lw.water) {
+      const waterPolys = landWaterFeatureToLeafletPolygons(lw.water);
+      for (const coords of waterPolys) {
+        const overlay = L.polygon(coords, {
+          color: '#3b82c6', weight: 1, opacity: 0.7,
+          fillColor: '#3b82c6', fillOpacity: 0.55,
+          interactive: false,
+        });
+        _mapPlotLayer.addLayer(overlay);
+      }
+    }
+  }
 }
 
 function _drawBoundaryPoly(b, color) {

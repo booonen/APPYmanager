@@ -1,3 +1,59 @@
+## 0.8.3 — Brick 12b: per-plot land/water intersection + map render
+
+The cached water geometry (12a) now hits the plots. When the project
+split is on, every plot is intersected against `data.waterCache` and
+rendered as land + water portions on the main map. The intersection
+is memoised in-memory keyed by plot id; persisted storage is 12c's
+problem.
+
+### `js/landwater.js` additions
+
+- `_computePlotLandWater(plot)` — converts the plot's polygons to
+  turf `[lng,lat]`, intersects with the cached water MultiPolygon,
+  returns `{ land, water }` Features. Either side can be null when
+  the plot is fully on land (water = null) or fully in water (land
+  = null).
+- `getPlotLandWater(plot)` — memoised accessor.
+- `invalidatePlotLandWater(plotId)` / `invalidateAllPlotLandWater()`
+  — bust the cache. Wired from:
+  - successful `fetchAndCacheWater` → invalidate all.
+  - plot delete → invalidate that id.
+  - plot split (`executeSplit`) → invalidate all.
+  - boundary-import subdivision → invalidate all.
+- `landWaterFeatureToLeafletPolygons(feature)` — turf feature →
+  Leaflet `[lat,lng]` polygon coords.
+
+### Map rendering (`_drawPlotPoly`)
+
+When the project split is enabled AND a water cache exists AND the
+plot has a water portion:
+- Default (`waterDisposition === 'split'`): the full plot polygon
+  stays as the clickable main shape (selection, tooltip), with a
+  blue water overlay (`interactive: false`) drawn on top of it.
+- `waterDisposition === 'removed'`: the plot's rendered polygon is
+  CLIPPED to the land portion only — clicking water no longer
+  selects the plot, because conceptually the water isn't part of
+  this plot anymore.
+
+Plots fully on land render normally regardless of the toggle.
+
+### Per-plot `waterDisposition` field
+
+New plot field, default `'split'`. Persisted alongside other plot
+data. A small `<select>` in the plot detail modal (only shown when
+the project split is enabled AND the plot has water) flips between
+`'split'` and `'removed'`. Plot-detail blob redraws the main map
+immediately on change.
+
+### Out of scope for 12b (still 12c / 12d)
+
+- Property values per portion.
+- Boundary aggregation considering portions.
+- `plotArea` honouring `waterDisposition === 'removed'`.
+- Persisting the per-plot intersection cache (so it survives a
+  reload without recomputation). For now the cache rebuilds on
+  first redraw after load.
+
 ## 0.8.2 — Brick 12a fixes: robust sea-side detection + longer Overpass timeout
 
 v0.8.1 fixed the direction-sign bug but the user's second dataset

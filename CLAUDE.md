@@ -852,6 +852,24 @@ they come up; the plan is a living document.
       v1 limitations filed: open chains entirely inside the bbox
       are skipped; reverse-attaching ways during stitching is
       avoided to preserve land-on-left.
+- **Brick 12b** ✓ (committed) — per-plot land/water intersection +
+  map render. `js/landwater.js` grew `_computePlotLandWater(plot)`
+  which intersects the plot polygon with `data.waterCache.waterGeometry`
+  via `turf.intersect` / `turf.difference` and returns
+  `{ land, water }` Features. In-memory cache (`_landWaterByPlot`)
+  keyed by plot id; invalidated on water-cache refresh, plot delete,
+  plot split (`executeSplit`), and boundary-import subdivision.
+  `_drawPlotPoly` in map.js is now split-aware: when the project
+  split is enabled AND a water cache exists AND the plot has water,
+  `waterDisposition === 'split'` (default) draws the full plot
+  polygon plus a non-interactive blue water overlay; `'removed'`
+  clips the rendered polygon to land only (clicks on the water
+  region no longer select the plot — conceptually the water is
+  outside the plot's effective extent). Per-plot `waterDisposition`
+  field surfaced in the plot detail modal as a small `<select>`,
+  only when the split is enabled and the plot actually intersects
+  water. Persisted-cache + plotArea + property-side changes
+  deferred to 12c / 12d.
 
 ### Phase 3 — Properties — **complete** (2026-05-11)
 

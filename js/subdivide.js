@@ -418,6 +418,7 @@ function executeSubdivisionPlan(plan, nodes, ways, target) {
       b.members = newMembers;
     }
     data.plots = data.plots.filter(p => !toRemove.has(p.id));
+    if (typeof invalidateAllPlotLandWater === 'function') invalidateAllPlotLandWater();
   }
 
   // 5. Wrap each candidate as a boundary if the user chose that target.

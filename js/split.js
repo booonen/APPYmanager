@@ -335,6 +335,7 @@ function executeSplit(plot, pieces, names, propertyValuesPerPiece, notesPerPiece
   // against the new pieces.
   data.plots = data.plots.filter(p => p.id !== plot.id);
   invalidateBoundaryGeometry();
+  if (typeof invalidateAllPlotLandWater === 'function') invalidateAllPlotLandWater();
   save();
 
   return newPlotIds;

@@ -100,12 +100,13 @@ async function fetchAndCacheWater() {
       waterGeometry: merged.geometry,
       bodyCount:     merged.bodyCount,
     };
+    invalidateAllPlotLandWater(); // 12b: cached per-plot intersections are stale now
     save();
 
     toast(t('landwater.toast_fetched', { n: merged.bodyCount }), 'success');
-    if (typeof redrawMap === 'function' && getSetting('showWaterDebugOverlay', false)) {
-      redrawMap();
-    }
+    // Always redraw — both the debug overlay (12a) and the per-plot
+    // land/water rendering (12b) read from the updated cache.
+    if (typeof redrawMap === 'function') redrawMap();
   } finally {
     _landwaterFetchInFlight = false;
     if (typeof renderSettings === 'function') renderSettings();
@@ -727,4 +728,96 @@ function getWaterCacheSummary() {
     bbox:      c.bbox,
     bodyCount: c.bodyCount || 0,
   };
+}
+
+// ============================================================
+// PER-PLOT LAND/WATER INTERSECTION (Brick 12b)
+// ============================================================
+// For every plot, compute `{ land, water }` GeoJSON Features by
+// intersecting the plot polygon against `data.waterCache.waterGeometry`.
+// Results are memoised in-memory (not persisted in 12b — derived data
+// can always be regenerated from the plot polygon + water cache).
+//
+// Invalidation:
+//   • fetchAndCacheWater() success    → clear all entries.
+//   • plot geometry change (split,    → invalidatePlotLandWater(plotId).
+//     import, edit, delete)
+//   • split toggled off               → keep the cache (cheap to retain;
+//     toggling back on doesn't reload from scratch).
+
+const _landWaterByPlot = new Map(); // plotId → { land, water }
+
+function invalidateAllPlotLandWater() { _landWaterByPlot.clear(); }
+function invalidatePlotLandWater(plotId) { _landWaterByPlot.delete(plotId); }
+
+function getPlotLandWater(plot) {
+  if (!plot) return null;
+  if (_landWaterByPlot.has(plot.id)) return _landWaterByPlot.get(plot.id);
+  const result = _computePlotLandWater(plot);
+  _landWaterByPlot.set(plot.id, result);
+  return result;
+}
+
+function _computePlotLandWater(plot) {
+  if (!data.waterCache || !data.waterCache.waterGeometry) return null;
+  const waterGeom = data.waterCache.waterGeometry;
+
+  if (typeof resolvePlotGeometry !== 'function') return null;
+  let geo;
+  try { geo = resolvePlotGeometry(plot); } catch (e) { return null; }
+  if (!geo || !geo.polygons || geo.polygons.length === 0) return null;
+
+  // Convert plot [lat,lng] → turf [lng,lat]. Force ring closure.
+  const polysLngLat = [];
+  for (const poly of geo.polygons) {
+    if (!poly[0] || poly[0].length < 3) continue;
+    const rings = poly.map(ring => {
+      const out = ring.map(([lat, lng]) => [lng, lat]);
+      if (out.length >= 2 && (out[0][0] !== out[out.length - 1][0] ||
+                              out[0][1] !== out[out.length - 1][1])) {
+        out.push([out[0][0], out[0][1]]);
+      }
+      return out;
+    });
+    polysLngLat.push(rings);
+  }
+  if (polysLngLat.length === 0) return null;
+
+  let plotTurf;
+  try {
+    if (polysLngLat.length === 1) plotTurf = turf.polygon(polysLngLat[0]);
+    else                          plotTurf = turf.multiPolygon(polysLngLat);
+  } catch (e) { return null; }
+
+  let water = null;
+  try { water = turf.intersect(plotTurf, waterGeom); } catch (e) { water = null; }
+
+  // Fully on land if the intersection is empty.
+  if (!water) return { land: plotTurf, water: null };
+
+  let land;
+  try {
+    land = turf.difference(plotTurf, water);
+    // If the plot is entirely under water, turf.difference returns null.
+    if (!land) land = null;
+  } catch (e) { land = null; }
+
+  return { land, water };
+}
+
+// Converts a turf Feature (Polygon | MultiPolygon) back to an array of
+// Leaflet polygon coords ([[outer, ...holes], ...]) in [lat,lng] order.
+function landWaterFeatureToLeafletPolygons(feature) {
+  if (!feature || !feature.geometry) return [];
+  const g = feature.geometry;
+  const out = [];
+  const lngLatToLatLng = (ring) => ring.map(([lng, lat]) => [lat, lng]);
+  if (g.type === 'Polygon') {
+    out.push(g.coordinates.map(lngLatToLatLng));
+  } else if (g.type === 'MultiPolygon') {
+    for (const coords of g.coordinates) {
+      out.push(coords.map(lngLatToLatLng));
+    }
+  }
+  return out;
 }

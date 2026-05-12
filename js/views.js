@@ -1690,6 +1690,9 @@ function onLandWaterEnabledChange(checked) {
     fetchAndCacheWater();
   } else {
     renderSettings();
+    // Brick 12b: toggling the project-wide split flips every plot's
+    // rendering between single-polygon and land+water-split.
+    if (typeof redrawMap === 'function') redrawMap();
   }
 }
 
@@ -2177,6 +2180,7 @@ function openPlotDetail(plotId) {
       <div class="plot-detail-section-label">${t('plot_detail.properties_label')}</div>
       <div id="plot-detail-properties">${_renderPlotPropertyRows(plot)}</div>
     </div>
+    ${_renderPlotWaterDispositionBlock(plot)}
     <div class="plot-detail-meta">
       <div>
         <div class="plot-detail-meta-label">${t('plot_detail.ogf_id')}</div>
@@ -2235,6 +2239,7 @@ function onPlotDetailDelete() {
     if (idx < 0) return;
     data.plots.splice(idx, 1);
     invalidateBoundaryGeometry();
+    if (typeof invalidatePlotLandWater === 'function') invalidatePlotLandWater(_detailPlotId);
     save();
     closePlotDetail();
     refreshAll();
@@ -2267,6 +2272,44 @@ function closePlotDetail() {
 // Auto-save fires on blur (numeric / categorical) or on each keystroke
 // (percentage — so the linked field can update live).  Empty inputs
 // delete the value entirely.
+
+// Brick 12b: per-plot "land or water" disposition control. Only renders
+// when the project-wide split is enabled AND the plot actually
+// intersects water. `'split'` keeps both portions (default); `'removed'`
+// clips the plot's rendered shape to land only (water vanishes from
+// the plot's effective extent — see _drawPlotPoly in map.js).
+function _renderPlotWaterDispositionBlock(plot) {
+  if (!getSetting('landWaterSplitEnabled', false)) return '';
+  if (!data.waterCache || !data.waterCache.waterGeometry) return '';
+  if (typeof getPlotLandWater !== 'function') return '';
+  const lw = getPlotLandWater(plot);
+  if (!lw || !lw.water) return '';
+  const cur = plot.waterDisposition || 'split';
+  return `
+    <div class="plot-detail-properties-section">
+      <div class="plot-detail-section-label">${t('plot_detail.landwater_label')}</div>
+      <div class="form-group">
+        <select onchange="onPlotWaterDispositionChange(this.value)">
+          <option value="split"   ${cur === 'split'   ? 'selected' : ''}>${t('plot_detail.landwater_split')}</option>
+          <option value="removed" ${cur === 'removed' ? 'selected' : ''}>${t('plot_detail.landwater_removed')}</option>
+        </select>
+      </div>
+    </div>
+  `;
+}
+
+function onPlotWaterDispositionChange(val) {
+  if (!_detailPlotId) return;
+  const plot = data.plots.find(p => p.id === _detailPlotId);
+  if (!plot) return;
+  const next = (val === 'removed') ? 'removed' : 'split';
+  if ((plot.waterDisposition || 'split') === next) return;
+  plot.waterDisposition = next;
+  save();
+  // Visualization changes immediately; the cached intersection is
+  // unchanged (disposition only affects HOW we render, not the geometry).
+  if (typeof redrawMap === 'function') redrawMap();
+}
 
 function _renderPlotPropertyRows(plot) {
   // Plot inspector shows schemas where `appliesAtLevel(s, 'plot')` is
