@@ -1,3 +1,70 @@
+## 0.8.0 — Brick 12a: coastline + inland-water ingest
+
+First step toward the project-wide land/water split. **No** plot UI
+or property changes yet — those land in 12c+12d. This brick lays the
+geometry pipeline + settings UI + a debug overlay so the result can
+be visually verified before plot-level work begins.
+
+### New module: `js/landwater.js`
+
+`fetchAndCacheWater()` is the public entry point. Pipeline:
+
+1. **Project bbox** — union of every plot's `plotBounds`, padded 10%.
+   No plots = "no plots" toast, abort.
+2. **Overpass query** scoped to that bbox for
+   `way["natural"="coastline"]`, `way["natural"="water"]`, and
+   `relation["natural"="water"]`. Standard `(._;>;);out body;` close
+   pulls every referenced node.
+3. **Sea geometry from coastlines.** Stitch ways sharing endpoint
+   nodes into chains preserving node-order direction (land-on-left).
+   - **Closed chains**: orientation test (signed area in lng/lat).
+     CCW → island (land inside; subtracted from sea later).
+     CW → inland sea (sea inside; added to sea).
+   - **Open chains**: clip to bbox, then build sea polygon via a
+     bbox-edge walk on the chain's right side. We construct both
+     candidate closures (CW / CCW around the bbox from chain end to
+     chain start) and pick whichever contains a small right-side
+     test point at the chain's midpoint.
+4. **Inland water from `natural=water`.** Self-closed ways become
+   simple polygons. `type=multipolygon` relations get outer + inner
+   ring assembly via `groupWaysIntoRings`, with inner rings assigned
+   to the outer they sit inside.
+5. **Merge + threshold.** Union sea + inland → split into connected
+   components → drop any below `data.settings.minWaterBodyAreaM2`
+   (default 1 hectare). The contiguous-merge happens BEFORE the
+   threshold, so a tiny puddle abutting a big lake stays (they merged
+   first) but two tiny abutting puddles both go (their merged area
+   still doesn't clear the bar). Matches the user-requested rule.
+6. **Persist.** `data.waterCache = { fetchedAt, bbox, waterGeometry,
+   bodyCount }`. Cache survives save/reload via the standard
+   `EMPTY_DATA` shape in `persistence.js` + `core.js`.
+
+### Settings UI
+
+`renderSettings` grew a "Land / water split" card:
+- Enable checkbox (auto-triggers first fetch on first enable).
+- Minimum water body area input (m², default 10000 = 1 ha).
+- Fetch button + last-cache summary.
+- "Show fetched water on map (debug)" toggle — when on, the cached
+  geometry renders as a translucent blue fill UNDER the plot layer
+  on the main map, so geometry can be eyeballed for correctness.
+
+### Map: debug water overlay
+
+`_mapWaterDebugLayer` added to `redrawMap`, inserted at the bottom
+of the layer stack (under plots, boundaries, settlements). Reads
+`data.waterCache.waterGeometry` (GeoJSON `[lng,lat]` per turf
+convention) and translates each polygon to Leaflet `[lat,lng]`.
+
+### v1 limitations (acknowledged for follow-up)
+
+- Open coastline chains entirely INSIDE the bbox (no bbox-edge
+  endpoints) are skipped — flagged as incomplete OGF data.
+- Coastline-to-bbox-corner edge cases use a 1e-7 tolerance.
+- Reverse-attaching ways during chain stitching is skipped so the
+  land-on-left direction stays intact; malformed coastline ways
+  that need reversal will be left as separate chains.
+
 ## 0.7.4 — Brick 11 follow-up: draggable ghosts, hover preview, ends-aware append
 
 Three cut-editor polish items from review:

@@ -822,6 +822,36 @@ they come up; the plan is a living document.
   non-contiguous plots): the v0.7.4 hover-preview line is a touch
   visually noisy; will likely be tamed when 11b reworks the cut model
   anyway. Filed there with the other multi-cut items.
+- **Brick 12a** ✓ (committed) — coastline + inland-water ingest.
+  New `js/landwater.js` module. `fetchAndCacheWater()` runs a single
+  Overpass query scoped to the project's plot-union bbox + 10%
+  padding, then builds water geometry in three stages:
+  (i) **sea** from `natural=coastline` ways — stitch into chains
+      preserving node order (land-on-left), closed CCW loops →
+      islands (subtracted later), closed CW loops → inland seas,
+      open chains clipped to bbox and closed via a bbox-edge walk on
+      the chain's right (sea) side with right-side-test-point
+      disambiguation between CW/CCW closures;
+  (ii) **inland water** from `natural=water` ways (self-closed)
+      and `type=multipolygon` relations (outer + inner via
+      `groupWaysIntoRings`);
+  (iii) **merge + threshold** — union touching shapes into
+      connected components, drop any below
+      `data.settings.minWaterBodyAreaM2` (default 1 ha). Merge
+      happens BEFORE the threshold so the user-requested behaviour
+      "tiny puddle next to big lake stays, but two abutting tiny
+      puddles both go" falls out for free. Cached as
+      `data.waterCache = { fetchedAt, bbox, waterGeometry, bodyCount }`.
+      `EMPTY_DATA` / `data` init in persistence.js / core.js know the
+      shape. Settings tab grew a "Land / water split" card with
+      enable toggle (auto-fetches on first enable), min-area input,
+      fetch button, last-cache summary, and a "Show fetched water
+      on map (debug)" overlay toggle — `_mapWaterDebugLayer` in
+      map.js renders the cached `[lng,lat]` polygons under the plot
+      layer for visual verification before 12b's per-plot work.
+      v1 limitations filed: open chains entirely inside the bbox
+      are skipped; reverse-attaching ways during stitching is
+      avoided to preserve land-on-left.
 
 ### Phase 3 — Properties — **complete** (2026-05-11)
 

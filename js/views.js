@@ -1602,6 +1602,10 @@ function renderSettings() {
     `<option value="${l.code}"${l.code === _lang ? ' selected' : ''}>${esc(l.name)}</option>`
   ).join('');
   const snapVal = getSetting('snapToleranceM', 10);
+  const lwEnabled = !!getSetting('landWaterSplitEnabled', false);
+  const lwMinArea = Number(getSetting('minWaterBodyAreaM2', 10000)) || 0;
+  const lwDebug   = !!getSetting('showWaterDebugOverlay', false);
+  const lwSummary = (typeof getWaterCacheSummary === 'function') ? getWaterCacheSummary() : null;
 
   const defaultArea = getSetting('defaultSearchArea', []);
   const areaRows = defaultArea.map((r, i) => `
@@ -1634,6 +1638,33 @@ function renderSettings() {
       <div id="settings-dsa-rows" class="import-rows" style="margin-bottom:8px">${areaRows}</div>
       <button class="btn btn-sm" onclick="addDefaultSearchAreaRow()">+ ${t('import.add_row')}</button>
     </div>
+    <div class="ie-card">
+      <h3>${t('settings.landwater_title')}</h3>
+      <p>${t('settings.landwater_desc')}</p>
+      <label class="flex" style="align-items:center;gap:8px;margin-top:8px">
+        <input type="checkbox" ${lwEnabled ? 'checked' : ''} onchange="onLandWaterEnabledChange(this.checked)">
+        <span>${t('settings.landwater_enable')}</span>
+      </label>
+      <div class="flex" style="align-items:center;gap:8px;margin-top:10px">
+        <span>${t('settings.landwater_min_area')}:</span>
+        <input type="number" min="0" step="1000"
+          value="${esc(lwMinArea)}"
+          onchange="onMinWaterBodyAreaChange(this.value)"
+          style="max-width:140px">
+        <span class="text-dim">${t('settings.landwater_min_area_unit')}</span>
+      </div>
+      <div class="flex" style="align-items:center;gap:8px;margin-top:10px">
+        <button class="btn btn-sm" onclick="onFetchWaterClick()">${t('settings.landwater_fetch_btn')}</button>
+        ${lwSummary ? `<span class="text-dim" style="font-size:12px">${t('settings.landwater_cache_summary', {
+          when: new Date(lwSummary.fetchedAt).toLocaleString(),
+          n: lwSummary.bodyCount
+        })}</span>` : `<span class="text-dim" style="font-size:12px">${t('settings.landwater_no_cache')}</span>`}
+      </div>
+      <label class="flex" style="align-items:center;gap:8px;margin-top:10px">
+        <input type="checkbox" ${lwDebug ? 'checked' : ''} onchange="onShowWaterDebugChange(this.checked)" ${lwSummary ? '' : 'disabled'}>
+        <span>${t('settings.landwater_debug_overlay')}</span>
+      </label>
+    </div>
     <div class="ie-card" style="border-color:var(--danger,#7a1a1a)">
       <h3 style="color:var(--accent)">${t('settings.flush_title')}</h3>
       <p>${t('settings.flush_desc')}</p>
@@ -1647,6 +1678,30 @@ function onSnapToleranceChange(val) {
   data.settings = data.settings || {};
   data.settings.snapToleranceM = n;
   save();
+}
+
+// Brick 12a — Land/water settings handlers
+function onLandWaterEnabledChange(checked) {
+  setLandWaterSplitEnabled(!!checked);
+  if (checked && !getWaterCacheSummary()) {
+    // First-enable convenience: auto-fetch so the user doesn't have to
+    // hunt for the button.
+    fetchAndCacheWater();
+  } else {
+    renderSettings();
+  }
+}
+
+function onMinWaterBodyAreaChange(val) {
+  setMinWaterBodyAreaM2(val);
+}
+
+function onFetchWaterClick() {
+  fetchAndCacheWater();
+}
+
+function onShowWaterDebugChange(checked) {
+  setShowWaterDebugOverlay(!!checked);
 }
 
 function _readDefaultSearchAreaRows() {

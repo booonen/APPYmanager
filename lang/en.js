@@ -99,7 +99,24 @@ registerLanguage('en', 'English', {
     "flush_desc": "Remove all plots and boundaries from this save file, keeping boundary types and settings intact. Useful for testing.",
     "flush_btn": "Flush plots & boundaries",
     "flush_confirm": "Remove all plots and boundaries?\nBoundary types and settings will be kept.\nThis cannot be undone.",
-    "flush_toast": "Plots and boundaries cleared"
+    "flush_toast": "Plots and boundaries cleared",
+    "landwater_title": "Land / water split",
+    "landwater_desc": "Fetches sea (from natural=coastline ways using OSM's land-on-left convention) and inland water (natural=water ways + multipolygon relations) inside the project bbox. When enabled, future bricks will use this geometry to split plots into land and water portions.",
+    "landwater_enable": "Enable split",
+    "landwater_min_area": "Minimum water body area",
+    "landwater_min_area_unit": "m² (touching shapes are merged before this threshold applies)",
+    "landwater_fetch_btn": "Fetch coastlines + water",
+    "landwater_no_cache": "Not fetched yet.",
+    "landwater_cache_summary": "Fetched {when} · {n} water bodies",
+    "landwater_debug_overlay": "Show fetched water on map (debug)"
+  },
+  "landwater": {
+    "toast_overpass_missing": "Overpass module not loaded.",
+    "toast_no_plots": "No plots to compute a project bbox from. Import some plots first.",
+    "toast_fetching": "Fetching coastlines and inland water from OGF…",
+    "toast_fetch_failed": "Fetch failed: {msg}",
+    "toast_rate_limited": "Overpass rate-limited; try again in a moment.",
+    "toast_fetched": "Cached {n} water bodies."
   },
   "map": {
     "show_label": "Show:",

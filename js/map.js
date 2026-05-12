@@ -33,6 +33,7 @@ const BOUNDARY_TYPE_PALETTE = [
 ];
 let _mapSettlementLayer  = null;        // L.featureGroup for settlement markers (always on)
 let _mapBoundaryLayer    = null;        // single L.featureGroup for boundary polygons
+let _mapWaterDebugLayer  = null;        // Brick 12a debug overlay — cached water geometry
 let _mapCurrentTypeId    = null;        // type selected in dropdown (null = uninitialized → Plots)
 let _drillStack          = [];          // [{ boundaryId, name, typeId }, ...]
 let _boundaryClickTimer  = null;        // single-click vs double-click guard
@@ -79,6 +80,9 @@ function initMap() {
     attribution: 'Tiles © <a href="https://opengeofiction.net">OpenGeofiction</a>'
   }).addTo(_map);
 
+  // Water debug overlay sits BELOW everything else so plots / boundaries
+  // / settlements / hover hints all draw on top of it.
+  _mapWaterDebugLayer = L.featureGroup().addTo(_map);
   _mapPlotLayer       = L.featureGroup().addTo(_map);
   _mapBoundaryLayer   = L.featureGroup().addTo(_map);
   _mapSettlementLayer = L.featureGroup().addTo(_map);
@@ -505,6 +509,39 @@ function drawSplitHoverLine(fromLatLng, toLatLng) {
   _splitHoverLayer.addLayer(line);
 }
 
+// Brick 12a debug overlay. Reads data.waterCache.waterGeometry — a
+// GeoJSON MultiPolygon in turf's [lng, lat] order — and renders it as a
+// blue translucent fill under the plots layer. Toggled via the settings
+// tab; lets the user sanity-check the coastline/water-build pipeline
+// before plot-level work (12b) starts using these polygons.
+function _redrawWaterDebugOverlay() {
+  if (!_mapWaterDebugLayer) return;
+  _mapWaterDebugLayer.clearLayers();
+  if (!getSetting('showWaterDebugOverlay', false)) return;
+  const cache = data.waterCache;
+  const geom  = cache && cache.waterGeometry && cache.waterGeometry.geometry;
+  if (!geom) return;
+
+  const style = {
+    color: '#3b82c6', weight: 1.5,
+    fillColor: '#3b82c6', fillOpacity: 0.28,
+    lineJoin: 'round', interactive: false,
+  };
+
+  // GeoJSON polygon coords come in as [[outer], [hole1], ...] with each
+  // ring as [[lng, lat], ...]. Leaflet wants [[lat, lng], ...].
+  const toLeafletPoly = (polyCoords) =>
+    polyCoords.map(ring => ring.map(([lng, lat]) => [lat, lng]));
+
+  if (geom.type === 'Polygon') {
+    _mapWaterDebugLayer.addLayer(L.polygon(toLeafletPoly(geom.coordinates), style));
+  } else if (geom.type === 'MultiPolygon') {
+    for (const polyCoords of geom.coordinates) {
+      _mapWaterDebugLayer.addLayer(L.polygon(toLeafletPoly(polyCoords), style));
+    }
+  }
+}
+
 function destroySplitMap() {
   if (_splitPlotLayer)   { _splitPlotLayer.clearLayers();   _splitPlotLayer = null; }
   if (_splitPiecesLayer) { _splitPiecesLayer.clearLayers(); _splitPiecesLayer = null; }
@@ -610,6 +647,7 @@ function redrawMap() {
   _mapBoundaryLayer.clearLayers();
   if (_mapSettlementLayer) _mapSettlementLayer.clearLayers();
   if (_hoverLayer) _hoverLayer.clearLayers();
+  _redrawWaterDebugOverlay();
 
   // Layer 0: dropdown's selected level (every boundary of that type, OR
   // every plot when the synthetic "Plots" option is picked).

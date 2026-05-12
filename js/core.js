@@ -20,7 +20,8 @@ let data = {
   boundaryTypes: [],
   settlements: [],
   propertySchemas: [],
-  settings: {}
+  settings: {},
+  waterCache: null  // Brick 12a
 };
 
 let editingId = null;
