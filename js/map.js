@@ -412,11 +412,17 @@ function drawSplitCutPath(latLngs, insideLatLngs) {
   }
 }
 
+// Draws the cut's vertex markers. Real vertices are draggable accent
+// dots; "ghost" midpoints sit between each consecutive pair of real
+// vertices as smaller, semi-transparent dots — a click on a ghost
+// inserts a real vertex at that midpoint. (Click on the cut polyline
+// also inserts; ghosts are a discoverable visual hint that you can.)
 function drawSplitVertices(latLngs, vertexCallbacks) {
   if (!_splitMap || !_splitVertexLayer) return;
   _splitVertexLayer.clearLayers();
   if (!Array.isArray(latLngs)) return;
   vertexCallbacks = vertexCallbacks || {};
+
   for (let i = 0; i < latLngs.length; i++) {
     const idx = i; // capture in closure
     const m = L.marker(latLngs[i], {
@@ -434,6 +440,28 @@ function drawSplitVertices(latLngs, vertexCallbacks) {
     if (vertexCallbacks.onDragEnd)   m.on('dragend',   (e) => vertexCallbacks.onDragEnd(idx, e));
     if (vertexCallbacks.onRemove)    m.on('contextmenu', (e) => vertexCallbacks.onRemove(idx, e));
     _splitVertexLayer.addLayer(m);
+  }
+
+  if (vertexCallbacks.onGhostClick && latLngs.length >= 2) {
+    for (let i = 0; i < latLngs.length - 1; i++) {
+      const segIdx = i;
+      const a = latLngs[i], b = latLngs[i + 1];
+      const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+      const g = L.marker(mid, {
+        icon: L.divIcon({
+          className: 'split-vertex-ghost',
+          html: '',
+          iconSize: [10, 10],
+          iconAnchor: [5, 5],
+        }),
+        bubblingMouseEvents: false,
+        // Lower z-index so a real vertex (when ghosts sit near one) stays
+        // on top and remains the click target.
+        zIndexOffset: -100,
+      });
+      g.on('click', (e) => vertexCallbacks.onGhostClick(segIdx, e));
+      _splitVertexLayer.addLayer(g);
+    }
   }
 }
 

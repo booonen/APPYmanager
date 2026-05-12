@@ -37,7 +37,7 @@
       <div class="nav-item" data-tab="settings" onclick="switchTab('settings')"><span class="nav-icon">⚙</span> <span data-t="nav.settings">Settings</span></div>
       <div class="nav-item" data-tab="import-export" onclick="switchTab('import-export')"><span class="nav-icon">⇅</span> <span data-t="nav.import_export">Import / Export</span></div>
       <div class="spacer"></div>
-      <div style="padding:8px 16px;font-size:10px;color:var(--text-muted);font-family:var(--font-mono);opacity:0.6">v0.7.2</div>
+      <div style="padding:8px 16px;font-size:10px;color:var(--text-muted);font-family:var(--font-mono);opacity:0.6">v0.7.3</div>
     </nav>
     <div class="content">
 
@@ -116,7 +116,7 @@
   <div class="split-overlay-header">
     <button class="btn" id="split-cancel-btn" onclick="closeSplitOverlay()" data-t="plot_split.cancel_btn">← Cancel</button>
     <div class="split-overlay-title" id="split-title"></div>
-    <button class="btn btn-primary" id="split-confirm-btn" onclick="onSplitConfirm()" disabled data-t="plot_split.confirm_btn">Confirm split</button>
+    <button class="btn btn-primary" id="split-confirm-btn" onclick="onSplitPrimaryAction()" disabled data-t="plot_split.continue_btn">Continue →</button>
   </div>
   <div class="split-overlay-body">
     <div class="split-overlay-map-wrap">

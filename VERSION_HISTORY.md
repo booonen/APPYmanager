@@ -1,3 +1,67 @@
+## 0.7.3 — Brick 11 follow-up: cut-end crash, ghost dots, override phase
+
+### Crash fix
+
+v0.7.2's `_onSplitVertexDragEnd` accessed `e.latlng.lat`. Leaflet
+fires `dragend` with no `latlng` field on the event (only `drag`
+events have it); accessing `e.latlng.lat` therefore threw
+`TypeError: e.latlng is undefined`. The throw left
+`_splitDraggingVertex` set, which made `_refreshSplitMap` skip
+`drawSplitVertices` forever — so subsequent vertices added via map
+click silently failed to render (the "added node doesn't appear"
+bug). Fix: read the marker's position from `e.target.getLatLng()`
+instead. Same fix applied defensively to `_onSplitVertexDrag` (it
+worked before, but the consistency matters).
+
+### Ghost midpoint markers
+
+Real cut vertices get a draggable accent dot. Now there's a smaller,
+half-transparent "ghost" dot at the midpoint of every segment between
+consecutive real vertices. Clicking a ghost inserts a real vertex at
+that midpoint position — a more discoverable way to add nodes than
+clicking the cut polyline itself (which still works). Implemented as
+extra `L.marker`s in the same `_splitVertexLayer`; the ghost's class
+is `.split-vertex-ghost`. `zIndexOffset: -100` keeps real markers on
+top when the two visually overlap.
+
+### Property overrides on their own screen
+
+The redistribution table cells were unusably narrow at 360-px panel
+width (input boxes too small to fit values like "6577"). Reworked
+the flow into two phases:
+
+- **Cut phase** (Phase 1): the panel shows the pieces list (names +
+  areas) plus a *read-only* "Proposed values" table — plain text
+  cells, comfortably fits the 360-wide panel. Header's primary
+  button reads "Continue →" and is enabled once the cut is valid.
+
+- **Override phase** (Phase 2): the cut is locked (no vertex markers,
+  no map-click append, no ghost dots). The panel now shows a vertical
+  stack of per-piece cards. Each card has a header (swatch + name
+  input + area readout) and a body listing every applicable property
+  as a labeled, full-width input. Header's primary button reads
+  "Confirm split". A `← Back to cut` link at the top of the panel
+  returns to phase 1; the manual-override Set preserves any cells the
+  user has already edited if they go back, tweak the cut, and continue
+  again.
+
+The phase is part of `_splitState`. `onSplitPrimaryAction()` dispatches
+the header button — Continue → onSplitContinue (phase: 'override'),
+Confirm → onSplitConfirm (executes the split). Status bar at the
+bottom-left of the map gets a new override-phase message
+("Cut locked · adjusting per-piece property values").
+
+### Out of scope (filed for a future brick)
+
+- **Multi-cut.** Drawing more than one cut on a single plot and
+  grouping cut pieces together to produce more than 2 result plots.
+  Needs a state model with an array of cuts and a region-grouping UI.
+- **Cut on a non-contiguous plot.** Currently a non-contig plot is
+  forced into component mode (each island becomes its own piece).
+  Letting the user draw a cut across one or more islands without
+  splitting the rest needs `computeCutLineSplit` reworked to handle
+  multiple outer rings.
+
 ## 0.7.2 — Brick 11 polish: takeover view, editable cut, live preview
 
 The split editor moves out of the 820-px modal into a full-viewport

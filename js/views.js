@@ -3517,6 +3517,10 @@ function _initSplitState(plot) {
   _splitState = {
     plotId:          plot.id,
     mode:            isPlotNonContiguous(plot) ? 'component' : 'cut',
+    // Phase 1: 'cut' — user edits the cut and sees a read-only preview
+    // of the area-proportional value split. Phase 2: 'override' — cut
+    // is locked, user can edit per-piece values in roomy per-piece cards.
+    phase:           'cut',
     cutLatLngs:      [],
     pieces:          null,
     cutInside:       null,
@@ -3579,6 +3583,7 @@ function _onSplitKeyDown(e) {
 
 function _onSplitMapClick(e) {
   if (!_splitState || _splitState.mode !== 'cut') return;
+  if (_splitState.phase !== 'cut') return;
   if (_splitDraggingVertex) return;
   _splitState.cutLatLngs.push([e.latlng.lat, e.latlng.lng]);
   _recomputeSplit();
@@ -3587,15 +3592,27 @@ function _onSplitMapClick(e) {
 function _onSplitCutLineClick(e) {
   // Click on the cut polyline → insert a vertex at the closest segment.
   if (!_splitState || _splitState.mode !== 'cut') return;
+  if (_splitState.phase !== 'cut') return;
   const verts = _splitState.cutLatLngs;
   if (verts.length < 2) return;
   const click = [e.latlng.lat, e.latlng.lng];
   const idx = _findClosestSegment(click, verts);
   if (idx < 0) return;
   verts.splice(idx + 1, 0, click);
-  // Bump existing override keys after the insertion point so they
-  // continue to refer to the same pieces.
-  _shiftManualOverrides(idx + 1, +1);
+  L.DomEvent.stopPropagation(e);
+  _recomputeSplit();
+}
+
+function _onSplitGhostClick(segIdx, e) {
+  // Click on a midpoint ghost marker → insert a real vertex at the
+  // ghost's position (which is the midpoint of segIdx → segIdx+1).
+  if (!_splitState || _splitState.mode !== 'cut') return;
+  if (_splitState.phase !== 'cut') return;
+  const verts = _splitState.cutLatLngs;
+  if (segIdx < 0 || segIdx >= verts.length - 1) return;
+  const a = verts[segIdx], b = verts[segIdx + 1];
+  const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+  verts.splice(segIdx + 1, 0, mid);
   L.DomEvent.stopPropagation(e);
   _recomputeSplit();
 }
@@ -3607,13 +3624,20 @@ function _onSplitVertexDragStart(i, e) {
 
 function _onSplitVertexDrag(i, e) {
   if (!_splitState) return;
-  _splitState.cutLatLngs[i] = [e.latlng.lat, e.latlng.lng];
+  // Use the marker's current position rather than e.latlng so this stays
+  // consistent with _onSplitVertexDragEnd. Leaflet's `dragend` event has
+  // no `latlng` field — accessing e.latlng there throws TypeError, which
+  // would leave `_splitDraggingVertex` set and silently skip future vertex
+  // renders (this was v0.7.2's "added node doesn't appear" bug).
+  const ll = e.target.getLatLng();
+  _splitState.cutLatLngs[i] = [ll.lat, ll.lng];
   _recomputeSplit();
 }
 
 function _onSplitVertexDragEnd(i, e) {
   if (!_splitState) return;
-  _splitState.cutLatLngs[i] = [e.latlng.lat, e.latlng.lng];
+  const ll = e.target.getLatLng();
+  _splitState.cutLatLngs[i] = [ll.lat, ll.lng];
   if (e.target._icon) e.target._icon.classList.remove('dragging');
   _splitDraggingVertex = null;
   _recomputeSplit();
@@ -3746,13 +3770,18 @@ function _refreshSplitMap() {
   if (haveValidPieces) drawSplitPieces(_splitState.pieces);
   else clearSplitPieces();
   drawSplitCutPath(_splitState.cutLatLngs, _splitState.cutInside);
-  if (!_splitDraggingVertex) {
+  // Vertex markers are only shown / editable in phase 'cut'. In phase
+  // 'override' the cut is locked; clearing the layer keeps the view clean.
+  if (_splitState.phase === 'cut' && !_splitDraggingVertex) {
     drawSplitVertices(_splitState.cutLatLngs, {
-      onDragStart: _onSplitVertexDragStart,
-      onDrag:      _onSplitVertexDrag,
-      onDragEnd:   _onSplitVertexDragEnd,
-      onRemove:    _onSplitVertexRemove,
+      onDragStart:  _onSplitVertexDragStart,
+      onDrag:       _onSplitVertexDrag,
+      onDragEnd:    _onSplitVertexDragEnd,
+      onRemove:     _onSplitVertexRemove,
+      onGhostClick: _onSplitGhostClick,
     });
+  } else if (_splitState.phase !== 'cut') {
+    drawSplitVertices([], {});
   }
 }
 
@@ -3763,18 +3792,28 @@ function _refreshSplitPanel() {
   if (!panel) return;
   const plot = _splitPlot();
   if (!plot) return;
-  const valid = _splitState.status === 'valid';
 
+  if (_splitState.phase === 'override' && _splitState.pieces) {
+    panel.innerHTML = _renderSplitPanelOverride(plot, _splitState);
+  } else {
+    panel.innerHTML = _renderSplitPanelCut(plot, _splitState);
+  }
+
+  _refreshSplitStatusBar();
+}
+
+function _renderSplitPanelCut(plot, state) {
+  const valid = state.status === 'valid';
   let html = '';
 
   if (valid) {
     // Pieces (names + areas)
-    const piecesHtml = _splitState.pieces.map((piece, i) => {
+    const piecesHtml = state.pieces.map((piece, i) => {
       const color = _SPLIT_PIECE_COLORS[i % _SPLIT_PIECE_COLORS.length];
       return `
         <div class="split-overlay-piece-row">
           <span class="split-overlay-piece-swatch" style="background:${color}"></span>
-          <input type="text" class="split-overlay-piece-name" value="${esc(_splitState.names[i] || '')}" data-piece-idx="${i}" oninput="onSplitNameInput(this)">
+          <input type="text" class="split-overlay-piece-name" value="${esc(state.names[i] || '')}" data-piece-idx="${i}" oninput="onSplitNameInput(this)">
           <span class="split-overlay-piece-area mono">${esc(formatArea(piece.area || 0))}</span>
         </div>
       `;
@@ -3786,19 +3825,20 @@ function _refreshSplitPanel() {
       </div>
     `;
 
-    // Redistribution table
-    const tableHtml = _renderSplitRedistributionTable(plot, _splitState);
+    // Read-only proposed values (compact text, fits the 360-wide panel
+    // without input-box cramping). Edit happens in the override phase.
+    const tableHtml = _renderSplitProposedTable(plot, state);
     if (tableHtml) {
       html += `
         <div class="split-overlay-section">
-          <div class="split-overlay-section-label">${t('plot_split.redistribute_label')}</div>
+          <div class="split-overlay-section-label">${t('plot_split.proposed_label')}</div>
           ${tableHtml}
+          <div class="split-overlay-hint-edit">${t('plot_split.proposed_hint')}</div>
         </div>
       `;
     }
-  } else if (_splitState.error) {
-    // Status warning when the cut isn't usable yet
-    const code = _splitState.error;
+  } else if (state.error) {
+    const code = state.error;
     const kind = (code === 'cut_too_short' || code === 'cut_does_not_cross') ? 'warn' : 'error';
     html += `
       <div class="split-overlay-section">
@@ -3807,9 +3847,9 @@ function _refreshSplitPanel() {
     `;
   }
 
-  // Cut controls (only in cut mode)
-  if (_splitState.mode === 'cut') {
-    const n = _splitState.cutLatLngs.length;
+  // Cut controls (only in cut mode — component mode has nothing to clear)
+  if (state.mode === 'cut') {
+    const n = state.cutLatLngs.length;
     html += `
       <div class="split-overlay-section">
         <div class="split-overlay-section-label">${t('plot_split.cut_label')}</div>
@@ -3822,37 +3862,55 @@ function _refreshSplitPanel() {
     `;
   }
 
-  panel.innerHTML = html;
-
-  // Status bar at the bottom-left of the map
-  const status = document.getElementById('split-status');
-  if (status) {
-    let txt, cls = 'split-overlay-status';
-    if (_splitState.mode === 'component') {
-      txt = t('plot_split.status_component', { n: _splitState.pieces?.length || 0 });
-    } else if (valid) {
-      txt = t('plot_split.status_valid', { n: _splitState.cutLatLngs.length });
-    } else {
-      txt = t('plot_split.status_vertices', { n: _splitState.cutLatLngs.length });
-      const code = _splitState.error;
-      cls += (code === 'cut_too_short' || code === 'cut_does_not_cross')
-        ? ' split-overlay-status-warn'
-        : ' split-overlay-status-error';
-    }
-    status.className = cls;
-    status.textContent = txt;
-  }
+  return html;
 }
 
-function _refreshSplitConfirmBtn() {
-  const btn = document.getElementById('split-confirm-btn');
-  if (!btn) return;
-  btn.disabled = _splitState.status !== 'valid';
+function _renderSplitPanelOverride(plot, state) {
+  // Per-piece cards stacked vertically so each input has the full
+  // panel width — solves the 360-px-wide redistribution table cramping.
+  const cards = state.pieces.map((piece, i) => {
+    const color = _SPLIT_PIECE_COLORS[i % _SPLIT_PIECE_COLORS.length];
+    const props = (data.propertySchemas || []).filter(s => {
+      if (!appliesAtLevel(s, 'plot')) return false;
+      if (isVirtualPropertyId(s.id)) return false;
+      const v = getPlotPropertyValue(plot, s.id);
+      return v !== undefined && v !== null && v !== '';
+    });
+    const propRowsHtml = props.map(schema => {
+      const val = state.propertyValues[i] ? state.propertyValues[i][schema.id] : undefined;
+      const unitChip = schema.unit ? ` <span class="split-unit-chip">${esc(schema.unit)}</span>` : '';
+      return `
+        <div class="split-override-prop-row">
+          <label>${esc(schema.name)}${unitChip}</label>
+          ${_renderSplitInputCell(schema, val, i)}
+        </div>
+      `;
+    }).join('');
+    return `
+      <div class="split-override-piece">
+        <div class="split-override-piece-header">
+          <span class="split-overlay-piece-swatch" style="background:${color}"></span>
+          <input type="text" class="split-override-piece-name" value="${esc(state.names[i] || '')}" data-piece-idx="${i}" oninput="onSplitNameInput(this)">
+          <span class="split-override-piece-area mono">${esc(formatArea(piece.area || 0))}</span>
+        </div>
+        ${propRowsHtml ? `<div class="split-override-piece-properties">${propRowsHtml}</div>` : ''}
+      </div>
+    `;
+  }).join('');
+
+  return `
+    <div class="split-overlay-section">
+      <button type="button" class="split-override-back" onclick="onSplitBack()">${t('plot_split.back_btn')}</button>
+      <div class="split-overlay-hint-edit">${t('plot_split.override_intro')}</div>
+    </div>
+    <div class="split-override-pieces">${cards}</div>
+  `;
 }
 
-// ----- Redistribution table (unchanged from v0.7.0 in essence) ----------
-
-function _renderSplitRedistributionTable(plot, state) {
+// Compact read-only redist preview used in the cut phase. Same layout
+// shape as the v0.7.2 input-bearing table, but each piece cell renders
+// its proposed value as plain text — no inputs, no cramping.
+function _renderSplitProposedTable(plot, state) {
   const schemas = (data.propertySchemas || []).filter(s => {
     if (!appliesAtLevel(s, 'plot')) return false;
     if (isVirtualPropertyId(s.id)) return false;
@@ -3869,14 +3927,14 @@ function _renderSplitRedistributionTable(plot, state) {
   const rowsHtml = schemas.map(schema => {
     const parentVal  = getPlotPropertyValue(plot, schema.id);
     const parentDisp = _splitFormatParentValue(schema, parentVal);
-    const unitChip   = schema.unit ? ` <span class="split-unit-chip">${esc(schema.unit)}</span>` : '';
     const pieceCells = state.pieces.map((_, i) => {
       const val = state.propertyValues[i] ? state.propertyValues[i][schema.id] : undefined;
-      return `<td>${_renderSplitInputCell(schema, val, i)}</td>`;
+      const disp = _splitFormatParentValue(schema, val);
+      return `<td class="mono">${esc(disp)}</td>`;
     }).join('');
     return `
       <tr>
-        <td class="split-prop-name">${esc(schema.name)}${unitChip}</td>
+        <td class="split-prop-name">${esc(schema.name)}</td>
         <td class="split-parent-cell mono">${esc(parentDisp)}</td>
         ${pieceCells}
       </tr>
@@ -3884,7 +3942,7 @@ function _renderSplitRedistributionTable(plot, state) {
   }).join('');
 
   return `
-    <table class="split-redist-table">
+    <table class="split-redist-table split-redist-table-readonly">
       <thead>
         <tr>
           <th>${t('plot_split.col_property')}</th>
@@ -3896,6 +3954,70 @@ function _renderSplitRedistributionTable(plot, state) {
     </table>
   `;
 }
+
+function _refreshSplitStatusBar() {
+  const status = document.getElementById('split-status');
+  if (!status) return;
+  const valid = _splitState.status === 'valid';
+  let txt, cls = 'split-overlay-status';
+  if (_splitState.phase === 'override') {
+    txt = t('plot_split.status_override');
+  } else if (_splitState.mode === 'component') {
+    txt = t('plot_split.status_component', { n: _splitState.pieces?.length || 0 });
+  } else if (valid) {
+    txt = t('plot_split.status_valid', { n: _splitState.cutLatLngs.length });
+  } else {
+    txt = t('plot_split.status_vertices', { n: _splitState.cutLatLngs.length });
+    const code = _splitState.error;
+    cls += (code === 'cut_too_short' || code === 'cut_does_not_cross')
+      ? ' split-overlay-status-warn'
+      : ' split-overlay-status-error';
+  }
+  status.className = cls;
+  status.textContent = txt;
+}
+
+function _refreshSplitConfirmBtn() {
+  const btn = document.getElementById('split-confirm-btn');
+  if (!btn) return;
+  if (_splitState.phase === 'override') {
+    btn.textContent = t('plot_split.confirm_btn');
+    btn.disabled = false; // cut already validated to enter this phase
+  } else {
+    btn.textContent = t('plot_split.continue_btn');
+    btn.disabled = _splitState.status !== 'valid';
+  }
+}
+
+// ----- Phase transitions ------------------------------------------------
+
+function onSplitPrimaryAction() {
+  // Single header button — its meaning depends on phase.
+  if (!_splitState) return;
+  if (_splitState.phase === 'override') {
+    onSplitConfirm();
+  } else {
+    onSplitContinue();
+  }
+}
+
+function onSplitContinue() {
+  if (!_splitState || _splitState.status !== 'valid') return;
+  _splitState.phase = 'override';
+  _refreshSplitPanel();
+  _refreshSplitMap();
+  _refreshSplitConfirmBtn();
+}
+
+function onSplitBack() {
+  if (!_splitState) return;
+  _splitState.phase = 'cut';
+  _refreshSplitPanel();
+  _refreshSplitMap();
+  _refreshSplitConfirmBtn();
+}
+
+// ----- Per-piece value rendering (used by override-phase cards) --------
 
 function _renderSplitInputCell(schema, val, pieceIdx) {
   const base = `data-piece-idx="${pieceIdx}" data-schema-id="${esc(schema.id)}" data-kind="${schema.kind}"`;
