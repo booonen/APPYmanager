@@ -734,29 +734,32 @@ function _drawPlotPoly(plot) {
   if (!geo.polygons.length) return;
   const isSelected = _selectedItemKind === 'plot' && _selectedItemId === plot.id;
 
-  // Brick 12b: when the project's land/water split is enabled AND a
-  // water cache exists AND this plot intersects water, render the
-  // plot split into a clickable LAND polygon plus a non-interactive
-  // WATER overlay. `waterDisposition === 'removed'` further clips the
-  // plot's rendered shape to land only — clicking water no longer
-  // selects the plot (the water is conceptually outside the plot's
-  // effective extent).
+  // Brick 12b + v0.8.4 correction: when the project split is enabled
+  // AND a water cache exists AND this plot intersects water, render
+  // the plot using the MAP-WIDE `waterDisplayMode` setting:
+  //   • 'split' (default): full plot polygon stays clickable, blue
+  //     water overlay drawn on top, non-interactive.
+  //   • 'removed': the rendered polygon is CLIPPED to the land portion
+  //     only; water area becomes effectively outside the plot.
+  // The toggle lives in the Land/water settings card (one switch for
+  // the whole map; per-plot toggling was a v0.8.3 misstep — see
+  // VERSION_HISTORY 0.8.4).
   let renderedAsSplit = false;
   let mainPoly = null;
+  const waterDisplayMode = getSetting('waterDisplayMode', 'split');
   if (getSetting('landWaterSplitEnabled', false)
       && data.waterCache && data.waterCache.waterGeometry
       && typeof getPlotLandWater === 'function') {
     const lw = getPlotLandWater(plot);
     if (lw && lw.water) {
-      const disposition = plot.waterDisposition || 'split';
-      if (disposition === 'removed' && lw.land) {
+      if (waterDisplayMode === 'removed' && lw.land) {
         // Land-only render: clipped polygon IS the plot on the map.
         const landPolys = landWaterFeatureToLeafletPolygons(lw.land);
         if (landPolys.length > 0) {
           mainPoly = L.polygon(landPolys, plotPolygonStyle(isSelected));
           renderedAsSplit = true;
         }
-      } else if (disposition === 'split') {
+      } else if (waterDisplayMode === 'split') {
         // Default split: full plot polygon stays as the clickable main
         // shape; water overlay sits on top, non-interactive.
         mainPoly = L.polygon(geo.polygons, plotPolygonStyle(isSelected));
@@ -777,9 +780,9 @@ function _drawPlotPoly(plot) {
   _mapPlotLayer.addLayer(mainPoly);
   _polyIndex.set('plot:' + plot.id, mainPoly);
 
-  // Water overlay (only in 'split' disposition).
+  // Water overlay (only when displayMode === 'split').
   if (renderedAsSplit
-      && (plot.waterDisposition || 'split') === 'split'
+      && waterDisplayMode === 'split'
       && typeof getPlotLandWater === 'function') {
     const lw = getPlotLandWater(plot);
     if (lw && lw.water) {

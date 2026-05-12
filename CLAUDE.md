@@ -861,15 +861,19 @@ they come up; the plan is a living document.
   plot split (`executeSplit`), and boundary-import subdivision.
   `_drawPlotPoly` in map.js is now split-aware: when the project
   split is enabled AND a water cache exists AND the plot has water,
-  `waterDisposition === 'split'` (default) draws the full plot
+  `waterDisplayMode === 'split'` (default) draws the full plot
   polygon plus a non-interactive blue water overlay; `'removed'`
   clips the rendered polygon to land only (clicks on the water
   region no longer select the plot — conceptually the water is
-  outside the plot's effective extent). Per-plot `waterDisposition`
-  field surfaced in the plot detail modal as a small `<select>`,
-  only when the split is enabled and the plot actually intersects
-  water. Persisted-cache + plotArea + property-side changes
-  deferred to 12c / 12d.
+  outside the plot's effective extent). `waterDisplayMode` is a
+  **map-wide** project setting (`data.settings.waterDisplayMode`),
+  surfaced as one checkbox in the Land/water settings card.
+  v0.8.3 originally wired this as a per-plot toggle in the plot
+  inspector; user-flagged in v0.8.4 review (would be tedious to set
+  across a whole country) and rewritten as the single map-wide
+  setting. Future data views (Brick 13+) will each carry their own
+  equivalent view-level toggle. Persisted-cache + plotArea +
+  property-side changes deferred to 12c / 12d.
 
 ### Phase 3 — Properties — **complete** (2026-05-11)
 

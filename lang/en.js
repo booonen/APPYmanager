@@ -109,6 +109,7 @@ registerLanguage('en', 'English', {
     "landwater_fetching_btn": "Fetching… (this can take a minute)",
     "landwater_no_cache": "Not fetched yet.",
     "landwater_cache_summary": "Fetched {when} · {n} water bodies",
+    "landwater_hide_water": "Hide water from plots (clip plot rendering to land only)",
     "landwater_debug_overlay": "Show fetched water on map (debug)"
   },
   "landwater": {
@@ -212,9 +213,6 @@ registerLanguage('en', 'English', {
     "name_placeholder": "Plot name",
     "notes_label": "Notes",
     "notes_placeholder": "Free-form notes about this plot.",
-    "landwater_label": "Land / water",
-    "landwater_split": "Show land and water as separate portions",
-    "landwater_removed": "Remove water from this plot entirely",
     "ogf_id": "OGF Relation ID",
     "plot_id": "Plot ID",
     "area": "Area",

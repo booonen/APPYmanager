@@ -1,3 +1,31 @@
+## 0.8.4 — Brick 12b correction: water-display toggle is map-wide, not per-plot
+
+v0.8.3 wired the "hide water from this plot" control onto every
+individual plot's inspector. That was wrong: hiding water on the
+map is a VIEW preference, not plot data — toggling it once should
+affect every plot. Per-plot toggling would be tedious for a
+fully-loaded country (the user's flag).
+
+Replaced with a single map-wide setting:
+  • `data.settings.waterDisplayMode: 'split' | 'removed'` (default
+    `'split'`). Persisted in the save.
+  • Surfaced as one checkbox in the Land / water settings card:
+    "Hide water from plots (clip plot rendering to land only)".
+  • `_drawPlotPoly` now reads `getSetting('waterDisplayMode', ...)`
+    instead of `plot.waterDisposition`.
+
+Removed from v0.8.3:
+  • `_renderPlotWaterDispositionBlock` + `onPlotWaterDispositionChange`
+    in views.js (and the call site in the plot detail modal).
+  • `plot_detail.landwater_*` l10n keys.
+
+Future data views (Brick 13 choropleth, etc.) will each get their
+own equivalent view-level toggle — this brick just handles the main
+map view.
+
+Existing saves: any `plot.waterDisposition` fields written by v0.8.3
+are now inert (not read, not deleted). Harmless legacy data.
+
 ## 0.8.3 — Brick 12b: per-plot land/water intersection + map render
 
 The cached water geometry (12a) now hits the plots. When the project
