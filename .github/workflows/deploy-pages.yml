@@ -5,13 +5,22 @@ name: Deploy to GitHub Pages
 # automatically) and let Pages serve it. index.html redirects to
 # appymanager.html, which is the actual shell.
 #
-# Trigger: push to main (= after a brick PR is merged), plus manual dispatch
-# for ad-hoc redeploys. Feature branches don't auto-deploy — open the HTML
-# file locally for WIP testing instead.
+# Triggers: push to main (= after a brick PR is merged), push to any
+# claude/** branch (so each WIP commit on a Claude-driven branch is
+# testable on the live site without waiting for a merge), plus manual
+# dispatch for ad-hoc redeploys.
+#
+# Caveat: GitHub Pages serves ONE site at a time. If you push to main
+# and a claude/** branch in quick succession, whichever finishes
+# deploying last wins. The concurrency group below queues runs (no
+# cancellation) so neither one is lost — just keep in mind the live
+# site reflects the last successful deploy.
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+      - "claude/**"
   workflow_dispatch:
 
 permissions:
