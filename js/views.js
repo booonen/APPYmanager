@@ -1606,6 +1606,7 @@ function renderSettings() {
   const lwMinArea = Number(getSetting('minWaterBodyAreaM2', 10000)) || 0;
   const lwDebug   = !!getSetting('showWaterDebugOverlay', false);
   const lwSummary = (typeof getWaterCacheSummary === 'function') ? getWaterCacheSummary() : null;
+  const lwBusy    = (typeof isLandWaterFetchInFlight === 'function') && isLandWaterFetchInFlight();
 
   const defaultArea = getSetting('defaultSearchArea', []);
   const areaRows = defaultArea.map((r, i) => `
@@ -1654,7 +1655,7 @@ function renderSettings() {
         <span class="text-dim">${t('settings.landwater_min_area_unit')}</span>
       </div>
       <div class="flex" style="align-items:center;gap:8px;margin-top:10px">
-        <button class="btn btn-sm" onclick="onFetchWaterClick()">${t('settings.landwater_fetch_btn')}</button>
+        <button class="btn btn-sm" onclick="onFetchWaterClick()"${lwBusy ? ' disabled' : ''}>${lwBusy ? t('settings.landwater_fetching_btn') : t('settings.landwater_fetch_btn')}</button>
         ${lwSummary ? `<span class="text-dim" style="font-size:12px">${t('settings.landwater_cache_summary', {
           when: new Date(lwSummary.fetchedAt).toLocaleString(),
           n: lwSummary.bodyCount

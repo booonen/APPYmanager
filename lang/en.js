@@ -106,6 +106,7 @@ registerLanguage('en', 'English', {
     "landwater_min_area": "Minimum water body area",
     "landwater_min_area_unit": "m² (touching shapes are merged before this threshold applies)",
     "landwater_fetch_btn": "Fetch coastlines + water",
+    "landwater_fetching_btn": "Fetching… (this can take a minute)",
     "landwater_no_cache": "Not fetched yet.",
     "landwater_cache_summary": "Fetched {when} · {n} water bodies",
     "landwater_debug_overlay": "Show fetched water on map (debug)"

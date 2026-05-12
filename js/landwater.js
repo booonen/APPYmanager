@@ -42,7 +42,16 @@
 // PUBLIC API
 // ------------------------------------------------------------
 
+let _landwaterFetchInFlight = false;
+
+function isLandWaterFetchInFlight() { return _landwaterFetchInFlight; }
+
+// Yield to the event loop. Used between heavy stages so the UI can
+// re-paint (toast, button state, etc.) without freezing.
+function _yield() { return new Promise(r => setTimeout(r, 0)); }
+
 async function fetchAndCacheWater() {
+  if (_landwaterFetchInFlight) return;
   if (typeof overpassFetch !== 'function') {
     toast(t('landwater.toast_overpass_missing'), 'error');
     return;
@@ -53,38 +62,53 @@ async function fetchAndCacheWater() {
     return;
   }
 
+  _landwaterFetchInFlight = true;
+  if (typeof renderSettings === 'function') renderSettings();
   toast(t('landwater.toast_fetching'), 'info');
 
-  let json;
   try {
-    json = await overpassFetch(_buildLandWaterQuery(bbox));
-  } catch (err) {
-    const msg = err && err.is429
-      ? t('landwater.toast_rate_limited')
-      : (err?.message || 'unknown');
-    toast(t('landwater.toast_fetch_failed', { msg }), 'error');
-    return;
-  }
+    // Let the toast + busy button paint before we lock the thread.
+    await _yield();
 
-  const parsed   = _parseLandWaterResponse(json);
-  const seaGeom  = _buildSeaGeometry(parsed.coastlineWays, parsed.nodes, bbox);
-  const inlandGeom = _buildInlandWaterGeometry(parsed.waterWays, parsed.waterRelations, parsed.waysById, parsed.nodes);
+    let json;
+    try {
+      json = await overpassFetch(_buildLandWaterQuery(bbox));
+    } catch (err) {
+      const msg = err && err.is429
+        ? t('landwater.toast_rate_limited')
+        : (err?.message || 'unknown');
+      toast(t('landwater.toast_fetch_failed', { msg }), 'error');
+      return;
+    }
 
-  const minAreaM2 = Math.max(0, Number(getSetting('minWaterBodyAreaM2', 10000)) || 0);
-  const merged = _mergeAndThreshold(seaGeom, inlandGeom, minAreaM2);
+    await _yield();
+    const parsed = _parseLandWaterResponse(json);
 
-  data.waterCache = {
-    fetchedAt:     new Date().toISOString(),
-    bbox,
-    waterGeometry: merged.geometry,
-    bodyCount:     merged.bodyCount,
-  };
-  save();
+    await _yield();
+    const seaGeom = await _buildSeaGeometry(parsed.coastlineWays, parsed.nodes, bbox);
 
-  toast(t('landwater.toast_fetched', { n: merged.bodyCount }), 'success');
-  if (typeof renderSettings === 'function') renderSettings();
-  if (typeof redrawMap === 'function' && getSetting('showWaterDebugOverlay', false)) {
-    redrawMap();
+    await _yield();
+    const inlandGeom = await _buildInlandWaterGeometry(parsed.waterWays, parsed.waterRelations, parsed.waysById, parsed.nodes);
+
+    await _yield();
+    const minAreaM2 = Math.max(0, Number(getSetting('minWaterBodyAreaM2', 10000)) || 0);
+    const merged = await _mergeAndThreshold(seaGeom, inlandGeom, minAreaM2);
+
+    data.waterCache = {
+      fetchedAt:     new Date().toISOString(),
+      bbox,
+      waterGeometry: merged.geometry,
+      bodyCount:     merged.bodyCount,
+    };
+    save();
+
+    toast(t('landwater.toast_fetched', { n: merged.bodyCount }), 'success');
+    if (typeof redrawMap === 'function' && getSetting('showWaterDebugOverlay', false)) {
+      redrawMap();
+    }
+  } finally {
+    _landwaterFetchInFlight = false;
+    if (typeof renderSettings === 'function') renderSettings();
   }
 }
 
@@ -150,7 +174,7 @@ function _parseLandWaterResponse(json) {
 // SEA GEOMETRY FROM COASTLINES
 // ------------------------------------------------------------
 
-function _buildSeaGeometry(coastlineWays, nodes, bbox) {
+async function _buildSeaGeometry(coastlineWays, nodes, bbox) {
   if (!Array.isArray(coastlineWays) || coastlineWays.length === 0) return null;
   const chains = _stitchCoastlineChains(coastlineWays, nodes);
   const seaPolys = [];
@@ -169,16 +193,24 @@ function _buildSeaGeometry(coastlineWays, nodes, bbox) {
       if (sa > 0) islandPolys.push(poly);
       else        seaPolys.push(poly);
     } else {
-      const closed = _closeOpenChainAsSea(chain.coords, bbox);
-      if (closed) seaPolys.push(closed);
+      // Open chain → one OR MORE inside subchains. A chain that dips
+      // in and out of the bbox multiple times produces multiple
+      // subchains, each entry/exit pair its own sea polygon. v0.8.0
+      // kept only the longest subchain — fixed in v0.8.1.
+      const segs = _clipChainToBboxAll(chain.coords, bbox);
+      for (const seg of segs) {
+        const closed = _closeClippedSegmentAsSea(seg, bbox);
+        if (closed) seaPolys.push(closed);
+      }
     }
   }
 
-  let sea = _unionAll(seaPolys);
+  let sea = await _unionAllAsync(seaPolys);
   if (sea) {
-    for (const island of islandPolys) {
+    for (let i = 0; i < islandPolys.length; i++) {
+      if (i > 0 && i % 5 === 0) await _yield();
       try {
-        const diff = turf.difference(sea, island);
+        const diff = turf.difference(sea, islandPolys[i]);
         if (diff) sea = diff;
       } catch (e) { /* skip degenerate */ }
     }
@@ -251,21 +283,20 @@ function _signedAreaLngLat(ringLngLat) {
   return area / 2;
 }
 
-// Open coastline chain → closed sea polygon via bbox edge closure.
-// Returns turf Feature<Polygon> or null.
-function _closeOpenChainAsSea(coordsLatLng, bbox) {
-  const clipped = _clipChainToBbox(coordsLatLng, bbox);
-  if (!clipped || clipped.length < 2) return null;
-  if (!_onBboxEdge(clipped[0], bbox) || !_onBboxEdge(clipped[clipped.length - 1], bbox)) {
-    // Chain doesn't reach bbox edges on both ends. Likely the user's bbox
-    // is wider than where the coastline data ends — incomplete. Skip.
+// Closes a single inside-the-bbox subchain into a sea polygon. The
+// subchain must have both endpoints lying on a bbox edge — i.e. it
+// represents one entry/exit pair through the bbox boundary. Returns
+// a turf Feature<Polygon> or null.
+function _closeClippedSegmentAsSea(segCoords, bbox) {
+  if (!segCoords || segCoords.length < 2) return null;
+  if (!_onBboxEdge(segCoords[0], bbox) || !_onBboxEdge(segCoords[segCoords.length - 1], bbox)) {
     return null;
   }
-  const testPt = _rightSideTestPoint(clipped, bbox);
+  const testPt = _rightSideTestPoint(segCoords, bbox);
   if (!testPt) return null;
 
   for (const dir of [+1, -1]) { // try CW first, then CCW
-    const closure = _closeChainAlongBbox(clipped, bbox, dir);
+    const closure = _closeChainAlongBbox(segCoords, bbox, dir);
     if (!closure || closure.length < 4) continue;
     const ringLngLat = _toLngLatRing(closure);
     if (!ringLngLat) continue;
@@ -279,7 +310,12 @@ function _closeOpenChainAsSea(coordsLatLng, bbox) {
   return null;
 }
 
-function _clipChainToBbox(coords, bbox) {
+// Returns ALL inside-the-bbox subchains, not just the longest. A
+// coastline can dip in and out of the bbox repeatedly (think
+// archipelago, or a peninsula that runs along the bbox edge), and
+// each entry/exit pair forms its own sea polygon. v0.8.0 took only
+// the longest segment and dropped everything else — bug fix here.
+function _clipChainToBboxAll(coords, bbox) {
   const [minLat, minLng, maxLat, maxLng] = bbox;
   const inside = ([lat, lng]) =>
     lat >= minLat && lat <= maxLat && lng >= minLng && lng <= maxLng;
@@ -305,9 +341,7 @@ function _clipChainToBbox(coords, bbox) {
     }
   }
   if (cur.length >= 2) segments.push(cur);
-  if (segments.length === 0) return null;
-  segments.sort((a, b) => b.length - a.length);
-  return segments[0];
+  return segments;
 }
 
 function _segmentBboxEntry(a, b, bbox) {
@@ -359,8 +393,12 @@ function _rightSideTestPoint(coordsLatLng, bbox) {
   const dlat = b[0] - a[0], dlng = b[1] - a[1];
   const len = Math.hypot(dlat, dlng);
   if (len < 1e-15) return null;
-  // Rotate direction (dlat, dlng) by -90° in lat/lng → (dlng, -dlat) is "right".
-  const rlat = dlng / len, rlng = -dlat / len;
+  // Rotate direction (dlat, dlng) by -90° in the (lng,lat) plane → right
+  // direction = (-dlng, +dlat). v0.8.0 had this with reversed signs,
+  // which put the test point on the LAND side; the closure check then
+  // selected the polygon containing land, and "sea" came back as the
+  // entire bbox minus the small land patch. Reported in user testing.
+  const rlat = -dlng / len, rlng = dlat / len;
   const [minLat, minLng, maxLat, maxLng] = bbox;
   const stepDeg = Math.max(maxLat - minLat, maxLng - minLng) * 0.005;
   const mlat = (a[0] + b[0]) / 2;
@@ -428,7 +466,7 @@ function _closeChainAlongBbox(chainCoords, bbox, dir) {
 // INLAND WATER GEOMETRY
 // ------------------------------------------------------------
 
-function _buildInlandWaterGeometry(waterWays, waterRelations, waysById, nodes) {
+async function _buildInlandWaterGeometry(waterWays, waterRelations, waysById, nodes) {
   const polys = [];
 
   // Self-closed ways tagged natural=water — simple polygons (no holes).
@@ -482,7 +520,7 @@ function _buildInlandWaterGeometry(waterWays, waterRelations, waysById, nodes) {
     }
   }
 
-  return _unionAll(polys);
+  return await _unionAllAsync(polys);
 }
 
 function _ringCoordsLngLat(wayIds, waysById, nodes) {
@@ -532,19 +570,36 @@ function _ringCoordsLngLat(wayIds, waysById, nodes) {
 // MERGE + THRESHOLD
 // ------------------------------------------------------------
 
-function _unionAll(polyFeatures) {
+// Binary-tree union of many polygons. Linear union (turf.union in a loop)
+// is O(N²) because the accumulator's vertex count grows monotonically; a
+// tree union halves N at each level for O(N log N) total work and lets
+// us yield to the event loop between levels so the UI doesn't lock up.
+async function _unionAllAsync(polyFeatures) {
   if (!Array.isArray(polyFeatures) || polyFeatures.length === 0) return null;
-  let acc = polyFeatures[0];
-  for (let i = 1; i < polyFeatures.length; i++) {
-    try {
-      const next = turf.union(acc, polyFeatures[i]);
-      if (next) acc = next;
-    } catch (e) { /* skip; degenerate union */ }
+  if (polyFeatures.length === 1) return polyFeatures[0];
+  let current = polyFeatures.slice();
+  while (current.length > 1) {
+    const next = [];
+    for (let i = 0; i < current.length; i += 2) {
+      if (i > 0 && i % 32 === 0) await _yield();
+      if (i + 1 < current.length) {
+        try {
+          const u = turf.union(current[i], current[i + 1]);
+          next.push(u || current[i]);
+        } catch (e) {
+          next.push(current[i]);
+        }
+      } else {
+        next.push(current[i]);
+      }
+    }
+    current = next;
+    await _yield(); // breath between tree levels
   }
-  return acc;
+  return current[0];
 }
 
-function _mergeAndThreshold(seaGeom, inlandGeom, minAreaM2) {
+async function _mergeAndThreshold(seaGeom, inlandGeom, minAreaM2) {
   let merged = null;
   if (seaGeom && inlandGeom) {
     try { merged = turf.union(seaGeom, inlandGeom); } catch (e) { merged = seaGeom; }
@@ -552,6 +607,8 @@ function _mergeAndThreshold(seaGeom, inlandGeom, minAreaM2) {
     merged = seaGeom || inlandGeom || null;
   }
   if (!merged) return { geometry: null, bodyCount: 0 };
+
+  await _yield();
 
   // Split into connected components.
   const components = [];

@@ -1,3 +1,57 @@
+## 0.8.1 — Brick 12a fixes: sea-side direction sign, multi-segment chains, non-blocking fetch
+
+Three correctness + UX bugs surfaced by the first real-world test:
+
+### Sea-side direction sign was inverted
+
+`_rightSideTestPoint` rotated the chain direction the wrong way, so
+the "right side" test point landed on the LAND side. The closure
+check then picked the polygon containing land, and "sea" came back as
+the entire bbox minus the small land patch. Reported as "only a small
+bit of land is marked as such in the corner, but the entire rest of
+the bbox is marked as water."
+
+Fix: rotation in the (lng, lat) plane is `right = (-dlng, +dlat)`,
+not `(+dlng, -dlat)`. One-line sign flip.
+
+### Multi-segment chain clipping
+
+When a coastline enters and exits the bbox more than once (peninsula
+running along the edge, archipelago, big island chain), each
+entry/exit pair forms its own sea polygon. v0.8.0's
+`_clipChainToBbox` took only the LONGEST inside subchain and dropped
+the rest — meaning a chain with 4 bbox crossings would only have 1
+of its 2 sea polygons built.
+
+Fix: `_clipChainToBboxAll` returns **every** inside subchain.
+`_buildSeaGeometry` iterates them and closes each via
+`_closeClippedSegmentAsSea` independently; the union step
+naturally merges overlapping closures.
+
+### Non-blocking fetch
+
+v0.8.0's pipeline ran the turf-heavy build steps synchronously after
+the Overpass `await`, freezing the UI for the duration. For a typical
+country bbox with many lakes + complex coastlines, that's 5–30
+seconds of frozen browser.
+
+Fixes:
+- `fetchAndCacheWater` `await _yield()`s between every major stage
+  (parse → sea-build → inland-build → merge+threshold) so the UI can
+  paint and the user gets a visible busy state instead of a frozen
+  screen.
+- `_unionAll` → `_unionAllAsync` uses **binary-tree union** (halve N
+  per level instead of linear-accumulate), which both reduces total
+  work from O(N²) to O(N log N) and yields between tree levels.
+- Inland-water + island-subtraction loops also yield periodically.
+- `_landwaterFetchInFlight` flag prevents re-entrancy; the settings
+  card disables the Fetch button and swaps its label to "Fetching…"
+  (`landwater_fetching_btn`) for the duration.
+
+The fetch is still bounded by Overpass response time and turf's
+clipping cost, but the browser stays responsive and the user can
+see that something is happening.
+
 ## 0.8.0 — Brick 12a: coastline + inland-water ingest
 
 First step toward the project-wide land/water split. **No** plot UI
