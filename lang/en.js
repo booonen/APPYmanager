@@ -440,7 +440,7 @@ registerLanguage('en', 'English', {
     "cut_label": "Cut",
     "cut_vertices": "{n} vertex/vertices",
     "clear_cut": "Clear cut",
-    "edit_hint": "Click empty map to append. Click the cut (or a midpoint dot) to insert. Drag a vertex to reposition. Right-click a vertex to remove. Esc to cancel.",
+    "edit_hint": "Click empty map to extend from the nearest endpoint (dashed preview line shows where). Click a midpoint dot to insert, or drag one to insert AND position in one gesture. Drag any vertex to reposition. Right-click a vertex to remove. Esc to cancel.",
     "pieces_label": "New plots",
     "proposed_label": "Proposed values",
     "proposed_hint": "Area-proportional defaults. Use Continue → to adjust per-piece values.",

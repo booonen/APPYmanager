@@ -307,7 +307,13 @@ let _splitMap = null;
 let _splitPlotLayer = null;
 let _splitPiecesLayer = null;
 let _splitCutLayer = null;
-let _splitVertexLayer = null;
+let _splitVertexLayer = null;   // real (draggable) cut vertices
+let _splitGhostLayer = null;    // midpoint ghosts — separate layer so we
+                                // can re-render ghosts on every vertex
+                                // drag tick without disturbing the
+                                // real-vertex marker being dragged.
+let _splitHoverLayer = null;    // dashed preview line from nearest cut
+                                // endpoint to the cursor.
 let _splitMapBoundsSet = false;
 let _splitPlotCurrentMode = null;
 
@@ -332,9 +338,17 @@ function ensureSplitMap(containerId, callbacks) {
   _splitPlotLayer   = L.featureGroup().addTo(_splitMap);
   _splitPiecesLayer = L.featureGroup().addTo(_splitMap);
   _splitCutLayer    = L.featureGroup().addTo(_splitMap);
+  _splitHoverLayer  = L.featureGroup().addTo(_splitMap);
+  _splitGhostLayer  = L.featureGroup().addTo(_splitMap);
   _splitVertexLayer = L.featureGroup().addTo(_splitMap);
   if (typeof callbacks.onMapClick === 'function') {
     _splitMap.on('click', callbacks.onMapClick);
+  }
+  if (typeof callbacks.onMapMouseMove === 'function') {
+    _splitMap.on('mousemove', callbacks.onMapMouseMove);
+  }
+  if (typeof callbacks.onMapMouseOut === 'function') {
+    _splitMap.on('mouseout', callbacks.onMapMouseOut);
   }
   _splitMapBoundsSet = false;
   setTimeout(() => _splitMap && _splitMap.invalidateSize(), 50);
@@ -412,63 +426,91 @@ function drawSplitCutPath(latLngs, insideLatLngs) {
   }
 }
 
-// Draws the cut's vertex markers. Real vertices are draggable accent
-// dots; "ghost" midpoints sit between each consecutive pair of real
-// vertices as smaller, semi-transparent dots — a click on a ghost
-// inserts a real vertex at that midpoint. (Click on the cut polyline
-// also inserts; ghosts are a discoverable visual hint that you can.)
-function drawSplitVertices(latLngs, vertexCallbacks) {
+// Real cut vertices — accent dots, draggable, right-click removes.
+// On its own layer (`_splitVertexLayer`) so the layer can be frozen
+// while a marker is being dragged (rebuilding markers mid-drag would
+// destroy the dragged one). Ghost-midpoint markers live separately in
+// `_splitGhostLayer`.
+function drawSplitRealVertices(latLngs, callbacks) {
   if (!_splitMap || !_splitVertexLayer) return;
   _splitVertexLayer.clearLayers();
   if (!Array.isArray(latLngs)) return;
-  vertexCallbacks = vertexCallbacks || {};
-
+  callbacks = callbacks || {};
   for (let i = 0; i < latLngs.length; i++) {
-    const idx = i; // capture in closure
+    const idx = i;
     const m = L.marker(latLngs[i], {
       icon: L.divIcon({
-        className: 'split-vertex',
-        html: '',
-        iconSize: [12, 12],
-        iconAnchor: [6, 6],
+        className: 'split-vertex', html: '',
+        iconSize: [12, 12], iconAnchor: [6, 6],
       }),
       draggable: true,
-      bubblingMouseEvents: false, // marker clicks should NOT bubble to map.click (which would append)
+      bubblingMouseEvents: false,
     });
-    if (vertexCallbacks.onDragStart) m.on('dragstart', (e) => vertexCallbacks.onDragStart(idx, e));
-    if (vertexCallbacks.onDrag)      m.on('drag',      (e) => vertexCallbacks.onDrag(idx, e));
-    if (vertexCallbacks.onDragEnd)   m.on('dragend',   (e) => vertexCallbacks.onDragEnd(idx, e));
-    if (vertexCallbacks.onRemove)    m.on('contextmenu', (e) => vertexCallbacks.onRemove(idx, e));
+    if (callbacks.onDragStart) m.on('dragstart',   (e) => callbacks.onDragStart(idx, e));
+    if (callbacks.onDrag)      m.on('drag',        (e) => callbacks.onDrag(idx, e));
+    if (callbacks.onDragEnd)   m.on('dragend',     (e) => callbacks.onDragEnd(idx, e));
+    if (callbacks.onRemove)    m.on('contextmenu', (e) => callbacks.onRemove(idx, e));
     _splitVertexLayer.addLayer(m);
   }
+}
 
-  if (vertexCallbacks.onGhostClick && latLngs.length >= 2) {
-    for (let i = 0; i < latLngs.length - 1; i++) {
-      const segIdx = i;
-      const a = latLngs[i], b = latLngs[i + 1];
-      const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
-      const g = L.marker(mid, {
-        icon: L.divIcon({
-          className: 'split-vertex-ghost',
-          html: '',
-          iconSize: [10, 10],
-          iconAnchor: [5, 5],
-        }),
-        bubblingMouseEvents: false,
-        // Lower z-index so a real vertex (when ghosts sit near one) stays
-        // on top and remains the click target.
-        zIndexOffset: -100,
-      });
-      g.on('click', (e) => vertexCallbacks.onGhostClick(segIdx, e));
-      _splitVertexLayer.addLayer(g);
-    }
+// Ghost midpoint markers — smaller, half-transparent dots at the
+// midpoint of every consecutive-vertex pair. Two interactions:
+//   • click  → onGhostClick(segIdx, e). Insert a vertex at the midpoint
+//              (caller decides; we just signal "user picked this gap").
+//   • drag   → onGhostDragStart/Drag/DragEnd(segIdx, e). The caller
+//              inserts a new vertex at dragstart, then the same ghost
+//              icon serves as the live position indicator until release.
+// Leaflet only fires `click` when the user mouseup'd without moving past
+// its drag threshold, so click vs drag is unambiguous to the caller.
+function drawSplitGhostVertices(latLngs, callbacks) {
+  if (!_splitMap || !_splitGhostLayer) return;
+  _splitGhostLayer.clearLayers();
+  if (!Array.isArray(latLngs) || latLngs.length < 2) return;
+  callbacks = callbacks || {};
+  for (let i = 0; i < latLngs.length - 1; i++) {
+    const segIdx = i;
+    const a = latLngs[i], b = latLngs[i + 1];
+    const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+    const g = L.marker(mid, {
+      icon: L.divIcon({
+        className: 'split-vertex-ghost', html: '',
+        iconSize: [10, 10], iconAnchor: [5, 5],
+      }),
+      draggable: true,
+      bubblingMouseEvents: false,
+      // Lower z-index so a real vertex stays on top wherever they overlap.
+      zIndexOffset: -100,
+    });
+    if (callbacks.onClick)     g.on('click',     (e) => callbacks.onClick(segIdx, e));
+    if (callbacks.onDragStart) g.on('dragstart', (e) => callbacks.onDragStart(segIdx, e));
+    if (callbacks.onDrag)      g.on('drag',      (e) => callbacks.onDrag(segIdx, e));
+    if (callbacks.onDragEnd)   g.on('dragend',   (e) => callbacks.onDragEnd(segIdx, e));
+    _splitGhostLayer.addLayer(g);
   }
+}
+
+// Dashed preview line from a known endpoint to the cursor — gives the
+// user a visual cue of where the next clicked vertex will attach. The
+// `from` arg is whichever cut endpoint (start or end) is nearest to
+// the cursor; null/null clears the layer.
+function drawSplitHoverLine(fromLatLng, toLatLng) {
+  if (!_splitMap || !_splitHoverLayer) return;
+  _splitHoverLayer.clearLayers();
+  if (!fromLatLng || !toLatLng) return;
+  const line = L.polyline([fromLatLng, toLatLng], {
+    color: '#c1272d', weight: 1.5, opacity: 0.55, dashArray: '2,5',
+    interactive: false,
+  });
+  _splitHoverLayer.addLayer(line);
 }
 
 function destroySplitMap() {
   if (_splitPlotLayer)   { _splitPlotLayer.clearLayers();   _splitPlotLayer = null; }
   if (_splitPiecesLayer) { _splitPiecesLayer.clearLayers(); _splitPiecesLayer = null; }
   if (_splitCutLayer)    { _splitCutLayer.clearLayers();    _splitCutLayer = null; }
+  if (_splitHoverLayer)  { _splitHoverLayer.clearLayers();  _splitHoverLayer = null; }
+  if (_splitGhostLayer)  { _splitGhostLayer.clearLayers();  _splitGhostLayer = null; }
   if (_splitVertexLayer) { _splitVertexLayer.clearLayers(); _splitVertexLayer = null; }
   if (_splitMap) { _splitMap.remove(); _splitMap = null; }
   _splitMapBoundsSet = false;

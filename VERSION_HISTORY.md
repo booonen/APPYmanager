@@ -1,3 +1,45 @@
+## 0.7.4 — Brick 11 follow-up: draggable ghosts, hover preview, ends-aware append
+
+Three cut-editor polish items from review:
+
+### Draggable ghost midpoints
+
+v0.7.3's ghost dots inserted a vertex on click. To then move it the
+user had to click-then-grab, which felt clumsy. Ghosts are now
+`draggable: true` — dragging one inserts a vertex at the ghost's
+position on `dragstart` and the same icon trails the cursor until
+release, so insert + position happen in one gesture. A plain click
+(no drag) still inserts at the midpoint; Leaflet's marker drag
+threshold disambiguates the two, so there's no need to detect a
+"drag distance" manually.
+
+### Ghosts follow during real-vertex drag
+
+Real cut vertices and ghost midpoints now live in separate Leaflet
+layers (`_splitVertexLayer` and `_splitGhostLayer`). `_refreshSplitMap`
+decides per layer whether to freeze or redraw on each tick:
+
+- **real-vertex drag**: freeze the real-vertex layer (rebuilding it
+  would destroy the marker mid-drag) but **redraw the ghost layer**
+  so midpoint dots track the moving vertex's adjacent segments.
+- **ghost drag**: freeze both — the dragged ghost is also the live
+  position indicator, and other ghosts/real vertices haven't moved.
+- **no drag**: redraw both.
+
+### Cursor preview line
+
+`mousemove` / `mouseout` are wired through `ensureSplitMap` to a new
+`_splitHoverLayer`. While the cursor is over the map in cut phase and
+no drag is in progress, a thin dashed line connects the cut's
+**nearest endpoint** (start or end) to the cursor. Clicking empty
+map now extends from that nearest endpoint too — so the preview line
+matches the click result. `start`-end appends become `unshift`s
+when the user is closer to the start; trivial cases (≤1 vertex)
+always append.
+
+Status hint text in `plot_split.edit_hint` updated to mention the
+nearest-endpoint behaviour and the ghost-drag shortcut.
+
 ## 0.7.3 — Brick 11 follow-up: cut-end crash, ghost dots, override phase
 
 ### Crash fix

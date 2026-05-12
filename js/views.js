@@ -3499,7 +3499,9 @@ function deleteProperty(id) {
 // when the geometry changes slightly under a live drag.
 
 let _splitState = null;
-let _splitDraggingVertex = null; // truthy while a vertex marker is being dragged
+let _splitDraggingVertex = null; // truthy while a real vertex marker is being dragged
+let _splitDraggingGhost = null;  // { vertexIdx } while a ghost marker is being dragged
+let _splitHoverLatLng   = null;  // last cursor position on the split map (for the hover-preview line)
 
 function onPlotDetailSplit() {
   if (!_detailPlotId) return;
@@ -3556,8 +3558,10 @@ function _openSplitOverlay() {
   document.body.style.overflow = 'hidden';
 
   ensureSplitMap('split-map', {
-    onMapClick:     _onSplitMapClick,
-    onCutLineClick: _onSplitCutLineClick,
+    onMapClick:      _onSplitMapClick,
+    onCutLineClick:  _onSplitCutLineClick,
+    onMapMouseMove:  _onSplitMapMouseMove,
+    onMapMouseOut:   _onSplitMapMouseOut,
   });
   // Initial paint — also kicks off component mode's pieces immediately.
   _recomputeSplit();
@@ -3573,6 +3577,8 @@ function closeSplitOverlay() {
   destroySplitMap();
   _splitState = null;
   _splitDraggingVertex = null;
+  _splitDraggingGhost = null;
+  _splitHoverLatLng = null;
 }
 
 function _onSplitKeyDown(e) {
@@ -3584,8 +3590,20 @@ function _onSplitKeyDown(e) {
 function _onSplitMapClick(e) {
   if (!_splitState || _splitState.mode !== 'cut') return;
   if (_splitState.phase !== 'cut') return;
-  if (_splitDraggingVertex) return;
-  _splitState.cutLatLngs.push([e.latlng.lat, e.latlng.lng]);
+  if (_splitDraggingVertex || _splitDraggingGhost) return;
+  const verts = _splitState.cutLatLngs;
+  const click = [e.latlng.lat, e.latlng.lng];
+  // Extend from whichever endpoint is closer. Trivial cases (≤ 1 vertex)
+  // always append. This matches the hover-line preview, which always
+  // points at the nearest endpoint.
+  if (verts.length <= 1) {
+    verts.push(click);
+  } else {
+    const dStart = _pointDistance(click, verts[0]);
+    const dEnd   = _pointDistance(click, verts[verts.length - 1]);
+    if (dStart < dEnd) verts.unshift(click);
+    else               verts.push(click);
+  }
   _recomputeSplit();
 }
 
@@ -3603,9 +3621,12 @@ function _onSplitCutLineClick(e) {
   _recomputeSplit();
 }
 
+// Ghost (midpoint) markers — three callbacks. A *click* without drag
+// inserts a vertex at the midpoint position. A *drag* inserts a vertex
+// at dragstart and the same ghost icon serves as the live position
+// indicator until release, so insert + position happen in one gesture.
+
 function _onSplitGhostClick(segIdx, e) {
-  // Click on a midpoint ghost marker → insert a real vertex at the
-  // ghost's position (which is the midpoint of segIdx → segIdx+1).
   if (!_splitState || _splitState.mode !== 'cut') return;
   if (_splitState.phase !== 'cut') return;
   const verts = _splitState.cutLatLngs;
@@ -3615,6 +3636,81 @@ function _onSplitGhostClick(segIdx, e) {
   verts.splice(segIdx + 1, 0, mid);
   L.DomEvent.stopPropagation(e);
   _recomputeSplit();
+}
+
+function _onSplitGhostDragStart(segIdx, e) {
+  if (!_splitState || _splitState.mode !== 'cut') return;
+  if (_splitState.phase !== 'cut') return;
+  const verts = _splitState.cutLatLngs;
+  if (segIdx < 0 || segIdx >= verts.length - 1) return;
+  // Insert at the ghost's initial midpoint position. dragstart fires
+  // before any latlng update, so e.target.getLatLng() === midpoint.
+  const ll = e.target.getLatLng();
+  const insertedAt = segIdx + 1;
+  verts.splice(insertedAt, 0, [ll.lat, ll.lng]);
+  _splitDraggingGhost = { vertexIdx: insertedAt };
+  if (e.target._icon) e.target._icon.classList.add('dragging');
+  drawSplitHoverLine(null, null);
+}
+
+function _onSplitGhostDrag(segIdx, e) {
+  if (!_splitState || !_splitDraggingGhost) return;
+  const ll = e.target.getLatLng();
+  _splitState.cutLatLngs[_splitDraggingGhost.vertexIdx] = [ll.lat, ll.lng];
+  _recomputeSplit();
+}
+
+function _onSplitGhostDragEnd(segIdx, e) {
+  if (!_splitState || !_splitDraggingGhost) return;
+  const ll = e.target.getLatLng();
+  _splitState.cutLatLngs[_splitDraggingGhost.vertexIdx] = [ll.lat, ll.lng];
+  if (e.target._icon) e.target._icon.classList.remove('dragging');
+  _splitDraggingGhost = null;
+  _recomputeSplit();
+}
+
+function _onSplitMapMouseMove(e) {
+  if (!_splitState) return;
+  if (_splitState.phase !== 'cut' || _splitState.mode !== 'cut') {
+    _splitHoverLatLng = null;
+    drawSplitHoverLine(null, null);
+    return;
+  }
+  if (_splitDraggingVertex || _splitDraggingGhost) {
+    // Dragging provides its own visual; hide the hover line so it
+    // doesn't double up.
+    _splitHoverLatLng = null;
+    drawSplitHoverLine(null, null);
+    return;
+  }
+  _splitHoverLatLng = [e.latlng.lat, e.latlng.lng];
+  _refreshSplitHoverLine();
+}
+
+function _onSplitMapMouseOut() {
+  _splitHoverLatLng = null;
+  drawSplitHoverLine(null, null);
+}
+
+function _refreshSplitHoverLine() {
+  if (!_splitState || !_splitHoverLatLng) {
+    drawSplitHoverLine(null, null);
+    return;
+  }
+  const verts = _splitState.cutLatLngs;
+  if (verts.length === 0) {
+    drawSplitHoverLine(null, null);
+    return;
+  }
+  const start = verts[0];
+  const end   = verts[verts.length - 1];
+  let nearest = end;
+  if (verts.length > 1) {
+    const dStart = _pointDistance(_splitHoverLatLng, start);
+    const dEnd   = _pointDistance(_splitHoverLatLng, end);
+    nearest = (dStart < dEnd) ? start : end;
+  }
+  drawSplitHoverLine(nearest, _splitHoverLatLng);
 }
 
 function _onSplitVertexDragStart(i, e) {
@@ -3667,6 +3763,11 @@ function _findClosestSegment(pt, vertices) {
     if (d < bestDist) { bestDist = d; bestIdx = i; }
   }
   return bestIdx;
+}
+
+function _pointDistance(a, b) {
+  const dx = a[1] - b[1], dy = a[0] - b[0];
+  return Math.sqrt(dx * dx + dy * dy);
 }
 
 function _pointSegmentDistance(pt, a, b) {
@@ -3770,18 +3871,38 @@ function _refreshSplitMap() {
   if (haveValidPieces) drawSplitPieces(_splitState.pieces);
   else clearSplitPieces();
   drawSplitCutPath(_splitState.cutLatLngs, _splitState.cutInside);
-  // Vertex markers are only shown / editable in phase 'cut'. In phase
-  // 'override' the cut is locked; clearing the layer keeps the view clean.
-  if (_splitState.phase === 'cut' && !_splitDraggingVertex) {
-    drawSplitVertices(_splitState.cutLatLngs, {
-      onDragStart:  _onSplitVertexDragStart,
-      onDrag:       _onSplitVertexDrag,
-      onDragEnd:    _onSplitVertexDragEnd,
-      onRemove:     _onSplitVertexRemove,
-      onGhostClick: _onSplitGhostClick,
-    });
-  } else if (_splitState.phase !== 'cut') {
-    drawSplitVertices([], {});
+
+  // Real vs ghost vertices live in separate layers (map.js) so we can
+  // freeze whichever marker is being dragged while the other still
+  // tracks the live geometry:
+  //   • real-vertex drag → freeze real layer; redraw ghosts so the
+  //     midpoint dots on adjacent segments follow the vertex live.
+  //   • ghost drag       → freeze BOTH; the dragged ghost is also the
+  //     live position indicator for the just-inserted vertex.
+  //   • no drag          → redraw both.
+  // Override phase has no editable cut, so both layers clear.
+  if (_splitState.phase === 'cut') {
+    if (!_splitDraggingVertex && !_splitDraggingGhost) {
+      drawSplitRealVertices(_splitState.cutLatLngs, {
+        onDragStart: _onSplitVertexDragStart,
+        onDrag:      _onSplitVertexDrag,
+        onDragEnd:   _onSplitVertexDragEnd,
+        onRemove:    _onSplitVertexRemove,
+      });
+    }
+    if (!_splitDraggingGhost) {
+      drawSplitGhostVertices(_splitState.cutLatLngs, {
+        onClick:     _onSplitGhostClick,
+        onDragStart: _onSplitGhostDragStart,
+        onDrag:      _onSplitGhostDrag,
+        onDragEnd:   _onSplitGhostDragEnd,
+      });
+    }
+    _refreshSplitHoverLine();
+  } else {
+    drawSplitRealVertices([], {});
+    drawSplitGhostVertices([], {});
+    drawSplitHoverLine(null, null);
   }
 }
 

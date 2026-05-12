@@ -1041,16 +1041,18 @@ summary.map-toolbar-control:hover {
 .split-vertex.dragging { cursor: grabbing; }
 
 /* Ghost (midpoint) markers — show that you can insert a vertex between
-   two existing ones. Click inserts at the ghost's position. */
+   two existing ones. Click inserts at the midpoint; drag inserts at
+   dragstart and the same icon trails the cursor until release. */
 .split-vertex-ghost {
   background: rgba(193,39,45,0.45);
   border: 1.5px solid rgba(255,255,255,0.7);
   border-radius: 50%;
   width: 10px !important; height: 10px !important;
   box-shadow: 0 0 0 1px rgba(0,0,0,0.35);
-  cursor: copy;
+  cursor: grab;
 }
 .split-vertex-ghost:hover {
   background: var(--accent);
   border-color: #fff;
 }
+.split-vertex-ghost.dragging { cursor: grabbing; }
