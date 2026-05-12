@@ -1,3 +1,23 @@
+## 0.7.1 — Sliver fix at cut-line intersection points
+
+Cutting a plot then viewing a parent boundary that contains both new
+pieces left a hairline sliver visible along the cut. Root cause:
+`turf.lineSliceAlong` rebuilds each slice endpoint independently from
+the line's parameterisation, so the arc's endpoint at the q crossing
+and the cut's endpoint at q disagreed by ~1e-12. piece1's ring side
+landed at q-via-ring while its cut side landed at q-via-cut — a tiny
+triangle either retained or removed depending on orientation. Leaflet
+rendering and `plotArea` tolerated the mismatch fine, but
+`turf.union` (run by `resolveBoundaryGeometry` when a parent
+boundary dissolves its members) latched onto it and produced a
+visible artefact along the seam.
+
+Fix in `computeCutLineSplit`: after slicing, force both arcs' AND
+the cut's endpoints to the SAME canonical `p.pt` / `q.pt` values
+(the original intersection coordinates from `turf.lineIntersect`).
+The two pieces now share pixel-identical coords along the cut, and
+the parent boundary dissolves cleanly.
+
 ## 0.7.0 — Brick 11: manual plot split editor (Phase 4 opens)
 
 Phase 4 (plot operations) kicks off. A new `Split…` button on the plot

@@ -122,13 +122,35 @@ function computeCutLineSplit(plot, cutLatLngs) {
   const arcAB = _ringSliceForward(ringLine, p.ringT, q.ringT, ringLen);
   const arcBA = _ringSliceForward(ringLine, q.ringT, p.ringT, ringLen);
   if (!arcAB || !arcBA) return { pieces: [], error: 'cut_slice_failed' };
+  const arcABCoords = arcAB.geometry.coordinates;
+  const arcBACoords = arcBA.geometry.coordinates;
+
+  // **Snap intersection endpoints to canonical coords.** turf.lineSliceAlong
+  // rebuilds each endpoint independently from the line's parameterisation,
+  // so `arcAB.coords[end]` and `cutInside.coords[end]` both *intend* to be
+  // q.pt but disagree by ~1e-12. Without correction, piece1's ring-side
+  // hits q-via-ring while its cut-side hits q-via-cut — a tiny sliver
+  // triangle at each crossing. Most consumers (Leaflet, area math)
+  // tolerate it, but turf.union (run when a parent boundary re-dissolves
+  // piece1+piece2) latches onto the mismatch and leaves the sliver as a
+  // visible boundary artefact. Forcing both ends of both arcs AND both
+  // ends of the cut to the SAME canonical xPt value eliminates the
+  // disagreement at source.
+  const pCoord = [p.pt[0], p.pt[1]];
+  const qCoord = [q.pt[0], q.pt[1]];
+  cutCoordsAtoB[0]                      = pCoord;
+  cutCoordsAtoB[cutCoordsAtoB.length-1] = qCoord;
+  arcABCoords[0]                        = pCoord;
+  arcABCoords[arcABCoords.length-1]     = qCoord;
+  arcBACoords[0]                        = qCoord;
+  arcBACoords[arcBACoords.length-1]     = pCoord;
 
   // Piece 1 outer = arcAB (p→q along ring) + reversed cut (q→p along cut)
   // Piece 2 outer = arcBA (q→p along ring) + cut (p→q along cut)
   // Each is a closed ring traversed in one direction with no duplicate
   // endpoint; storeSubdivisionGeometry will self-close on write.
-  const piece1Outer = _joinRingFragments(arcAB.geometry.coordinates, cutCoordsAtoB.slice().reverse());
-  const piece2Outer = _joinRingFragments(arcBA.geometry.coordinates, cutCoordsAtoB);
+  const piece1Outer = _joinRingFragments(arcABCoords, cutCoordsAtoB.slice().reverse());
+  const piece2Outer = _joinRingFragments(arcBACoords, cutCoordsAtoB);
 
   // Convert back to [lat, lon] for our internal coord system.
   const piece1OuterLatLng = piece1Outer.map(([lon, lat]) => [lat, lon]);
