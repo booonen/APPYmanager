@@ -775,7 +775,24 @@ they come up; the plan is a living document.
   one modal; `← Back` preserves the cut. Map-side helpers
   (`ensureSplitMap`, `drawSplitPlot`, `drawSplitCut`,
   `drawSplitPieces`, `destroySplitMap`) mirror the detail-map
-  pattern. L10n under `plot_split.*`.
+  pattern. L10n under `plot_split.*`. **v0.7.1 fix:** snap cut/arc
+  endpoints to the canonical `xPts` from `turf.lineIntersect` so
+  the two pieces share pixel-identical coords along the seam (else
+  `turf.union` later leaves a 1e-12-tall sliver visible in parent
+  boundary geometry). **v0.7.2 overhaul:** modal replaced with a
+  full-viewport takeover (`#split-overlay` in `appymanager.html`,
+  `.split-overlay*` CSS) so the map gets ~the whole screen; single
+  live view replaces the two-step flow (every cut change
+  immediately recomputes pieces + redistribution); cut polyline is
+  interactive — click empty map appends, click on the cut polyline
+  inserts at the closest segment, drag a vertex marker
+  repositions, right-click removes; `manualOverrides` Set keeps
+  user edits to names + redistribution cells stable across live
+  recomputes; map.js gained `drawSplitCutPath` + `drawSplitVertices`
+  + `clearSplitPieces` (replacing `drawSplitCut`), and a
+  `_splitMapBoundsSet` flag so `fitBounds` runs once per overlay
+  open. `interactive: false` on the pieces polygons routes clicks
+  through to the cut polyline / map.
 
 ### Phase 3 — Properties — **complete** (2026-05-11)
 

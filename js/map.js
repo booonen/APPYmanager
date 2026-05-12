@@ -291,21 +291,30 @@ function destroyDetailMap() {
 }
 
 // ============================================================
-// SPLIT MAP (inset, inside the plot-split modal — Brick 11)
+// SPLIT MAP (inside the plot-split overlay — Brick 11)
 // ============================================================
-// Three layers stacked: the plot's polygon (faded baseline), the cut
-// polyline + vertex markers (drawn while the user is clicking), and
-// the proposed pieces (rendered in step 2). Each layer can be redrawn
-// independently so the plot stays visible while the cut grows.
+// Four stacked layers so we can refresh each independently while the
+// user is editing the cut live (v0.7.2):
+//   plot     — baseline polygon (faded once pieces draw)
+//   pieces   — proposed split pieces (filled, distinct colors)
+//   cutPath  — the cut polyline; in-polygon portion overlaid solid
+//   vertices — draggable vertex markers, real cut vertices only
+//
+// `_splitMapBoundsSet` ensures fitBounds happens exactly once per
+// overlay open. Otherwise the map would re-centre on every cut tweak.
 
 let _splitMap = null;
 let _splitPlotLayer = null;
-let _splitCutLayer = null;
 let _splitPiecesLayer = null;
+let _splitCutLayer = null;
+let _splitVertexLayer = null;
+let _splitMapBoundsSet = false;
+let _splitPlotCurrentMode = null;
 
 const _SPLIT_PIECE_COLORS = ['#c1272d', '#0d8a8a', '#b58300', '#5a4ea3', '#3f7e3f', '#8a4c8a'];
 
-function ensureSplitMap(containerId, onMapClick) {
+function ensureSplitMap(containerId, callbacks) {
+  callbacks = callbacks || {};
   const el = document.getElementById(containerId);
   if (!el) return null;
   if (_splitMap) {
@@ -315,74 +324,127 @@ function ensureSplitMap(containerId, onMapClick) {
   _splitMap = L.map(el, {
     center: [0, 0], zoom: 1, minZoom: 1, maxZoom: 19,
     zoomControl: true, attributionControl: false,
-    // Disable Leaflet's default double-click-to-zoom so a fast double
-    // click doesn't yank the user mid-cut.
     doubleClickZoom: false,
   });
   _splitMap._appyContainer = el;
+  _splitMap._appyCallbacks = callbacks;
   L.tileLayer(OGF_TILE_URL, { maxZoom: 19 }).addTo(_splitMap);
   _splitPlotLayer   = L.featureGroup().addTo(_splitMap);
-  _splitCutLayer    = L.featureGroup().addTo(_splitMap);
   _splitPiecesLayer = L.featureGroup().addTo(_splitMap);
-  if (typeof onMapClick === 'function') _splitMap.on('click', onMapClick);
+  _splitCutLayer    = L.featureGroup().addTo(_splitMap);
+  _splitVertexLayer = L.featureGroup().addTo(_splitMap);
+  if (typeof callbacks.onMapClick === 'function') {
+    _splitMap.on('click', callbacks.onMapClick);
+  }
+  _splitMapBoundsSet = false;
   setTimeout(() => _splitMap && _splitMap.invalidateSize(), 50);
   return _splitMap;
 }
 
-function drawSplitPlot(plot) {
+// mode: 'normal' (full styling) or 'faded' (outline-only — when pieces
+// are drawn on top, the baseline is just there as a reference).
+// Skips when the mode hasn't changed — drawSplitPlot is called on every
+// cut edit, and the polygon itself never moves; the only reason to
+// redraw is to flip styles when pieces appear / disappear.
+function drawSplitPlot(plot, mode) {
   if (!_splitMap || !_splitPlotLayer) return;
+  if (_splitPlotCurrentMode === mode && _splitPlotLayer.getLayers().length > 0) return;
   _splitPlotLayer.clearLayers();
   const geo = resolvePlotGeometry(plot);
   if (!geo.polygons.length) return;
-  const poly = L.polygon(geo.polygons, plotPolygonStyle(false));
+  const style = mode === 'faded'
+    ? { color: '#475569', weight: 1, fillColor: '#475569', fillOpacity: 0.04, opacity: 0.45 }
+    : plotPolygonStyle(false);
+  const poly = L.polygon(geo.polygons, style);
   _splitPlotLayer.addLayer(poly);
-  _splitMap.fitBounds(poly.getBounds(), { padding: [12, 12] });
-}
-
-function drawSplitCut(latLngs) {
-  if (!_splitMap || !_splitCutLayer) return;
-  _splitCutLayer.clearLayers();
-  if (!Array.isArray(latLngs) || latLngs.length === 0) return;
-  if (latLngs.length >= 2) {
-    const line = L.polyline(latLngs, { color: '#c1272d', weight: 2.5, dashArray: '5,4' });
-    _splitCutLayer.addLayer(line);
-  }
-  for (const ll of latLngs) {
-    const m = L.circleMarker(ll, {
-      radius: 4, color: '#c1272d', weight: 2, fillColor: '#c1272d', fillOpacity: 1
-    });
-    _splitCutLayer.addLayer(m);
+  _splitPlotCurrentMode = mode;
+  if (!_splitMapBoundsSet) {
+    _splitMap.fitBounds(poly.getBounds(), { padding: [40, 40] });
+    _splitMapBoundsSet = true;
   }
 }
 
-function drawSplitPieces(pieces, cutInsideLatLngs) {
+function clearSplitPieces() {
+  if (_splitPiecesLayer) _splitPiecesLayer.clearLayers();
+}
+
+function drawSplitPieces(pieces) {
   if (!_splitMap || !_splitPiecesLayer) return;
   _splitPiecesLayer.clearLayers();
-  _splitPlotLayer && _splitPlotLayer.clearLayers();
-  _splitCutLayer  && _splitCutLayer.clearLayers();
-  const all = L.latLngBounds([]);
   pieces.forEach((piece, i) => {
     const color = _SPLIT_PIECE_COLORS[i % _SPLIT_PIECE_COLORS.length];
     const polyLatLngs = [piece.outer, ...(piece.holes || [])];
     const poly = L.polygon(polyLatLngs, {
       color, weight: 2, fillColor: color, fillOpacity: 0.30,
+      interactive: false, // don't intercept clicks meant for the cut polyline / map
     });
     _splitPiecesLayer.addLayer(poly);
-    all.extend(poly.getBounds());
   });
-  // Cut line, if known (cut mode only), drawn on top so the seam is visible.
-  if (Array.isArray(cutInsideLatLngs) && cutInsideLatLngs.length >= 2) {
-    const seam = L.polyline(cutInsideLatLngs, { color: '#0f1117', weight: 1, dashArray: '3,3' });
-    _splitPiecesLayer.addLayer(seam);
+}
+
+// The cut path has two visual layers:
+//  - the user-drawn polyline (dashed, full length)
+//  - the in-polygon portion (solid, when valid)
+// Both are clickable; clicking either inserts a vertex between the
+// nearest two user-drawn vertices.
+function drawSplitCutPath(latLngs, insideLatLngs) {
+  if (!_splitMap || !_splitCutLayer) return;
+  _splitCutLayer.clearLayers();
+  if (!Array.isArray(latLngs) || latLngs.length < 2) return;
+  const cbs = _splitMap._appyCallbacks || {};
+
+  const dashed = L.polyline(latLngs, {
+    color: '#c1272d', weight: 2, opacity: 0.55, dashArray: '5,4',
+  });
+  if (typeof cbs.onCutLineClick === 'function') {
+    dashed.on('click', cbs.onCutLineClick);
   }
-  if (all.isValid()) _splitMap.fitBounds(all, { padding: [12, 12] });
+  _splitCutLayer.addLayer(dashed);
+
+  if (Array.isArray(insideLatLngs) && insideLatLngs.length >= 2) {
+    const inside = L.polyline(insideLatLngs, {
+      color: '#c1272d', weight: 3, opacity: 1,
+    });
+    if (typeof cbs.onCutLineClick === 'function') {
+      inside.on('click', cbs.onCutLineClick);
+    }
+    _splitCutLayer.addLayer(inside);
+  }
+}
+
+function drawSplitVertices(latLngs, vertexCallbacks) {
+  if (!_splitMap || !_splitVertexLayer) return;
+  _splitVertexLayer.clearLayers();
+  if (!Array.isArray(latLngs)) return;
+  vertexCallbacks = vertexCallbacks || {};
+  for (let i = 0; i < latLngs.length; i++) {
+    const idx = i; // capture in closure
+    const m = L.marker(latLngs[i], {
+      icon: L.divIcon({
+        className: 'split-vertex',
+        html: '',
+        iconSize: [12, 12],
+        iconAnchor: [6, 6],
+      }),
+      draggable: true,
+      bubblingMouseEvents: false, // marker clicks should NOT bubble to map.click (which would append)
+    });
+    if (vertexCallbacks.onDragStart) m.on('dragstart', (e) => vertexCallbacks.onDragStart(idx, e));
+    if (vertexCallbacks.onDrag)      m.on('drag',      (e) => vertexCallbacks.onDrag(idx, e));
+    if (vertexCallbacks.onDragEnd)   m.on('dragend',   (e) => vertexCallbacks.onDragEnd(idx, e));
+    if (vertexCallbacks.onRemove)    m.on('contextmenu', (e) => vertexCallbacks.onRemove(idx, e));
+    _splitVertexLayer.addLayer(m);
+  }
 }
 
 function destroySplitMap() {
   if (_splitPlotLayer)   { _splitPlotLayer.clearLayers();   _splitPlotLayer = null; }
-  if (_splitCutLayer)    { _splitCutLayer.clearLayers();    _splitCutLayer = null; }
   if (_splitPiecesLayer) { _splitPiecesLayer.clearLayers(); _splitPiecesLayer = null; }
+  if (_splitCutLayer)    { _splitCutLayer.clearLayers();    _splitCutLayer = null; }
+  if (_splitVertexLayer) { _splitVertexLayer.clearLayers(); _splitVertexLayer = null; }
   if (_splitMap) { _splitMap.remove(); _splitMap = null; }
+  _splitMapBoundsSet = false;
+  _splitPlotCurrentMode = null;
 }
 
 // ============================================================

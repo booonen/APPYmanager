@@ -3474,206 +3474,383 @@ function deleteProperty(id) {
 }
 
 // ============================================================
-// PLOT SPLIT MODAL (Brick 11)
+// PLOT SPLIT OVERLAY (Brick 11)
 // ============================================================
-// Two-step flow inside a single modal:
-//   step 1 — INPUT.   Cut mode: user clicks vertices on the inset map.
-//                     Component mode: just a confirmation step (no
-//                     drawing needed; the geometry is implicit).
-//   step 2 — PREVIEW. Map shows the pieces in distinct colours; per-piece
-//                     name + area read-out; property redistribution table
-//                     seeded from proposePlotSplitValues. User can override
-//                     any cell. Confirm executes; Back returns to step 1
-//                     (preserving the cut).
+// Full-viewport takeover (#split-overlay in appymanager.html) — NOT a
+// modal — so the map fills the screen. Layout: header bar on top with
+// Cancel / title / Confirm; below it a 2-column grid (map on the
+// left, info panel on the right). All cut edits trigger an immediate
+// recompute; the panel updates live. No separate preview step.
 //
-// Mode is picked automatically: contiguous plot → 'cut'; non-contiguous
-// → 'component'. Cut-line splits of non-contiguous plots are out of
-// scope for Brick 11 (user can split into pieces first, then re-open
-// the modal on a piece).
+// Cut editing (cut mode, contiguous plots):
+//   • click empty map        → append a vertex
+//   • click on cut polyline  → insert a vertex at the click position
+//   • drag a vertex marker   → reposition live
+//   • right-click a vertex   → remove
+//   • clear-cut button       → wipes the cut
+//   • Esc                    → close overlay (same as Cancel)
+//
+// Mode is auto-picked by plot geometry: contiguous → 'cut' (needs
+// drawing); non-contiguous → 'component' (each polygon becomes its
+// own piece; no drawing needed, preview shows immediately).
+//
+// User overrides on names + redistribution cells are tracked in
+// `manualOverrides` so subsequent recomputes don't blow them away
+// when the geometry changes slightly under a live drag.
 
 let _splitState = null;
+let _splitDraggingVertex = null; // truthy while a vertex marker is being dragged
 
 function onPlotDetailSplit() {
   if (!_detailPlotId) return;
   const plot = data.plots.find(p => p.id === _detailPlotId);
   if (!plot) return;
-  // Capture any pending name/notes edits before tearing down the detail modal.
-  onPlotDetailSave();
-  destroyDetailMap();
-  _splitState = {
-    plotId:        plot.id,
-    mode:          isPlotNonContiguous(plot) ? 'component' : 'cut',
-    step:          1,
-    cutLatLngs:    [],
-    pieces:        null,
-    cutInside:     null,
-    names:         [],
-    propertyValues: [],
-  };
-  _openSplitStep1();
+  // closePlotDetail captures pending edits, nulls _detailPlotId,
+  // tears down the detail map, and closes the modal — exactly what
+  // we want before opening the takeover overlay.
+  closePlotDetail();
+  _initSplitState(plot);
+  _openSplitOverlay();
 }
 
-function closeSplitModal() {
-  _splitState = null;
-  destroySplitMap();
-  closeModal();
+function _initSplitState(plot) {
+  _splitState = {
+    plotId:          plot.id,
+    mode:            isPlotNonContiguous(plot) ? 'component' : 'cut',
+    cutLatLngs:      [],
+    pieces:          null,
+    cutInside:       null,
+    names:           [],
+    propertyValues:  [],
+    manualOverrides: new Set(), // "pieceIdx:schemaId" — value cells the user has edited
+    manualNames:     new Set(), // pieceIdx — names the user has edited
+    status:          null,
+    error:           null,
+  };
 }
 
 function _splitPlot() {
   return _splitState ? data.plots.find(p => p.id === _splitState.plotId) : null;
 }
 
-// ----- STEP 1 ----------------------------------------------------------
+// ----- Overlay open / close --------------------------------------------
 
-function _openSplitStep1() {
-  const state = _splitState;
+function _openSplitOverlay() {
   const plot = _splitPlot();
-  if (!plot) { closeSplitModal(); return; }
+  if (!plot) return;
+  const overlay = document.getElementById('split-overlay');
+  if (!overlay) return;
 
-  const plotName = plot.name || t('plots.unnamed');
+  document.getElementById('split-title').textContent = t('plot_split.title', {
+    name: plot.name || t('plots.unnamed')
+  });
+  document.getElementById('split-panel').innerHTML = '';
+  document.getElementById('split-status').textContent = '';
+  document.getElementById('split-status').className = 'split-overlay-status';
 
-  let bodyHtml;
-  if (state.mode === 'cut') {
-    bodyHtml = `
-      <div class="split-step">
-        <div class="split-hint">${t('plot_split.cut_hint')}</div>
-        <div id="split-map" class="split-map"></div>
-        <div class="split-status">
-          <span id="split-cut-vertex-count">${t('plot_split.cut_vertices', { n: 0 })}</span>
-          <button class="btn btn-sm" id="split-clear-btn" onclick="onSplitClearCut()" disabled>${t('plot_split.clear_cut')}</button>
-        </div>
-      </div>`;
-  } else {
-    const geo = resolvePlotGeometry(plot);
-    bodyHtml = `
-      <div class="split-step">
-        <div class="split-hint">${t('plot_split.component_hint', { n: geo.polygons.length })}</div>
-        <div id="split-map" class="split-map"></div>
-      </div>`;
-  }
+  overlay.classList.add('open');
+  document.body.style.overflow = 'hidden';
 
-  const previewDisabled = state.mode === 'cut' && state.cutLatLngs.length < 2;
-  openModal(t('plot_split.title', { name: plotName }), bodyHtml, `
-    <button class="btn" onclick="closeSplitModal()">${t('btn.cancel')}</button>
-    <button class="btn btn-primary" id="split-preview-btn" onclick="onSplitPreview()"${previewDisabled ? ' disabled' : ''}>${t('plot_split.preview_btn')}</button>
-  `);
+  ensureSplitMap('split-map', {
+    onMapClick:     _onSplitMapClick,
+    onCutLineClick: _onSplitCutLineClick,
+  });
+  // Initial paint — also kicks off component mode's pieces immediately.
+  _recomputeSplit();
 
-  const modalEl = document.getElementById('modal');
-  if (modalEl) modalEl.style.width = '820px';
-
-  ensureSplitMap('split-map', state.mode === 'cut' ? _onSplitMapClick : null);
-  drawSplitPlot(plot);
-  if (state.mode === 'cut' && state.cutLatLngs.length > 0) {
-    drawSplitCut(state.cutLatLngs);
-    _refreshSplitStep1Status();
-  }
+  document.addEventListener('keydown', _onSplitKeyDown);
 }
 
+function closeSplitOverlay() {
+  const overlay = document.getElementById('split-overlay');
+  if (overlay) overlay.classList.remove('open');
+  document.body.style.overflow = '';
+  document.removeEventListener('keydown', _onSplitKeyDown);
+  destroySplitMap();
+  _splitState = null;
+  _splitDraggingVertex = null;
+}
+
+function _onSplitKeyDown(e) {
+  if (e.key === 'Escape') closeSplitOverlay();
+}
+
+// ----- Cut editing handlers --------------------------------------------
+
 function _onSplitMapClick(e) {
-  if (!_splitState || _splitState.mode !== 'cut' || _splitState.step !== 1) return;
+  if (!_splitState || _splitState.mode !== 'cut') return;
+  if (_splitDraggingVertex) return;
   _splitState.cutLatLngs.push([e.latlng.lat, e.latlng.lng]);
-  drawSplitCut(_splitState.cutLatLngs);
-  _refreshSplitStep1Status();
+  _recomputeSplit();
+}
+
+function _onSplitCutLineClick(e) {
+  // Click on the cut polyline → insert a vertex at the closest segment.
+  if (!_splitState || _splitState.mode !== 'cut') return;
+  const verts = _splitState.cutLatLngs;
+  if (verts.length < 2) return;
+  const click = [e.latlng.lat, e.latlng.lng];
+  const idx = _findClosestSegment(click, verts);
+  if (idx < 0) return;
+  verts.splice(idx + 1, 0, click);
+  // Bump existing override keys after the insertion point so they
+  // continue to refer to the same pieces.
+  _shiftManualOverrides(idx + 1, +1);
+  L.DomEvent.stopPropagation(e);
+  _recomputeSplit();
+}
+
+function _onSplitVertexDragStart(i, e) {
+  _splitDraggingVertex = e.target;
+  if (e.target._icon) e.target._icon.classList.add('dragging');
+}
+
+function _onSplitVertexDrag(i, e) {
+  if (!_splitState) return;
+  _splitState.cutLatLngs[i] = [e.latlng.lat, e.latlng.lng];
+  _recomputeSplit();
+}
+
+function _onSplitVertexDragEnd(i, e) {
+  if (!_splitState) return;
+  _splitState.cutLatLngs[i] = [e.latlng.lat, e.latlng.lng];
+  if (e.target._icon) e.target._icon.classList.remove('dragging');
+  _splitDraggingVertex = null;
+  _recomputeSplit();
+}
+
+function _onSplitVertexRemove(i, e) {
+  if (!_splitState) return;
+  L.DomEvent.stopPropagation(e);
+  L.DomEvent.preventDefault(e);
+  if (i < 0 || i >= _splitState.cutLatLngs.length) return;
+  _splitState.cutLatLngs.splice(i, 1);
+  _recomputeSplit();
 }
 
 function onSplitClearCut() {
   if (!_splitState) return;
   _splitState.cutLatLngs = [];
-  drawSplitCut([]);
-  _refreshSplitStep1Status();
+  _recomputeSplit();
 }
 
-function _refreshSplitStep1Status() {
-  if (!_splitState) return;
-  const n = _splitState.cutLatLngs.length;
-  const countEl = document.getElementById('split-cut-vertex-count');
-  if (countEl) countEl.textContent = t('plot_split.cut_vertices', { n });
-  const clearBtn = document.getElementById('split-clear-btn');
-  if (clearBtn) clearBtn.disabled = n === 0;
-  const previewBtn = document.getElementById('split-preview-btn');
-  if (previewBtn) previewBtn.disabled = n < 2;
+// ----- Geometry helpers ------------------------------------------------
+
+function _findClosestSegment(pt, vertices) {
+  let bestIdx = -1, bestDist = Infinity;
+  for (let i = 0; i < vertices.length - 1; i++) {
+    const d = _pointSegmentDistance(pt, vertices[i], vertices[i + 1]);
+    if (d < bestDist) { bestDist = d; bestIdx = i; }
+  }
+  return bestIdx;
 }
 
-// ----- STEP 1 → 2 ------------------------------------------------------
+function _pointSegmentDistance(pt, a, b) {
+  // Euclidean in lat/lon — good enough for picking which segment
+  // a click is closest to. (Real distance not needed; ranking is.)
+  const dx = b[1] - a[1], dy = b[0] - a[0];
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq < 1e-20) {
+    const dx0 = pt[1] - a[1], dy0 = pt[0] - a[0];
+    return Math.sqrt(dx0 * dx0 + dy0 * dy0);
+  }
+  const t = Math.max(0, Math.min(1, ((pt[1] - a[1]) * dx + (pt[0] - a[0]) * dy) / lenSq));
+  const cx = a[1] + t * dx, cy = a[0] + t * dy;
+  const ddx = pt[1] - cx, ddy = pt[0] - cy;
+  return Math.sqrt(ddx * ddx + ddy * ddy);
+}
 
-function onSplitPreview() {
-  if (!_splitState) return;
+// ----- Core update loop -------------------------------------------------
+
+function _recomputeSplit() {
   const plot = _splitPlot();
   if (!plot) return;
 
   let result;
   if (_splitState.mode === 'cut') {
-    result = computeCutLineSplit(plot, _splitState.cutLatLngs);
+    if (_splitState.cutLatLngs.length < 2) {
+      result = { pieces: [], error: 'cut_too_short' };
+    } else {
+      result = computeCutLineSplit(plot, _splitState.cutLatLngs);
+    }
   } else {
     result = computeComponentSplit(plot);
   }
-  if (!result.pieces || result.pieces.length < 2) {
-    toast(t('plot_split.error_' + (result.error || 'unknown')), 'error');
-    return;
+
+  if (result.pieces && result.pieces.length >= 2) {
+    const oldPieceCount = _splitState.pieces ? _splitState.pieces.length : 0;
+    _splitState.pieces    = result.pieces;
+    _splitState.cutInside = result.cutInside || null;
+    _splitState.status    = 'valid';
+    _splitState.error     = null;
+
+    // Reset names + overrides when piece count changes (can only happen
+    // for component splits; cut splits always produce 2 pieces).
+    if (oldPieceCount !== result.pieces.length) {
+      _splitState.names           = _defaultPieceNames(plot, result.pieces.length);
+      _splitState.propertyValues  = result.pieces.map(() => ({}));
+      _splitState.manualOverrides = new Set();
+      _splitState.manualNames     = new Set();
+    } else if (_splitState.names.length === 0) {
+      _splitState.names = _defaultPieceNames(plot, result.pieces.length);
+    }
+
+    // Re-seed non-overridden cells with proposed values. Overridden
+    // cells keep whatever the user typed.
+    const proposed = proposePlotSplitValues(plot, result.pieces.map(p => p.area || 0));
+    for (let i = 0; i < result.pieces.length; i++) {
+      const obj = _splitState.propertyValues[i] = _splitState.propertyValues[i] || {};
+      // Wipe non-overridden entries first (so e.g. a deleted parent
+      // schema doesn't linger on pieces).
+      for (const schemaId of Object.keys(obj)) {
+        if (!_splitState.manualOverrides.has(`${i}:${schemaId}`) && !(schemaId in proposed)) {
+          delete obj[schemaId];
+        }
+      }
+      for (const [schemaId, vals] of Object.entries(proposed)) {
+        if (vals[i] === undefined) continue;
+        if (_splitState.manualOverrides.has(`${i}:${schemaId}`)) continue;
+        obj[schemaId] = vals[i];
+      }
+    }
+  } else {
+    _splitState.pieces    = null;
+    _splitState.cutInside = null;
+    _splitState.status    = 'invalid';
+    _splitState.error     = result.error || 'unknown';
   }
 
-  _splitState.pieces    = result.pieces;
-  _splitState.cutInside = result.cutInside || null;
-
-  const baseName = plot.name || t('plots.unnamed');
-  _splitState.names = result.pieces.map((_, i) => `${baseName} (${i + 1})`);
-
-  const proposed = proposePlotSplitValues(plot, result.pieces.map(p => p.area || 0));
-  _splitState.propertyValues = result.pieces.map((_, i) => {
-    const obj = {};
-    for (const [schemaId, values] of Object.entries(proposed)) {
-      if (values[i] !== undefined) obj[schemaId] = values[i];
-    }
-    return obj;
-  });
-
-  _splitState.step = 2;
-  _openSplitStep2();
+  _refreshSplitMap();
+  _refreshSplitPanel();
+  _refreshSplitConfirmBtn();
 }
 
-// ----- STEP 2 ----------------------------------------------------------
+function _defaultPieceNames(plot, n) {
+  const base = plot.name || t('plots.unnamed');
+  return Array.from({ length: n }, (_, i) => `${base} (${i + 1})`);
+}
 
-function _openSplitStep2() {
-  const state = _splitState;
+// When a vertex is inserted at idx, override keys for pieces ≥ idx
+// don't need updating (there's only ever 2 pieces in cut mode, and
+// component mode doesn't insert). This is a placeholder for future
+// per-piece override stability; today it's a no-op.
+function _shiftManualOverrides(_atIdx, _delta) { /* reserved */ }
+
+// ----- Map refresh -----------------------------------------------------
+
+function _refreshSplitMap() {
   const plot = _splitPlot();
-  if (!plot) { closeSplitModal(); return; }
+  if (!plot) return;
+  const haveValidPieces = !!_splitState.pieces;
+  drawSplitPlot(plot, haveValidPieces ? 'faded' : 'normal');
+  if (haveValidPieces) drawSplitPieces(_splitState.pieces);
+  else clearSplitPieces();
+  drawSplitCutPath(_splitState.cutLatLngs, _splitState.cutInside);
+  if (!_splitDraggingVertex) {
+    drawSplitVertices(_splitState.cutLatLngs, {
+      onDragStart: _onSplitVertexDragStart,
+      onDrag:      _onSplitVertexDrag,
+      onDragEnd:   _onSplitVertexDragEnd,
+      onRemove:    _onSplitVertexRemove,
+    });
+  }
+}
 
-  const plotName = plot.name || t('plots.unnamed');
+// ----- Panel refresh ---------------------------------------------------
 
-  const piecesHtml = state.pieces.map((piece, i) => {
-    const color = _SPLIT_PIECE_COLORS[i % _SPLIT_PIECE_COLORS.length];
-    return `
-      <div class="split-piece-row">
-        <span class="split-piece-swatch" style="background:${color}"></span>
-        <input type="text" class="split-piece-name" value="${esc(state.names[i] || '')}" data-piece-idx="${i}" oninput="onSplitNameInput(this)">
-        <span class="split-piece-area mono">${esc(formatArea(piece.area || 0))}</span>
+function _refreshSplitPanel() {
+  const panel = document.getElementById('split-panel');
+  if (!panel) return;
+  const plot = _splitPlot();
+  if (!plot) return;
+  const valid = _splitState.status === 'valid';
+
+  let html = '';
+
+  if (valid) {
+    // Pieces (names + areas)
+    const piecesHtml = _splitState.pieces.map((piece, i) => {
+      const color = _SPLIT_PIECE_COLORS[i % _SPLIT_PIECE_COLORS.length];
+      return `
+        <div class="split-overlay-piece-row">
+          <span class="split-overlay-piece-swatch" style="background:${color}"></span>
+          <input type="text" class="split-overlay-piece-name" value="${esc(_splitState.names[i] || '')}" data-piece-idx="${i}" oninput="onSplitNameInput(this)">
+          <span class="split-overlay-piece-area mono">${esc(formatArea(piece.area || 0))}</span>
+        </div>
+      `;
+    }).join('');
+    html += `
+      <div class="split-overlay-section">
+        <div class="split-overlay-section-label">${t('plot_split.pieces_label')}</div>
+        <div class="split-overlay-pieces-list">${piecesHtml}</div>
       </div>
     `;
-  }).join('');
 
-  const tableHtml = _renderSplitRedistributionTable(plot, state);
-  const sectionLabel = (text) => `<div class="split-section-label">${text}</div>`;
+    // Redistribution table
+    const tableHtml = _renderSplitRedistributionTable(plot, _splitState);
+    if (tableHtml) {
+      html += `
+        <div class="split-overlay-section">
+          <div class="split-overlay-section-label">${t('plot_split.redistribute_label')}</div>
+          ${tableHtml}
+        </div>
+      `;
+    }
+  } else if (_splitState.error) {
+    // Status warning when the cut isn't usable yet
+    const code = _splitState.error;
+    const kind = (code === 'cut_too_short' || code === 'cut_does_not_cross') ? 'warn' : 'error';
+    html += `
+      <div class="split-overlay-section">
+        <div class="split-overlay-${kind}">${t('plot_split.error_' + code)}</div>
+      </div>
+    `;
+  }
 
-  openModal(t('plot_split.title_preview', { name: plotName }), `
-    <div class="split-step">
-      <div id="split-map" class="split-map split-map-preview"></div>
-      ${sectionLabel(t('plot_split.pieces_label'))}
-      <div class="split-pieces-list">${piecesHtml}</div>
-      ${tableHtml ? sectionLabel(t('plot_split.redistribute_label')) + tableHtml
-        : `<div class="split-empty-redist">${t('plot_split.no_properties')}</div>`}
-    </div>
-  `, `
-    <button class="btn" style="margin-right:auto" onclick="onSplitBack()">${t('plot_split.back_btn')}</button>
-    <button class="btn" onclick="closeSplitModal()">${t('btn.cancel')}</button>
-    <button class="btn btn-primary" onclick="onSplitConfirm()">${t('plot_split.confirm_btn')}</button>
-  `);
+  // Cut controls (only in cut mode)
+  if (_splitState.mode === 'cut') {
+    const n = _splitState.cutLatLngs.length;
+    html += `
+      <div class="split-overlay-section">
+        <div class="split-overlay-section-label">${t('plot_split.cut_label')}</div>
+        <div class="split-overlay-cut-controls">
+          <span>${t('plot_split.cut_vertices', { n })}</span>
+          <button class="btn btn-sm" onclick="onSplitClearCut()"${n === 0 ? ' disabled' : ''}>${t('plot_split.clear_cut')}</button>
+        </div>
+        <div class="split-overlay-hint-edit">${t('plot_split.edit_hint')}</div>
+      </div>
+    `;
+  }
 
-  const modalEl = document.getElementById('modal');
-  if (modalEl) modalEl.style.width = '820px';
+  panel.innerHTML = html;
 
-  ensureSplitMap('split-map', null);
-  drawSplitPieces(state.pieces, state.cutInside);
+  // Status bar at the bottom-left of the map
+  const status = document.getElementById('split-status');
+  if (status) {
+    let txt, cls = 'split-overlay-status';
+    if (_splitState.mode === 'component') {
+      txt = t('plot_split.status_component', { n: _splitState.pieces?.length || 0 });
+    } else if (valid) {
+      txt = t('plot_split.status_valid', { n: _splitState.cutLatLngs.length });
+    } else {
+      txt = t('plot_split.status_vertices', { n: _splitState.cutLatLngs.length });
+      const code = _splitState.error;
+      cls += (code === 'cut_too_short' || code === 'cut_does_not_cross')
+        ? ' split-overlay-status-warn'
+        : ' split-overlay-status-error';
+    }
+    status.className = cls;
+    status.textContent = txt;
+  }
 }
+
+function _refreshSplitConfirmBtn() {
+  const btn = document.getElementById('split-confirm-btn');
+  if (!btn) return;
+  btn.disabled = _splitState.status !== 'valid';
+}
+
+// ----- Redistribution table (unchanged from v0.7.0 in essence) ----------
 
 function _renderSplitRedistributionTable(plot, state) {
   const schemas = (data.propertySchemas || []).filter(s => {
@@ -3767,11 +3944,14 @@ function _splitFormatParentValue(schema, val) {
   return '—';
 }
 
+// ----- Panel input handlers -------------------------------------------
+
 function onSplitNameInput(inputEl) {
   if (!_splitState) return;
   const idx = parseInt(inputEl.dataset.pieceIdx, 10);
   if (!Number.isFinite(idx)) return;
   _splitState.names[idx] = inputEl.value;
+  _splitState.manualNames.add(idx);
 }
 
 function onSplitPropertyInput(inputEl) {
@@ -3783,6 +3963,8 @@ function onSplitPropertyInput(inputEl) {
   const obj = _splitState.propertyValues[idx];
   if (!obj) return;
   const raw = inputEl.value;
+  const overrideKey = `${idx}:${schemaId}`;
+  _splitState.manualOverrides.add(overrideKey);
 
   if (raw === '' || raw == null) {
     delete obj[schemaId];
@@ -3808,24 +3990,12 @@ function onSplitPropertyInput(inputEl) {
   }
 }
 
-// ----- STEP 2 → 1 (Back) / Commit -------------------------------------
-
-function onSplitBack() {
-  if (!_splitState) return;
-  _splitState.step = 1;
-  // Keep cutLatLngs intact so the user doesn't have to redraw.
-  // Pieces / names / propertyValues are discarded — recomputed on next Preview.
-  _splitState.pieces         = null;
-  _splitState.cutInside      = null;
-  _splitState.names          = [];
-  _splitState.propertyValues = [];
-  _openSplitStep1();
-}
+// ----- Commit ----------------------------------------------------------
 
 function onSplitConfirm() {
   if (!_splitState || !_splitState.pieces) return;
   const plot = _splitPlot();
-  if (!plot) { closeSplitModal(); return; }
+  if (!plot) { closeSplitOverlay(); return; }
 
   const newIds = executeSplit(
     plot,
@@ -3838,7 +4008,7 @@ function onSplitConfirm() {
     return;
   }
   const n = newIds.length;
-  closeSplitModal();
+  closeSplitOverlay();
   refreshAll();
   redrawMapPlots();
   toast(t('plot_split.success_toast', { n }), 'success');

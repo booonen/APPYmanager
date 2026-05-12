@@ -1,3 +1,76 @@
+## 0.7.2 — Brick 11 polish: takeover view, editable cut, live preview
+
+The split editor moves out of the 820-px modal into a full-viewport
+takeover (`#split-overlay`). Header bar with Cancel / title /
+Confirm; below it a 2-column grid with the map on the left and an
+info panel on the right. Esc closes.
+
+### Live preview (one screen instead of two)
+
+The step 1 / step 2 modal flow is gone. Every cut change triggers
+`_recomputeSplit` immediately:
+- runs the geometry engine (cut-line or component),
+- re-seeds non-overridden cells in the redistribution table with the
+  area-proportional proposal,
+- redraws map layers + repaints the panel.
+
+When the cut isn't valid yet (< 2 vertices, doesn't cross, crosses
+> 2 times, degenerate), the panel shows a yellow / red status block
+explaining what's wrong and Confirm stays disabled.
+
+For non-contiguous plots, the pieces draw immediately on open — no
+drawing needed.
+
+### Editable cut polyline
+
+The cut is now interactive:
+- **click empty map** → append a vertex (today's behaviour)
+- **click on the cut polyline** → insert a vertex at the closest
+  segment (point-segment-distance ranking)
+- **drag a vertex marker** → reposition live; pieces update each
+  drag tick
+- **right-click a vertex** → remove
+
+Vertex markers use `L.divIcon` (`.split-vertex`) so they look like
+solid accent-coloured dots with a white border. Bubbling to the map
+is suppressed so a drag-end at empty space doesn't ALSO append a new
+vertex.
+
+During a drag, the vertex layer is NOT re-rendered (the marker being
+dragged would be destroyed mid-gesture). Only the cut polyline and
+pieces preview update. On dragend, a full refresh restores the marker
+layer with the new vertex order.
+
+### User-override stability
+
+When the geometry shifts under a live drag, recomputed area-
+proportional proposals would normally overwrite anything the user
+typed into the redistribution table. `manualOverrides` tracks every
+`pieceIdx:schemaId` cell the user has touched; the recompute skips
+those cells. Same for `manualNames` on piece-name inputs.
+
+### Map layering (`js/map.js`)
+
+Four feature groups instead of three:
+- `_splitPlotLayer`   — baseline polygon (faded once pieces draw)
+- `_splitPiecesLayer` — proposed pieces (interactive: false so
+  clicks pass through to the cut polyline / map)
+- `_splitCutLayer`    — cut polyline (dashed full + solid in-polygon
+  overlay; both clickable for vertex insertion)
+- `_splitVertexLayer` — draggable vertex markers
+
+`_splitMapBoundsSet` ensures `fitBounds` runs exactly once per open
+so the map doesn't re-centre on every cut tweak. Reset in
+`destroySplitMap`.
+
+### Out of scope (for now)
+
+- Midpoint "ghost" markers à la Leaflet.Editable. Click-on-segment
+  insertion covers the same use case with one fewer marker per
+  segment.
+- Multi-vertex selection / box-drag.
+- Snap-to-existing-vertex when inserting.
+
 ## 0.7.1 — Sliver fix at cut-line intersection points
 
 Cutting a plot then viewing a parent boundary that contains both new
