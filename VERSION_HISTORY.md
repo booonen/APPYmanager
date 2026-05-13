@@ -1,3 +1,54 @@
+## 0.8.7 — Coastline closure: drop voting heuristic, stitch arcs CW
+
+The open-chain coastline closure had grown three layers of
+defensive heuristics across 12a → 12b → 12c — right-side probe
+voting, plot-centroid tiebreaker, demoted-to-tiebreaker after the
+0.8.5 archipelago bug, etc. — to handle the possibility that an
+OGF mapper might draw coastline water-on-left instead of
+land-on-left. OGF enforces land-on-left at the site level (the
+tile rendering breaks without it), so in practice the heuristic
+was insurance against a case that doesn't occur in healthy data.
+Replaced with a deterministic algorithm that trusts the
+convention.
+
+### New `_buildSeaGeometry` flow
+
+- Closed chains classified by signed area as before (CCW = island,
+  CW = inland sea).
+- Open chains are still clipped to the bbox by
+  `_clipChainToBboxAll`, giving one or more interior sub-arcs each
+  with both endpoints on a bbox edge.
+- All sub-arcs from all open chains are pooled into one list and
+  passed to a new `_stitchArcsToSeaPolygons`. From each unused
+  arc's exit, the stitcher walks the bbox perimeter CW (parameter
+  increasing on `[0, 4)`) to the nearest entry point — which may
+  belong to a *different* arc, in which case the two arcs merge
+  into one sea polygon rather than producing two overlapping
+  fragments. Any bbox corners crossed along the way are inserted.
+  Each cycle closes one polygon. CW perimeter traversal keeps
+  water on the right of travel, matching the canonical chain
+  direction → each resulting ring encloses sea.
+- Output interface unchanged: one turf Feature or null, fed into
+  the existing `_mergeAndThreshold` and per-plot intersection
+  pipeline. `data.waterCache` consumers are not affected.
+
+### Deleted
+
+- `_closeClippedSegmentAsSea` (~70 LOC of vote-counting +
+  tiebreaker logic)
+- `_closeChainAlongBbox` (close-both-ways helper)
+- `_rightSideTestPoints` (5-probe right-perpendicular sampler)
+- `_computePlotCentroids` (centroid hint for tiebreaker)
+
+`js/landwater.js` shrinks from 837 to 756 LOC.
+
+### Tradeoff (acknowledged)
+
+The voting heuristics were buying tolerance for coastlines drawn
+water-on-left. Any such section is now classified inverse (land
+and water swap). Per user: OGF rejects this at the site level so
+real data is ~99.5% canonical — good enough.
+
 ## 0.8.6 — Brick 12c polish: hide water-only plots, split-aware Area, ring-bug fix
 
 Three follow-ups from user testing of v0.8.5:

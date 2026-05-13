@@ -15,12 +15,16 @@
 //       - **Closed chains** apply the OSM/OGF "land-on-left" rule:
 //         counter-clockwise = an ISLAND (land inside; subtract from sea
 //         later); clockwise = an INLAND SEA (sea inside; keep).
-//       - **Open chains** are clipped to the project bbox so both
-//         endpoints lie on a bbox edge, then closed via a walk along
-//         the bbox edge on the chain's RIGHT side (= sea side per
-//         land-on-left). We build both candidate closures (CW / CCW
-//         around the bbox) and pick the one containing a small
-//         right-side test point at the chain's midpoint.
+//       - **Open chains** are clipped to the project bbox into one or
+//         more interior sub-arcs, each with both endpoints on a bbox
+//         edge. All sub-arcs from all open chains are then stitched
+//         into closed polygons by walking the bbox perimeter CW from
+//         each arc's exit to the nearest entry point — which may
+//         belong to a different arc, in which case the two arcs merge
+//         into one polygon. CW perimeter traversal keeps water on the
+//         right of travel, matching OGF's strictly-enforced
+//         "land-on-left" coastline direction → each stitched ring is
+//         a sea polygon.
 //   4.  Build INLAND WATER geometry from `natural=water` ways (each
 //       must be a closed self-loop) and `natural=water` multipolygon
 //       relations (use `groupWaysIntoRings` for outer + inner rings).
@@ -180,15 +184,14 @@ function _parseLandWaterResponse(json) {
 async function _buildSeaGeometry(coastlineWays, nodes, bbox) {
   if (!Array.isArray(coastlineWays) || coastlineWays.length === 0) return null;
   const chains = _stitchCoastlineChains(coastlineWays, nodes);
-  // Plot centroids are used as a robustness anchor: plots are almost
-  // always on LAND, so the SEA closure should contain few of them. If
-  // chain direction in the source data is non-canonical (some OGF
-  // mappers draw coastlines with water-on-left), the right-side test
-  // point alone picks the wrong closure; the plot-avoidance penalty
-  // recovers from that.
-  const plotCentroids = _computePlotCentroids();
   const seaPolys = [];
   const islandPolys = [];
+
+  // Pool every open-chain interior sub-arc into one list. Stitching is
+  // done globally rather than per-chain so two coastline pieces that
+  // bound the same bbox-edge water region merge into one polygon
+  // rather than overlapping fragments.
+  const openArcs = [];
 
   for (const chain of chains) {
     if (chain.isClosed) {
@@ -205,10 +208,17 @@ async function _buildSeaGeometry(coastlineWays, nodes, bbox) {
     } else {
       const segs = _clipChainToBboxAll(chain.coords, bbox);
       for (const seg of segs) {
-        const closed = _closeClippedSegmentAsSea(seg, bbox, plotCentroids);
-        if (closed) seaPolys.push(closed);
+        if (!seg || seg.length < 2) continue;
+        if (!_onBboxEdge(seg[0], bbox) || !_onBboxEdge(seg[seg.length - 1], bbox)) continue;
+        openArcs.push(seg);
       }
     }
+  }
+
+  for (const ring of _stitchArcsToSeaPolygons(openArcs, bbox)) {
+    const ringLngLat = _toLngLatRing(ring);
+    if (!ringLngLat) continue;
+    try { seaPolys.push(turf.polygon([ringLngLat])); } catch (e) { /* skip degenerate */ }
   }
 
   let sea = await _unionAllAsync(seaPolys);
@@ -222,28 +232,6 @@ async function _buildSeaGeometry(coastlineWays, nodes, bbox) {
     }
   }
   return sea;
-}
-
-// Approximate centroid (vertex-average) for each plot. Cheap; used only
-// as a robustness hint for sea-side detection.
-function _computePlotCentroids() {
-  const out = [];
-  for (const plot of (data.plots || [])) {
-    if (typeof resolvePlotGeometry !== 'function') break;
-    let geo;
-    try { geo = resolvePlotGeometry(plot); } catch (e) { continue; }
-    if (!geo || !geo.polygons || geo.polygons.length === 0) continue;
-    let latSum = 0, lngSum = 0, count = 0;
-    for (const poly of geo.polygons) {
-      const outerRing = poly[0];
-      if (!Array.isArray(outerRing)) continue;
-      for (const [lat, lng] of outerRing) {
-        latSum += lat; lngSum += lng; count++;
-      }
-    }
-    if (count > 0) out.push([latSum / count, lngSum / count]);
-  }
-  return out;
 }
 
 function _stitchCoastlineChains(ways, nodes) {
@@ -311,76 +299,92 @@ function _signedAreaLngLat(ringLngLat) {
   return area / 2;
 }
 
-// Closes a single inside-the-bbox subchain into a sea polygon. Both
-// endpoints must lie on a bbox edge.
+// Stitches open-chain sub-arcs into closed sea polygons. From each
+// arc's exit, walks the bbox perimeter CW to the nearest entry point
+// (possibly belonging to a different arc), inserting any bbox corners
+// crossed. The next arc is then traversed and we continue from its
+// exit. Each cycle closes one polygon.
 //
-// Decision order:
-//   1. **Right-side voting (primary).** 5 perpendicular-right probe
-//      points along the chain — under OSM canonical direction
-//      (land-on-left) they sit on the SEA side. The closure
-//      containing more probes wins, provided the gap is ≥ 2 votes.
-//      OGF enforces land-on-left, so this almost always resolves
-//      cleanly.
-//   2. **Plot-centroid tiebreaker (only when votes are close).**
-//      Picks the closure with FEWER plot centroids inside, on the
-//      heuristic that plots usually sit on land. Applied only as a
-//      tiebreaker so it doesn't fire for archipelago-style projects
-//      where many plots ARE the water — that case fooled v0.8.2's
-//      unconditional version and left half of a coastline ring
-//      flipped (the bug the user filed in v0.8.5 review).
+// Trusts OGF's strictly-enforced "land on left" coastline direction:
+// CW perimeter traversal keeps water on the right of travel, so each
+// stitched ring encloses sea.
 //
-// Returns turf Feature<Polygon> or null.
-function _closeClippedSegmentAsSea(segCoords, bbox, plotCentroids) {
-  if (!segCoords || segCoords.length < 2) return null;
-  if (!_onBboxEdge(segCoords[0], bbox) || !_onBboxEdge(segCoords[segCoords.length - 1], bbox)) {
+// `arcs` is an array of [lat, lng] sub-chains. Each must have both
+// endpoints on a bbox edge. Returns an array of closed rings.
+function _stitchArcsToSeaPolygons(arcs, bbox) {
+  if (!arcs || arcs.length === 0) return [];
+  const [minLat, minLng, maxLat, maxLng] = bbox;
+  const dLat = maxLat - minLat, dLng = maxLng - minLng;
+
+  // Perimeter parameterised on [0, 4); CW traversal = parameter
+  // increases. Top edge L→R is 0..1, right edge T→B is 1..2,
+  // bottom edge R→L is 2..3, left edge B→T is 3..4.
+  function perimParam([lat, lng]) {
+    if (Math.abs(lat - maxLat) < 1e-7) return Math.max(0, Math.min(1, (lng - minLng) / dLng));
+    if (Math.abs(lng - maxLng) < 1e-7) return 1 + Math.max(0, Math.min(1, (maxLat - lat) / dLat));
+    if (Math.abs(lat - minLat) < 1e-7) return 2 + Math.max(0, Math.min(1, (maxLng - lng) / dLng));
+    if (Math.abs(lng - minLng) < 1e-7) return 3 + Math.max(0, Math.min(1, (lat - minLat) / dLat));
     return null;
   }
-  const testPts = _rightSideTestPoints(segCoords, bbox, 5);
-  if (testPts.length === 0) return null;
-
-  const closures = [];
-  for (const dir of [+1, -1]) {
-    const closure = _closeChainAlongBbox(segCoords, bbox, dir);
-    if (!closure || closure.length < 4) continue;
-    const ringLngLat = _toLngLatRing(closure);
-    if (!ringLngLat) continue;
-    try { closures.push(turf.polygon([ringLngLat])); } catch (e) { /* skip degenerate */ }
+  function pointAt(p) {
+    p = ((p % 4) + 4) % 4;
+    if (p <= 1) return [maxLat, minLng + p * dLng];
+    if (p <= 2) return [maxLat - (p - 1) * dLat, maxLng];
+    if (p <= 3) return [minLat, maxLng - (p - 2) * dLng];
+    return [minLat + (p - 3) * dLat, minLng];
   }
-  if (closures.length === 0) return null;
 
-  // Right-side voting per closure.
-  const scored = closures.map(poly => {
-    let votes = 0;
-    for (const tp of testPts) {
-      try {
-        if (turf.booleanPointInPolygon(turf.point([tp[1], tp[0]]), poly)) votes++;
-      } catch (e) { /* skip */ }
-    }
-    return { poly, votes };
-  });
-  scored.sort((a, b) => b.votes - a.votes);
+  const entryP = arcs.map(a => perimParam(a[0]));
+  const exitP  = arcs.map(a => perimParam(a[a.length - 1]));
+  const valid  = arcs.map((_, i) => entryP[i] != null && exitP[i] != null);
 
-  // Decisive right-side win → trust it. (5-0, 4-0, 5-1, etc.)
-  if (scored.length === 1) return scored[0].poly;
-  if (scored[0].votes - scored[1].votes >= 2) return scored[0].poly;
+  const polygons = [];
+  const used = new Set();
 
-  // Tied / near-tied — fall back to plot-centroid tiebreaker.
-  if (plotCentroids && plotCentroids.length > 0) {
-    let bestPoly = null, fewest = Infinity;
-    for (const { poly } of scored) {
-      let n = 0;
-      for (const [lat, lng] of plotCentroids) {
-        try {
-          if (turf.booleanPointInPolygon(turf.point([lng, lat]), poly)) n++;
-        } catch (e) { /* skip */ }
+  for (let i = 0; i < arcs.length; i++) {
+    if (!valid[i] || used.has(i)) continue;
+    const ring = [];
+    let cur = i;
+    let safety = arcs.length + 1;
+    while (!used.has(cur) && safety-- > 0) {
+      used.add(cur);
+      const arc = arcs[cur];
+      const start = ring.length > 0 ? 1 : 0;  // avoid duplicate join point
+      for (let k = start; k < arc.length; k++) ring.push(arc[k]);
+
+      // Walk CW from this arc's exit to the nearest valid entry.
+      const ep = exitP[cur];
+      let nextArc = -1, bestD = Infinity;
+      for (let j = 0; j < arcs.length; j++) {
+        if (!valid[j]) continue;
+        let d = ((entryP[j] - ep) % 4 + 4) % 4;
+        if (d < 1e-9) d += 4;   // never pick a zero-length hop
+        if (d < bestD) { bestD = d; nextArc = j; }
       }
-      if (n < fewest) { fewest = n; bestPoly = poly; }
-    }
-    if (bestPoly) return bestPoly;
-  }
+      if (nextArc < 0) break;
 
-  // No tiebreaker available — fall back to the right-side leader.
-  return scored[0].poly;
+      // Insert bbox corners crossed CW from ep → entryP[nextArc].
+      let walk = ep;
+      const target = entryP[nextArc];
+      for (let guard = 0; guard < 6; guard++) {
+        const nextCorner = Math.floor(walk + 1e-9) + 1;
+        const distToCorner = ((nextCorner - walk) % 4 + 4) % 4;
+        const distToTarget = ((target - walk) % 4 + 4) % 4;
+        if (distToTarget <= distToCorner + 1e-9) break;
+        ring.push(pointAt(nextCorner));
+        walk = nextCorner;
+      }
+      cur = nextArc;
+    }
+
+    if (ring.length >= 3) {
+      if (ring[0][0] !== ring[ring.length - 1][0] || ring[0][1] !== ring[ring.length - 1][1]) {
+        ring.push([ring[0][0], ring[0][1]]);
+      }
+      polygons.push(ring);
+    }
+  }
+  return polygons;
 }
 
 // Returns ALL inside-the-bbox subchains, not just the longest. A
@@ -454,91 +458,6 @@ function _onBboxEdge([lat, lng], bbox, tol = 1e-7) {
     Math.abs(lng - minLng) < tol ||
     Math.abs(lng - maxLng) < tol
   );
-}
-
-// Returns N small "right side" perpendicular-step probe points sampled
-// along the chain. Each is a small step to the right of a local chain
-// segment, which under canonical OSM convention is the SEA side. We
-// use this AND a plot-centroid sanity check to score candidate
-// closures — v0.8.2 robustness fix vs. v0.8.1's single-point logic.
-function _rightSideTestPoints(coordsLatLng, bbox, n) {
-  if (!coordsLatLng || coordsLatLng.length < 2) return [];
-  const out = [];
-  const [minLat, minLng, maxLat, maxLng] = bbox;
-  const stepDeg = Math.max(maxLat - minLat, maxLng - minLng) * 0.01;
-  for (let i = 1; i <= n; i++) {
-    const frac = i / (n + 1);
-    const idx = Math.min(coordsLatLng.length - 2, Math.floor(frac * (coordsLatLng.length - 1)));
-    const a = coordsLatLng[idx];
-    const b = coordsLatLng[idx + 1];
-    if (!a || !b) continue;
-    const dlat = b[0] - a[0], dlng = b[1] - a[1];
-    const len = Math.hypot(dlat, dlng);
-    if (len < 1e-15) continue;
-    // Right of (dlat, dlng) = (-dlng, +dlat) — rotation -90° in the
-    // (lng, lat) plane.
-    const rlat = -dlng / len, rlng = dlat / len;
-    const mlat = (a[0] + b[0]) / 2;
-    const mlng = (a[1] + b[1]) / 2;
-    out.push([mlat + rlat * stepDeg, mlng + rlng * stepDeg]);
-  }
-  return out;
-}
-
-function _closeChainAlongBbox(chainCoords, bbox, dir) {
-  // dir = +1 walk CW around bbox; -1 walk CCW. The bbox is parameterised
-  // as a value in [0, 4): top-edge L→R is 0..1, right-edge T→B is 1..2,
-  // bottom-edge R→L is 2..3, left-edge B→T is 3..4.
-  const [minLat, minLng, maxLat, maxLng] = bbox;
-  const dLat = maxLat - minLat, dLng = maxLng - minLng;
-  const perimParam = ([lat, lng]) => {
-    if (Math.abs(lat - maxLat) < 1e-7 && lng >= minLng - 1e-7 && lng <= maxLng + 1e-7) {
-      return Math.max(0, Math.min(1, (lng - minLng) / dLng));
-    }
-    if (Math.abs(lng - maxLng) < 1e-7 && lat >= minLat - 1e-7 && lat <= maxLat + 1e-7) {
-      return 1 + Math.max(0, Math.min(1, (maxLat - lat) / dLat));
-    }
-    if (Math.abs(lat - minLat) < 1e-7 && lng >= minLng - 1e-7 && lng <= maxLng + 1e-7) {
-      return 2 + Math.max(0, Math.min(1, (maxLng - lng) / dLng));
-    }
-    if (Math.abs(lng - minLng) < 1e-7 && lat >= minLat - 1e-7 && lat <= maxLat + 1e-7) {
-      return 3 + Math.max(0, Math.min(1, (lat - minLat) / dLat));
-    }
-    return null;
-  };
-  const pointAt = (p) => {
-    p = ((p % 4) + 4) % 4;
-    if (p <= 1) return [maxLat, minLng + p * dLng];
-    if (p <= 2) return [maxLat - (p - 1) * dLat, maxLng];
-    if (p <= 3) return [minLat, maxLng - (p - 2) * dLng];
-    return [minLat + (p - 3) * dLat, minLng];
-  };
-  const pStart = perimParam(chainCoords[0]);
-  const pEnd   = perimParam(chainCoords[chainCoords.length - 1]);
-  if (pStart == null || pEnd == null) return null;
-
-  const out = chainCoords.slice();
-  // From pEnd, walk in `dir` until we reach pStart, inserting bbox corners
-  // along the way. Limit iterations: at most 4 corners to traverse.
-  let cur = pEnd;
-  for (let i = 0; i < 6; i++) {
-    const distToStart = dir > 0
-      ? ((pStart - cur) % 4 + 4) % 4
-      : ((cur - pStart) % 4 + 4) % 4;
-    const nextCorner = dir > 0
-      ? Math.floor(cur + 1e-9) + 1
-      : Math.ceil(cur - 1e-9) - 1;
-    const distToCorner = dir > 0
-      ? ((nextCorner - cur) % 4 + 4) % 4
-      : ((cur - nextCorner) % 4 + 4) % 4;
-    if (distToStart <= distToCorner + 1e-9) {
-      out.push(pointAt(pStart));
-      break;
-    }
-    out.push(pointAt(nextCorner));
-    cur = nextCorner;
-  }
-  return out;
 }
 
 // ------------------------------------------------------------
