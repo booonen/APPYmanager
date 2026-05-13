@@ -810,13 +810,67 @@ function _drawBoundaryPoly(b, color) {
   const geom = resolveBoundaryGeometry(b);
   if (!geom || !geom.polygons.length) return;
   const isSelected = _selectedItemKind === 'boundary' && _selectedItemId === b.id;
-  const poly = L.polygon(geom.polygons, boundaryFilledStyle(color, isSelected));
-  poly._appyBoundaryId = b.id;
-  poly.bindTooltip(b.name || `(${getBoundaryTypeName(b.typeId)})`);
-  poly.on('click',    (e) => onBoundaryPolyClick(e, b));
-  poly.on('dblclick', (e) => onBoundaryPolyDblClick(e, b.id));
-  _mapBoundaryLayer.addLayer(poly);
-  _polyIndex.set('boundary:' + b.id, poly);
+
+  // Mirror _drawPlotPoly's split logic: boundaries cascade from plots,
+  // so when the project split is active and the boundary intersects
+  // water, it should render the same way plots do.
+  //   • 'split' (default): full polygon stays clickable, blue water
+  //     overlay drawn on top, non-interactive.
+  //   • 'removed': clipped to the land portion; fully-submerged
+  //     boundaries hide entirely.
+  let mainPoly = null;
+  let renderedAsSplit = false;
+  const waterDisplayMode = getSetting('waterDisplayMode', 'split');
+  if (getSetting('landWaterSplitEnabled', false)
+      && data.waterCache && data.waterCache.waterGeometry
+      && typeof getBoundaryLandWater === 'function') {
+    const lw = getBoundaryLandWater(b);
+    if (lw && lw.water) {
+      if (waterDisplayMode === 'removed') {
+        if (lw.land) {
+          const landPolys = landWaterFeatureToLeafletPolygons(lw.land);
+          if (landPolys.length > 0) {
+            mainPoly = L.polygon(landPolys, boundaryFilledStyle(color, isSelected));
+            renderedAsSplit = true;
+          }
+        } else {
+          // Boundary is entirely under water — nothing to render.
+          return;
+        }
+      } else if (waterDisplayMode === 'split') {
+        mainPoly = L.polygon(geom.polygons, boundaryFilledStyle(color, isSelected));
+        renderedAsSplit = true;
+      }
+    }
+  }
+
+  if (!mainPoly) {
+    mainPoly = L.polygon(geom.polygons, boundaryFilledStyle(color, isSelected));
+  }
+  mainPoly._appyBoundaryId = b.id;
+  mainPoly.bindTooltip(b.name || `(${getBoundaryTypeName(b.typeId)})`);
+  mainPoly.on('click',    (e) => onBoundaryPolyClick(e, b));
+  mainPoly.on('dblclick', (e) => onBoundaryPolyDblClick(e, b.id));
+  _mapBoundaryLayer.addLayer(mainPoly);
+  _polyIndex.set('boundary:' + b.id, mainPoly);
+
+  // Water overlay (only in 'split' mode).
+  if (renderedAsSplit
+      && waterDisplayMode === 'split'
+      && typeof getBoundaryLandWater === 'function') {
+    const lw = getBoundaryLandWater(b);
+    if (lw && lw.water) {
+      const waterPolys = landWaterFeatureToLeafletPolygons(lw.water);
+      for (const coords of waterPolys) {
+        const overlay = L.polygon(coords, {
+          color: '#3b82c6', weight: 1, opacity: 0.7,
+          fillColor: '#3b82c6', fillOpacity: 0.55,
+          interactive: false,
+        });
+        _mapBoundaryLayer.addLayer(overlay);
+      }
+    }
+  }
 }
 
 function onBoundaryPolyClick(e, b) {

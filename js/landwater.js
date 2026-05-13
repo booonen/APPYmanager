@@ -104,7 +104,8 @@ async function fetchAndCacheWater() {
       waterGeometry: merged.geometry,
       bodyCount:     merged.bodyCount,
     };
-    invalidateAllPlotLandWater(); // 12b: cached per-plot intersections are stale now
+    invalidateAllPlotLandWater();     // 12b: per-plot intersections are stale
+    invalidateAllBoundaryLandWater(); // 12c+ boundary equivalent
     save();
 
     toast(t('landwater.toast_fetched', { n: merged.bodyCount }), 'success');
@@ -678,10 +679,13 @@ function getWaterCacheSummary() {
 //   • split toggled off               → keep the cache (cheap to retain;
 //     toggling back on doesn't reload from scratch).
 
-const _landWaterByPlot = new Map(); // plotId → { land, water }
+const _landWaterByPlot     = new Map(); // plotId     → { land, water }
+const _landWaterByBoundary = new Map(); // boundaryId → { land, water }
 
 function invalidateAllPlotLandWater() { _landWaterByPlot.clear(); }
 function invalidatePlotLandWater(plotId) { _landWaterByPlot.delete(plotId); }
+function invalidateAllBoundaryLandWater() { _landWaterByBoundary.clear(); }
+function invalidateBoundaryLandWater(boundaryId) { _landWaterByBoundary.delete(boundaryId); }
 
 function getPlotLandWater(plot) {
   if (!plot) return null;
@@ -689,6 +693,36 @@ function getPlotLandWater(plot) {
   const result = _computePlotLandWater(plot);
   _landWaterByPlot.set(plot.id, result);
   return result;
+}
+
+// Boundary land/water resolver — mirrors getPlotLandWater. Operates on
+// the dissolved boundary feature from resolveBoundaryGeometry() rather
+// than re-unioning the constituent plot splits. That choice keeps the
+// result in lockstep with the boundary outline the user actually sees
+// on the map, and avoids paying the cost of N plot intersections when
+// one boundary intersection suffices.
+function getBoundaryLandWater(boundary) {
+  if (!boundary) return null;
+  if (_landWaterByBoundary.has(boundary.id)) return _landWaterByBoundary.get(boundary.id);
+  const result = _computeBoundaryLandWater(boundary);
+  _landWaterByBoundary.set(boundary.id, result);
+  return result;
+}
+
+function _computeBoundaryLandWater(boundary) {
+  if (!data.waterCache || !data.waterCache.waterGeometry) return null;
+  if (typeof resolveBoundaryGeometry !== 'function') return null;
+  const geom = resolveBoundaryGeometry(boundary);
+  if (!geom || !geom.feature) return null;
+
+  const waterGeom = data.waterCache.waterGeometry;
+  let water = null;
+  try { water = turf.intersect(geom.feature, waterGeom); } catch (e) { water = null; }
+  if (!water) return { land: geom.feature, water: null };
+
+  let land = null;
+  try { land = turf.difference(geom.feature, water); } catch (e) { land = null; }
+  return { land, water };
 }
 
 function _computePlotLandWater(plot) {

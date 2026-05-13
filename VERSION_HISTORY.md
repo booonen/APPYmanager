@@ -1,3 +1,58 @@
+## 0.8.8 — Split cascade: boundaries render and area-report like plots
+
+Boundaries cascade from plots, so when the project's land/water split
+is active the boundary layer should behave the same as the plot
+layer. v0.8.7 left it as a flat dissolve that ignored the water
+cache: the boundary outline included its plots' water portions
+unconditionally, and the inspector's Area row showed a single
+combined total. Fixed.
+
+### Boundary land/water resolver (`js/landwater.js`)
+
+New `getBoundaryLandWater(b)` / `invalidateBoundaryLandWater(id)` /
+`invalidateAllBoundaryLandWater()` mirror the plot side. The
+resolver intersects `resolveBoundaryGeometry(b).feature` against
+`data.waterCache.waterGeometry` once per boundary (rather than
+re-unioning constituent plot splits), so the result stays in
+lockstep with the boundary outline the user actually sees and
+avoids paying N plot intersections when one suffices.
+
+Invalidation piggy-backs on the existing boundary geometry cache:
+`invalidateBoundaryGeometry()` in `js/boundaries.js` now also
+drops the matching boundary land/water entry, so every existing
+member-change call site picks up correctly without edits.
+`fetchAndCacheWater()` clears both caches on success.
+
+### Split-aware boundary rendering (`js/map.js`)
+
+`_drawBoundaryPoly` now mirrors `_drawPlotPoly`'s split path:
+
+- `waterDisplayMode === 'split'` (default): full boundary polygon
+  stays clickable, blue water overlay drawn on top, non-interactive.
+- `waterDisplayMode === 'removed'`: clipped to the land portion.
+  Boundaries fully under water hide entirely (same noise-reduction
+  call as v0.8.6 made for plots).
+- Split off / no water cache: unchanged.
+
+### Land + Water rows on boundary Area (`js/views.js`)
+
+`_renderBoundaryAreaRow` mirrors `_renderPlotAreaRow`. When the
+split is visible on this boundary, the row splits into two
+read-only "Area / Land" + "Area / Water" rows with percentage
+hints. Otherwise one combined row, as before. Other boundary
+properties (Population, custom numerics) still render as single
+rows — per-portion aggregation across arbitrary properties remains
+the deferred Brick 12d work.
+
+### Tradeoff acknowledged
+
+The resolver clips the dissolved boundary feature directly against
+the water cache instead of unioning the already-computed per-plot
+splits. The two approaches agree when boundary geometry is a
+faithful dissolve of its plots; if a future change introduced
+boundary-level geometry edits independent of plot membership, the
+resolver would diverge. Worth revisiting alongside Brick 12d.
+
 ## 0.8.7 — Coastline closure: drop voting heuristic, stitch arcs CW
 
 The open-chain coastline closure had grown three layers of

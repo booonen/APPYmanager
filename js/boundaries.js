@@ -345,6 +345,13 @@ let _precomputeDebounce  = null;
 function invalidateBoundaryGeometry(boundaryId) {
   if (boundaryId) _boundaryGeomCache.delete(boundaryId);
   else _boundaryGeomCache.clear();
+  // Boundary land/water is derived from the dissolved feature, so it
+  // becomes stale on the same triggers. Piggy-back here so individual
+  // callers don't each need to remember.
+  if (typeof invalidateBoundaryLandWater === 'function') {
+    if (boundaryId) invalidateBoundaryLandWater(boundaryId);
+    else if (typeof invalidateAllBoundaryLandWater === 'function') invalidateAllBoundaryLandWater();
+  }
   // Containment changed: re-anchor any settlement whose parent is now
   // null (e.g. imported before its covering plot existed) or dangling
   // (e.g. its parent plot was just deleted). Cheap — point-in-polygon

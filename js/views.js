@@ -2653,15 +2653,51 @@ function _renderBoundaryPropertyRows(boundary) {
 }
 
 function _renderBoundaryAreaRow(boundary) {
-  const a = (typeof boundaryArea === 'function') ? boundaryArea(boundary) : 0;
-  const formatted = (typeof formatArea === 'function') ? formatArea(a) : '—';
+  const total = (typeof boundaryArea === 'function') ? boundaryArea(boundary) : 0;
+  const fmt = (typeof formatArea === 'function')
+    ? (n) => formatArea(n) : (n) => String(n);
+
+  // Mirrors _renderPlotAreaRow: when the project split is visible on
+  // this boundary, render Land + Water as two read-only rows with a
+  // percentage hint.
+  if (typeof getBoundaryLandWater === 'function'
+      && getSetting('landWaterSplitEnabled', false)
+      && data.waterCache && data.waterCache.waterGeometry
+      && getSetting('waterDisplayMode', 'split') === 'split') {
+    const lw = getBoundaryLandWater(boundary);
+    if (lw && lw.water) {
+      let landArea = 0, waterArea = 0;
+      try { landArea  = lw.land  ? turf.area(lw.land)  : 0; } catch (e) {}
+      try { waterArea = lw.water ? turf.area(lw.water) : 0; } catch (e) {}
+      const denom = landArea + waterArea;
+      const landPct  = denom > 0 ? (landArea  / denom) * 100 : 0;
+      const waterPct = denom > 0 ? (waterArea / denom) * 100 : 0;
+      const pct = (n) => `${formatPropertyNumber(Math.round(n * 10) / 10)}%`;
+      const landValue  = `${fmt(landArea)} <span class="plot-property-pct mono">${pct(landPct)}</span>`;
+      const waterValue = `${fmt(waterArea)} <span class="plot-property-pct mono">${pct(waterPct)}</span>`;
+      const landChip   = `<span class="property-portion-chip portion-land">${t('plot_detail.portion_land')}</span>`;
+      const waterChip  = `<span class="property-portion-chip portion-water">${t('plot_detail.portion_water')}</span>`;
+      const portionRow = (chip, value) => `
+        <div class="plot-property-row plot-property-row-readonly" data-area-row="1">
+          <div class="plot-property-label">
+            <span class="plot-property-name">${t('plot_detail.area_label')}</span>
+            ${chip}
+          </div>
+          <div class="plot-property-input">
+            <span class="plot-property-readonly-value mono">${value}</span>
+          </div>
+        </div>`;
+      return portionRow(landChip, landValue) + portionRow(waterChip, waterValue);
+    }
+  }
+
   return `<div class="plot-property-row plot-property-row-readonly" data-area-row="1">
     <div class="plot-property-label">
       <span class="plot-property-name">${t('plot_detail.area_label')}</span>
       <span class="property-unit-chip">${t('plot_detail.computed_chip')}</span>
     </div>
     <div class="plot-property-input">
-      <span class="plot-property-readonly-value mono">${esc(formatted)}</span>
+      <span class="plot-property-readonly-value mono">${esc(fmt(total))}</span>
     </div>
   </div>`;
 }
