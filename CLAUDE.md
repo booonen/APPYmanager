@@ -874,6 +874,29 @@ they come up; the plan is a living document.
   setting. Future data views (Brick 13+) will each carry their own
   equivalent view-level toggle. Persisted-cache + plotArea +
   property-side changes deferred to 12c / 12d.
+- **Brick 12c** ✓ (committed) — split-aware property values + inspector
+  UI. Property schemas gain `appliesTo: 'land' | 'water' | 'both'`
+  (default `'land'`); schema editor exposes a dropdown between
+  "Defined at" and the kind-specific fields. New per-plot storage
+  `plot.propertyValuesLand` / `plot.propertyValuesWater` parallel
+  the existing `propertyValues`. `getPlotPortionPropertyValue`
+  reads with a migration fallback to the legacy `propertyValues`
+  for land/both schemas (water has no fallback — it's new ground).
+  Plot inspector uses `_portionsForPlotSchema` to decide rows per
+  schema: project-split-off → single combined row; split visible →
+  `['land']` / `['water']` / `['land','water']` based on
+  `appliesTo`; percentages stay on `['combined']` in 12c (portion-
+  aware denominators deferred). `_renderPlotPropertyRow(plot,
+  schema, isNested, portion)` accepts a portion arg; land/water
+  rows get a small chip on the label ("LAND" green / "WATER"
+  blue, `.property-portion-chip` styles in styles.css). Inputs
+  carry `data-portion`; `onPlotPropertyBlur` routes to the right
+  storage. Typeahead suggestions
+  (`_collectCategoricalValues`) walk land + water portions too.
+  Boundary aggregation, `plotArea` honouring `'removed'`, and
+  combined-derived auto-mirror are 12d's job. Known trade-off
+  documented: toggling `waterDisplayMode` may show different
+  values for the same schema across the two views (no auto-mirror).
 
 ### Phase 3 — Properties — **complete** (2026-05-11)
 

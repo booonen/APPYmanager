@@ -26,6 +26,7 @@
 // }
 
 const PROPERTY_KINDS = ['numeric', 'categorical', 'percentage'];
+const PROPERTY_APPLIES_TO = ['land', 'water', 'both']; // Brick 12c
 const NUMERIC_AGGREGATIONS = ['sum', 'weighted_average'];
 
 // ============================================================
@@ -90,7 +91,8 @@ function createPropertySchema({ name, unit, kind, notes,
                                 rollupDistribution,
                                 denominatorPropertyId,
                                 autoRound,
-                                rootLevelId }) {
+                                rootLevelId,
+                                appliesTo }) {
   const schema = {
     id:                    uid(),
     name:                  name || '',
@@ -109,6 +111,12 @@ function createPropertySchema({ name, unit, kind, notes,
     // unrelated ones. 'plot' is the implicit-lowest level used as the
     // default. Brick 10a.
     rootLevelId:           rootLevelId || 'plot',
+    // Which land/water portion this property applies to when the project
+    // split is enabled. Default 'land' (most demographics live on land —
+    // population, language, etc.). 'water' for water-only metrics (e.g.
+    // lake salinity); 'both' for properties that split across portions
+    // (e.g. area; combined = sum of land + water). Brick 12c.
+    appliesTo:             PROPERTY_APPLIES_TO.includes(appliesTo) ? appliesTo : 'land',
   };
   data.propertySchemas = data.propertySchemas || [];
   data.propertySchemas.push(schema);
@@ -120,10 +128,16 @@ function deletePropertySchema(id) {
   data.propertySchemas = data.propertySchemas.filter(p => p.id !== id);
   // Cascade: drop any stored value for this schema across plots AND
   // boundaries (Brick 10b) so we don't leave orphan entries hanging
-  // around.
+  // around. Brick 12c: also clear the per-portion storages.
   for (const plot of (data.plots || [])) {
     if (plot.propertyValues && plot.propertyValues[id] !== undefined) {
       delete plot.propertyValues[id];
+    }
+    if (plot.propertyValuesLand && plot.propertyValuesLand[id] !== undefined) {
+      delete plot.propertyValuesLand[id];
+    }
+    if (plot.propertyValuesWater && plot.propertyValuesWater[id] !== undefined) {
+      delete plot.propertyValuesWater[id];
     }
   }
   for (const b of (data.boundaries || [])) {
@@ -274,6 +288,67 @@ function setPlotPropertyValue(plot, schemaId, value) {
 function clearPlotPropertyValue(plot, schemaId) {
   if (!plot?.propertyValues) return;
   delete plot.propertyValues[schemaId];
+}
+
+// ============================================================
+// PER-PORTION PROPERTY VALUES (Brick 12c)
+// ============================================================
+// When the project land/water split is enabled AND a plot has water
+// AND waterDisplayMode is 'split', the inspector renders per-portion
+// rows. Storage:
+//
+//   plot.propertyValues       — combined / whole-plot value (existing).
+//   plot.propertyValuesLand   — value on the land portion only.
+//   plot.propertyValuesWater  — value on the water portion only.
+//
+// Portion is one of 'combined' | 'land' | 'water'. The read path falls
+// back from a portion to the legacy combined value FOR LAND-APPLICABLE
+// SCHEMAS so existing pre-12c data isn't lost when the project first
+// enables the split (the legacy "whole plot" value was effectively the
+// land value, since water didn't exist as a concept). Water has no
+// fallback — it's new ground.
+//
+// No auto-mirror in this brick: writes only touch the requested portion.
+// Consequence: toggling the visibility mode (split vs hide) may show
+// different values for the same schema, because the two views read
+// different storages. Brick 12d may revisit (e.g. auto-mirror, or
+// boundary aggregation that reads either source).
+
+function getPlotPortionPropertyValue(plot, schemaId, portion) {
+  if (!plot) return undefined;
+  if (portion === 'land') {
+    const v = plot.propertyValuesLand?.[schemaId];
+    if (v !== undefined) return v;
+    // Migration fallback: legacy `propertyValues` was the "whole plot"
+    // value, which equals the land value for land-applicable schemas.
+    const schema = findPropertySchema(schemaId);
+    if (!schema || schema.appliesTo !== 'water') {
+      return plot.propertyValues?.[schemaId];
+    }
+    return undefined;
+  }
+  if (portion === 'water') {
+    return plot.propertyValuesWater?.[schemaId];
+  }
+  // combined
+  return plot.propertyValues?.[schemaId];
+}
+
+function setPlotPortionPropertyValue(plot, schemaId, portion, value) {
+  if (!plot) return;
+  const key = portion === 'land'  ? 'propertyValuesLand'
+            : portion === 'water' ? 'propertyValuesWater'
+            : 'propertyValues';
+  plot[key] = plot[key] || {};
+  plot[key][schemaId] = value;
+}
+
+function clearPlotPortionPropertyValue(plot, schemaId, portion) {
+  if (!plot) return;
+  const key = portion === 'land'  ? 'propertyValuesLand'
+            : portion === 'water' ? 'propertyValuesWater'
+            : 'propertyValues';
+  if (plot[key]) delete plot[key][schemaId];
 }
 
 // ============================================================

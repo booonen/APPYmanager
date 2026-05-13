@@ -1,3 +1,68 @@
+## 0.8.5 — Brick 12c: split-aware property values + inspector UI
+
+Property side of the land/water split. Numeric and categorical schemas
+become portion-aware in the plot inspector when a plot is showing the
+split. No boundary aggregation changes — 12d's territory.
+
+### New schema field
+
+`schema.appliesTo: 'land' | 'water' | 'both'` (default `'land'`).
+Schema editor grows a third "Applies to" dropdown between "Defined at"
+and the kind-specific fields. Existing schemas migrate to `'land'`
+implicitly (the bootstrap defaults + the read-fallback both treat
+absent `appliesTo` as land).
+
+### New per-plot storage
+
+`plot.propertyValuesLand` and `plot.propertyValuesWater`, parallel to
+the existing `plot.propertyValues`. Three helpers in `properties.js`:
+- `getPlotPortionPropertyValue(plot, schemaId, portion)` — read with
+  migration fallback (land/'both' schemas fall back to legacy
+  `propertyValues` when the portion is unset; water has no fallback).
+- `setPlotPortionPropertyValue(plot, schemaId, portion, value)`.
+- `clearPlotPortionPropertyValue(plot, schemaId, portion)`.
+
+No auto-mirror between portions and combined: writes only touch the
+requested portion. Trade-off documented below.
+
+### Plot inspector
+
+New helper `_portionsForPlotSchema(plot, schema)` decides what rows
+to render per schema:
+- Project split off: `['combined']` (existing behaviour).
+- Plot has no water OR `waterDisplayMode === 'removed'`: `'water'`
+  schemas hide; others render `['combined']`.
+- Split visible AND `appliesTo === 'land'`:  `['land']`.
+- Split visible AND `appliesTo === 'water'`: `['water']`.
+- Split visible AND `appliesTo === 'both'`:  `['land', 'water']`.
+- Percentages always render `['combined']` in 12c (portion-aware
+  denominator resolution is a future brick).
+
+`_renderPlotPropertyRow` accepts a `portion` argument. Land/water rows
+get a coloured chip on the label ("LAND" / "WATER", green / blue) and
+their inputs carry `data-portion`. `onPlotPropertyBlur` reads
+`data-portion` and routes to the right storage via the new helpers.
+
+`_collectCategoricalValues` walks `propertyValuesLand` and
+`propertyValuesWater` too, so typeahead suggestions reflect values
+entered on portions.
+
+`deletePropertySchema` cascade also clears the per-portion storages.
+
+### Known trade-off (12c v1)
+
+Because there's no auto-mirror, toggling `waterDisplayMode` between
+'split' and 'removed' may show different values for the same schema:
+- 'split' view reads portion storage (with fallback for land).
+- 'removed' view reads `propertyValues` only.
+
+If a user enters values in split view, then switches to the removed
+view, those values are not visible (but ARE persisted). Switching
+back restores them. Boundary aggregation (still reading
+`propertyValues` until 12d) likewise won't see portion-only edits
+yet. Documented limitation; 12d revisits with portion-aware
+aggregation.
+
 ## 0.8.4 — Brick 12b correction: water-display toggle is map-wide, not per-plot
 
 v0.8.3 wired the "hide water from this plot" control onto every

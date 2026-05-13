@@ -2289,6 +2289,37 @@ function closePlotDetail() {
 // (percentage — so the linked field can update live).  Empty inputs
 // delete the value entirely.
 
+// Brick 12c: which portions to render for a schema on a given plot.
+// Returns an array of 'combined' | 'land' | 'water' identifiers.
+//   • Project split off, or plot has no water, or mode is 'removed':
+//     a single 'combined' row (the existing pre-12c behaviour).
+//   • Split visible on this plot AND schema's appliesTo is 'land':  ['land']
+//   • Split visible AND appliesTo is 'water':                       ['water']
+//   • Split visible AND appliesTo is 'both':                        ['land','water']
+//   • Percentages always render as 'combined' in 12c (portion-aware
+//     denominator resolution deferred to a later brick).
+//   • Hidden cases (return []): a 'water' schema on a plot that has no
+//     water, or on any plot when waterDisplayMode is 'removed'.
+function _portionsForPlotSchema(plot, schema) {
+  if (!schema) return [];
+  if (!getSetting('landWaterSplitEnabled', false)) return ['combined'];
+  if (typeof getPlotLandWater !== 'function') return ['combined'];
+  const lw = getPlotLandWater(plot);
+  const hasWater = !!(lw && lw.water);
+  const mode = getSetting('waterDisplayMode', 'split');
+  const splitVisible = hasWater && mode === 'split' && data.waterCache && data.waterCache.waterGeometry;
+  if (!splitVisible) {
+    // 'water' schemas don't apply where there's no water (or it's hidden).
+    if (schema.appliesTo === 'water') return [];
+    return ['combined'];
+  }
+  if (schema.kind === 'percentage') return ['combined']; // 12c limitation
+  if (schema.appliesTo === 'land')  return ['land'];
+  if (schema.appliesTo === 'water') return ['water'];
+  if (schema.appliesTo === 'both')  return ['land', 'water'];
+  return ['land']; // legacy default
+}
+
 function _renderPlotPropertyRows(plot) {
   // Plot inspector shows schemas where `appliesAtLevel(s, 'plot')` is
   // true — currently equivalent to "rooted at 'plot'" but uses the
@@ -2331,13 +2362,16 @@ function _renderPlotPropertyRows(plot) {
   // All nested rows share one indent — visual chain comes from ordering
   // (each descendant renders directly after its parent). The ancestors
   // set guards against any cycle that schema validation might have missed.
+  // Brick 12c: percentages stay as a single 'combined' row.
   const renderChildren = (parentId, ancestors) => {
     if (ancestors.has(parentId)) return '';
     const next = new Set(ancestors);
     next.add(parentId);
     let h = '';
     for (const pct of (childrenByDenom.get(parentId) || [])) {
-      h += _renderPlotPropertyRow(plot, pct, true);
+      for (const portion of _portionsForPlotSchema(plot, pct)) {
+        h += _renderPlotPropertyRow(plot, pct, true, portion);
+      }
       h += renderChildren(pct.id, next);
     }
     return h;
@@ -2352,15 +2386,23 @@ function _renderPlotPropertyRows(plot) {
   html += _renderPlotAreaRow(plot);
   html += renderChildren(AREA_VIRTUAL_ID, new Set());
   for (const num of numerics) {
-    html += _renderPlotPropertyRow(plot, num, false);
+    for (const portion of _portionsForPlotSchema(plot, num)) {
+      html += _renderPlotPropertyRow(plot, num, false, portion);
+    }
     html += renderChildren(num.id, new Set());
   }
   for (const cat of categorical) {
-    html += _renderPlotPropertyRow(plot, cat, false);
+    for (const portion of _portionsForPlotSchema(plot, cat)) {
+      html += _renderPlotPropertyRow(plot, cat, false, portion);
+    }
   }
   if (orphans.length > 0) {
     html += `<div class="plot-property-subhead">${t('plot_detail.property_orphan_section')}</div>`;
-    for (const pct of orphans) html += _renderPlotPropertyRow(plot, pct, false);
+    for (const pct of orphans) {
+      for (const portion of _portionsForPlotSchema(plot, pct)) {
+        html += _renderPlotPropertyRow(plot, pct, false, portion);
+      }
+    }
   }
   return html;
 }
@@ -2388,19 +2430,31 @@ function _inputWithSuffix(inputHtml, suffix) {
   return `<div class="input-with-suffix has-suffix">${inputHtml}<span class="input-suffix">${esc(suffix)}</span></div>`;
 }
 
-function _renderPlotPropertyRow(plot, schema, isNested) {
-  const stored = getPlotPropertyValue(plot, schema.id);
+function _renderPlotPropertyRow(plot, schema, isNested, portion) {
+  // Brick 12c: portion ∈ 'combined' | 'land' | 'water'. The legacy
+  // call sites omitted the argument; default to 'combined' preserves
+  // exact pre-12c behaviour for any caller that doesn't pass it.
+  portion = portion || 'combined';
+  const stored = portion === 'combined'
+    ? getPlotPropertyValue(plot, schema.id)
+    : getPlotPortionPropertyValue(plot, schema.id, portion);
   // No more label-side unit chip — the unit lives inside the input as a
   // suffix (see _inputWithSuffix). Read-only system rows (Plot area)
   // still carry a label chip for "computed" — handled in _renderPlotAreaRow.
+  // For per-portion rows, add a small chip so user can tell Land from Water.
+  const portionChip = portion === 'land'  ? `<span class="property-portion-chip portion-land">${t('plot_detail.portion_land')}</span>`
+                    : portion === 'water' ? `<span class="property-portion-chip portion-water">${t('plot_detail.portion_water')}</span>`
+                    : '';
   const label = `<div class="plot-property-label">
     <span class="plot-property-name">${esc(schema.name)}</span>
+    ${portionChip}
   </div>`;
   const rowClass = isNested ? 'plot-property-row plot-property-row-nested' : 'plot-property-row';
+  const portionAttr = portion !== 'combined' ? ` data-portion="${portion}"` : '';
 
   if (schema.kind === 'numeric') {
     const val = stored != null && stored !== '' ? esc(String(stored)) : '';
-    const input = `<input type="number" step="any" data-schema-id="${esc(schema.id)}" data-kind="numeric"
+    const input = `<input type="number" step="any" data-schema-id="${esc(schema.id)}" data-kind="numeric"${portionAttr}
       value="${val}" placeholder="${t('plot_detail.property_empty_placeholder')}"
       onblur="onPlotPropertyBlur(this)">`;
     return `<div class="${rowClass}">
@@ -2413,7 +2467,7 @@ function _renderPlotPropertyRow(plot, schema, isNested) {
 
   if (schema.kind === 'categorical') {
     const val = typeof stored === 'string' ? stored : '';
-    const taId = `ta-${plot.id}-${schema.id}`;
+    const taId = `ta-${plot.id}-${schema.id}-${portion}`;
     return `<div class="${rowClass}">
       ${label}
       <div class="plot-property-input">
@@ -2423,7 +2477,7 @@ function _renderPlotPropertyRow(plot, schema, isNested) {
           placeholder: t('plot_detail.property_empty_placeholder'),
           optionsFnName: 'categoricalSuggestionsForInput',
           commitFnName: 'onPlotPropertyBlur',
-          dataAttrs: { 'schema-id': schema.id, 'kind': 'categorical' }
+          dataAttrs: { 'schema-id': schema.id, 'kind': 'categorical', 'portion': portion }
         })}
       </div>
     </div>`;
@@ -2764,19 +2818,21 @@ function _refreshAllBoundaryRollups() {
 // order.
 function _collectCategoricalValues(schemaId, currentVal) {
   const counts = new Map(); // canonicalised value → count
-  for (const plot of (data.plots || [])) {
-    const v = plot.propertyValues?.[schemaId];
+  const tally = (v) => {
     if (typeof v === 'string' && v.trim()) {
       const key = v.trim();
       counts.set(key, (counts.get(key) || 0) + 1);
     }
+  };
+  for (const plot of (data.plots || [])) {
+    tally(plot.propertyValues?.[schemaId]);
+    // Brick 12c: per-portion stores count toward suggestions too, so
+    // values typed on Land/Water portions feed back into typeahead.
+    tally(plot.propertyValuesLand?.[schemaId]);
+    tally(plot.propertyValuesWater?.[schemaId]);
   }
   for (const b of (data.boundaries || [])) {
-    const v = b.propertyValues?.[schemaId];
-    if (typeof v === 'string' && v.trim()) {
-      const key = v.trim();
-      counts.set(key, (counts.get(key) || 0) + 1);
-    }
+    tally(b.propertyValues?.[schemaId]);
   }
   if (typeof currentVal === 'string' && currentVal.trim()) {
     const key = currentVal.trim();
@@ -2846,16 +2902,28 @@ function onPlotPropertyBlur(inputEl) {
   const schemaId = inputEl.dataset.schemaId;
   const kind = inputEl.dataset.kind;
   const raw = inputEl.value;
+  // Brick 12c: portion ∈ 'combined' (omitted) | 'land' | 'water'. Routes
+  // to the right storage so split-visible edits don't clobber combined
+  // values from a non-split view, and vice versa.
+  const portion = inputEl.dataset.portion || 'combined';
+  const portionSet = (value) => {
+    if (portion === 'combined') setPlotPropertyValue(plot, schemaId, value);
+    else                        setPlotPortionPropertyValue(plot, schemaId, portion, value);
+  };
+  const portionClear = () => {
+    if (portion === 'combined') clearPlotPropertyValue(plot, schemaId);
+    else                        clearPlotPortionPropertyValue(plot, schemaId, portion);
+  };
 
   if (kind === 'numeric') {
     if (raw === '' || raw == null) {
-      clearPlotPropertyValue(plot, schemaId);
+      portionClear();
     } else {
       const n = Number(raw);
       if (!Number.isFinite(n)) return; // invalid — leave previous value alone
       const schema = findPropertySchema(schemaId);
       const stored = schema?.autoRound ? Math.round(n) : n;
-      setPlotPropertyValue(plot, schemaId, stored);
+      portionSet(stored);
       // Reflect the rounded value back into the input so the user sees
       // what got persisted (rather than 50.8 silently becoming 51 in
       // the next render).
@@ -2865,9 +2933,9 @@ function onPlotPropertyBlur(inputEl) {
     _refreshDependentPercentageRows(schemaId);
   } else if (kind === 'categorical') {
     if (raw === '' || raw == null) {
-      clearPlotPropertyValue(plot, schemaId);
+      portionClear();
     } else {
-      setPlotPropertyValue(plot, schemaId, raw);
+      portionSet(raw);
     }
     save();
   }
@@ -3235,6 +3303,7 @@ function _openPropertyModal(title, schema) {
   const rollup = !!schema?.rollupDistribution;
   const autoRound = !!schema?.autoRound;
   const rootLevelId = schema?.rootLevelId || 'plot';
+  const appliesTo   = schema?.appliesTo   || 'land';
 
   // Kind dropdown is locked on edit (data-integrity hedge for Brick 9).
   // Add: dropdown is enabled and onchange swaps the kind-specific block.
@@ -3268,6 +3337,15 @@ function _openPropertyModal(title, schema) {
       <label>${t('properties.defined_at_label')}</label>
       <p class="text-dim" style="font-size:12px;margin-bottom:6px">${t('properties.defined_at_help')}</p>
       ${_definedAtSelect(rootLevelId)}
+    </div>
+    <div class="form-group">
+      <label>${t('properties.applies_to_label')}</label>
+      <p class="text-dim" style="font-size:12px;margin-bottom:6px">${t('properties.applies_to_help')}</p>
+      <select id="property-applies-to">
+        <option value="land"  ${appliesTo === 'land'  ? 'selected' : ''}>${t('properties.applies_to_land')}</option>
+        <option value="water" ${appliesTo === 'water' ? 'selected' : ''}>${t('properties.applies_to_water')}</option>
+        <option value="both"  ${appliesTo === 'both'  ? 'selected' : ''}>${t('properties.applies_to_both')}</option>
+      </select>
     </div>
     <div id="property-kind-fields">
       ${_renderPropertyKindFields(kind, { aggregation, weightId, denominatorId, rollup, autoRound })}
@@ -3442,6 +3520,10 @@ function saveProperty() {
   // Common across all kinds: which level this property is defined at.
   // Empty / unknown id falls back to 'plot'.
   const rootLevelId = document.getElementById('property-defined-at')?.value || 'plot';
+  // Brick 12c: which land/water portion this schema applies to when the
+  // project split is enabled. Defaults to 'land' (most demographics).
+  const appliesToRaw = document.getElementById('property-applies-to')?.value || 'land';
+  const appliesTo = PROPERTY_APPLIES_TO.includes(appliesToRaw) ? appliesToRaw : 'land';
 
   if (kind === 'numeric') {
     aggregation = document.getElementById('property-aggregation')?.value || 'sum';
@@ -3500,6 +3582,7 @@ function saveProperty() {
       schema.unit = unit;
       schema.notes = notes;
       schema.rootLevelId = rootLevelId;
+      schema.appliesTo = appliesTo;
       // Kind is locked on edit; we leave schema.kind alone.
       if (schema.kind === 'numeric') {
         schema.aggregation = aggregation;
@@ -3519,6 +3602,7 @@ function saveProperty() {
       denominatorPropertyId,
       autoRound,
       rootLevelId,
+      appliesTo,
     });
   }
 

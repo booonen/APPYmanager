@@ -424,6 +424,22 @@ input[type="checkbox"]:checked::after {
   font-size: 10px; color: var(--text-muted); background: var(--bg-input);
   padding: 1px 6px; border-radius: 10px; flex-shrink: 0; font-family: var(--font-mono);
 }
+/* Brick 12c: portion chip on plot-property rows. Two color variants so
+   the eye distinguishes Land from Water at a glance when both rows
+   render for the same schema (appliesTo='both'). */
+.property-portion-chip {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 1px 6px;
+  border-radius: 4px;
+  margin-left: 6px;
+  flex-shrink: 0;
+}
+.property-portion-chip.portion-land  { background: rgba(146,169,86,0.18); color: #a3c267; }
+.property-portion-chip.portion-water { background: rgba(59,130,198,0.18); color: #5fa5e0; }
 /* Properties-tab Behaviour column chip — surfaces a non-default root level
    (e.g. "Defined at: Province"). Tinted with the accent so the eye picks it
    out from the unit chip above. */
