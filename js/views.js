@@ -2408,17 +2408,56 @@ function _renderPlotPropertyRows(plot) {
 }
 
 function _renderPlotAreaRow(plot) {
-  const a = (typeof plotArea === 'function') ? plotArea(plot) : 0;
-  const formatted = (typeof formatArea === 'function') ? formatArea(a) : '—';
-  return `<div class="plot-property-row plot-property-row-readonly" data-area-row="1">
-    <div class="plot-property-label">
-      <span class="plot-property-name">${t('plot_detail.area_label')}</span>
-      <span class="property-unit-chip">${t('plot_detail.computed_chip')}</span>
-    </div>
-    <div class="plot-property-input">
-      <span class="plot-property-readonly-value mono">${esc(formatted)}</span>
-    </div>
-  </div>`;
+  const total = (typeof plotArea === 'function') ? plotArea(plot) : 0;
+  const fmt = (typeof formatArea === 'function')
+    ? (n) => formatArea(n) : (n) => String(n);
+  const baseRow = (labelChip, value) => `
+    <div class="plot-property-row plot-property-row-readonly" data-area-row="1">
+      <div class="plot-property-label">
+        <span class="plot-property-name">${t('plot_detail.area_label')}</span>
+        ${labelChip}
+      </div>
+      <div class="plot-property-input">
+        <span class="plot-property-readonly-value mono">${esc(value)}</span>
+      </div>
+    </div>`;
+
+  // Brick 12c v0.8.6: when the split is visible on this plot, render
+  // the area as two portion rows (Land + Water) with a percentage hint
+  // so the user can see at a glance how the plot decomposes.
+  if (typeof getPlotLandWater === 'function'
+      && getSetting('landWaterSplitEnabled', false)
+      && data.waterCache && data.waterCache.waterGeometry
+      && getSetting('waterDisplayMode', 'split') === 'split') {
+    const lw = getPlotLandWater(plot);
+    if (lw && lw.water) {
+      let landArea = 0, waterArea = 0;
+      try { landArea  = lw.land  ? turf.area(lw.land)  : 0; } catch (e) {}
+      try { waterArea = lw.water ? turf.area(lw.water) : 0; } catch (e) {}
+      const denom = landArea + waterArea;
+      const landPct  = denom > 0 ? (landArea  / denom) * 100 : 0;
+      const waterPct = denom > 0 ? (waterArea / denom) * 100 : 0;
+      const pct = (n) => `${formatPropertyNumber(Math.round(n * 10) / 10)}%`;
+      const landValue  = `${fmt(landArea)} <span class="plot-property-pct mono">${pct(landPct)}</span>`;
+      const waterValue = `${fmt(waterArea)} <span class="plot-property-pct mono">${pct(waterPct)}</span>`;
+      const landChip   = `<span class="property-portion-chip portion-land">${t('plot_detail.portion_land')}</span>`;
+      const waterChip  = `<span class="property-portion-chip portion-water">${t('plot_detail.portion_water')}</span>`;
+      // Inline HTML (esc would mangle the chip span), so build manually.
+      const portionRow = (chip, value) => `
+        <div class="plot-property-row plot-property-row-readonly" data-area-row="1">
+          <div class="plot-property-label">
+            <span class="plot-property-name">${t('plot_detail.area_label')}</span>
+            ${chip}
+          </div>
+          <div class="plot-property-input">
+            <span class="plot-property-readonly-value mono">${value}</span>
+          </div>
+        </div>`;
+      return portionRow(landChip, landValue) + portionRow(waterChip, waterValue);
+    }
+  }
+
+  return baseRow(`<span class="property-unit-chip">${t('plot_detail.computed_chip')}</span>`, fmt(total));
 }
 
 // Wrap an <input>'s HTML in a `.input-with-suffix` frame. The suffix

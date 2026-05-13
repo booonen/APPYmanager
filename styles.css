@@ -440,6 +440,15 @@ input[type="checkbox"]:checked::after {
 }
 .property-portion-chip.portion-land  { background: rgba(146,169,86,0.18); color: #a3c267; }
 .property-portion-chip.portion-water { background: rgba(59,130,198,0.18); color: #5fa5e0; }
+
+/* Brick 12c v0.8.6: percentage hint sits next to the area readout on
+   the per-portion Area rows ("4.2 km² 67%"). Dimmer than the value
+   itself so the eye reads the area first. */
+.plot-property-pct {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-left: 6px;
+}
 /* Properties-tab Behaviour column chip — surfaces a non-default root level
    (e.g. "Defined at: Province"). Tinted with the accent so the eye picks it
    out from the unit chip above. */

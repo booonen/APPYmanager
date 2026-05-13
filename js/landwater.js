@@ -314,15 +314,20 @@ function _signedAreaLngLat(ringLngLat) {
 // Closes a single inside-the-bbox subchain into a sea polygon. Both
 // endpoints must lie on a bbox edge.
 //
-// Picks between the CW and CCW bbox-walk closures via a SCORE:
-//   • Primary: 5 right-side test points along the chain. Each is a small
-//     perpendicular step "right" of the chain — the SEA side per OSM
-//     convention. The closure containing more test points scores higher.
-//   • Robustness anchor: if a closure contains a strong majority (≥ 70%)
-//     of plot centroids, it's almost certainly the LAND closure (plots
-//     are almost always on land), and we apply a heavy penalty. This
-//     recovers from non-canonical OGF coastlines (water on left), where
-//     the right-side test point would otherwise pick the wrong closure.
+// Decision order:
+//   1. **Right-side voting (primary).** 5 perpendicular-right probe
+//      points along the chain — under OSM canonical direction
+//      (land-on-left) they sit on the SEA side. The closure
+//      containing more probes wins, provided the gap is ≥ 2 votes.
+//      OGF enforces land-on-left, so this almost always resolves
+//      cleanly.
+//   2. **Plot-centroid tiebreaker (only when votes are close).**
+//      Picks the closure with FEWER plot centroids inside, on the
+//      heuristic that plots usually sit on land. Applied only as a
+//      tiebreaker so it doesn't fire for archipelago-style projects
+//      where many plots ARE the water — that case fooled v0.8.2's
+//      unconditional version and left half of a coastline ring
+//      flipped (the bug the user filed in v0.8.5 review).
 //
 // Returns turf Feature<Polygon> or null.
 function _closeClippedSegmentAsSea(segCoords, bbox, plotCentroids) {
@@ -343,30 +348,39 @@ function _closeClippedSegmentAsSea(segCoords, bbox, plotCentroids) {
   }
   if (closures.length === 0) return null;
 
-  let bestPoly = null;
-  let bestScore = -Infinity;
-  for (const poly of closures) {
-    let score = 0;
-    // Right-side test point votes.
+  // Right-side voting per closure.
+  const scored = closures.map(poly => {
+    let votes = 0;
     for (const tp of testPts) {
       try {
-        if (turf.booleanPointInPolygon(turf.point([tp[1], tp[0]]), poly)) score += 1;
+        if (turf.booleanPointInPolygon(turf.point([tp[1], tp[0]]), poly)) votes++;
       } catch (e) { /* skip */ }
     }
-    // Plot-centroid penalty.
-    if (plotCentroids && plotCentroids.length > 0) {
-      let plotsInside = 0;
+    return { poly, votes };
+  });
+  scored.sort((a, b) => b.votes - a.votes);
+
+  // Decisive right-side win → trust it. (5-0, 4-0, 5-1, etc.)
+  if (scored.length === 1) return scored[0].poly;
+  if (scored[0].votes - scored[1].votes >= 2) return scored[0].poly;
+
+  // Tied / near-tied — fall back to plot-centroid tiebreaker.
+  if (plotCentroids && plotCentroids.length > 0) {
+    let bestPoly = null, fewest = Infinity;
+    for (const { poly } of scored) {
+      let n = 0;
       for (const [lat, lng] of plotCentroids) {
         try {
-          if (turf.booleanPointInPolygon(turf.point([lng, lat]), poly)) plotsInside++;
+          if (turf.booleanPointInPolygon(turf.point([lng, lat]), poly)) n++;
         } catch (e) { /* skip */ }
       }
-      const fraction = plotsInside / plotCentroids.length;
-      if (fraction >= 0.7) score -= 100; // heavy penalty: this closure is LAND
+      if (n < fewest) { fewest = n; bestPoly = poly; }
     }
-    if (score > bestScore) { bestScore = score; bestPoly = poly; }
+    if (bestPoly) return bestPoly;
   }
-  return bestPoly;
+
+  // No tiebreaker available — fall back to the right-side leader.
+  return scored[0].poly;
 }
 
 // Returns ALL inside-the-bbox subchains, not just the longest. A

@@ -54,6 +54,12 @@ function _virtualAreaSchema() {
     aggregation: 'sum',
     notes:       '',
     autoRound:   true,
+    // Brick 12c v0.8.6: Area applies to BOTH portions so the plot
+    // inspector can show land area AND water area separately when
+    // the split is visible — gives the user an instant sense of how
+    // much of a coastal plot is sea vs. landmass. (User-defined
+    // numeric schemas still default to 'land'.)
+    appliesTo:   'both',
     __virtual:   true,
   };
 }

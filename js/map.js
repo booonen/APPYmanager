@@ -740,10 +740,10 @@ function _drawPlotPoly(plot) {
   //   • 'split' (default): full plot polygon stays clickable, blue
   //     water overlay drawn on top, non-interactive.
   //   • 'removed': the rendered polygon is CLIPPED to the land portion
-  //     only; water area becomes effectively outside the plot.
-  // The toggle lives in the Land/water settings card (one switch for
-  // the whole map; per-plot toggling was a v0.8.3 misstep — see
-  // VERSION_HISTORY 0.8.4).
+  //     only; water area becomes effectively outside the plot. Plots
+  //     that are fully under water (no land portion) HIDE entirely
+  //     in this mode — there's nothing to render and they'd be
+  //     visual noise (v0.8.6 fix).
   let renderedAsSplit = false;
   let mainPoly = null;
   const waterDisplayMode = getSetting('waterDisplayMode', 'split');
@@ -752,12 +752,19 @@ function _drawPlotPoly(plot) {
       && typeof getPlotLandWater === 'function') {
     const lw = getPlotLandWater(plot);
     if (lw && lw.water) {
-      if (waterDisplayMode === 'removed' && lw.land) {
-        // Land-only render: clipped polygon IS the plot on the map.
-        const landPolys = landWaterFeatureToLeafletPolygons(lw.land);
-        if (landPolys.length > 0) {
-          mainPoly = L.polygon(landPolys, plotPolygonStyle(isSelected));
-          renderedAsSplit = true;
+      if (waterDisplayMode === 'removed') {
+        if (lw.land) {
+          // Land-only render: clipped polygon IS the plot on the map.
+          const landPolys = landWaterFeatureToLeafletPolygons(lw.land);
+          if (landPolys.length > 0) {
+            mainPoly = L.polygon(landPolys, plotPolygonStyle(isSelected));
+            renderedAsSplit = true;
+          }
+        } else {
+          // Plot is fully under water and the user has chosen to hide
+          // water. Skip rendering entirely — the plot has no effective
+          // extent in this view.
+          return;
         }
       } else if (waterDisplayMode === 'split') {
         // Default split: full plot polygon stays as the clickable main

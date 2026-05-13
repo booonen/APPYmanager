@@ -1,3 +1,45 @@
+## 0.8.6 — Brick 12c polish: hide water-only plots, split-aware Area, ring-bug fix
+
+Three follow-ups from user testing of v0.8.5:
+
+### Hide water-only plots when display mode is 'removed'
+
+`_drawPlotPoly` now returns early for plots that are fully under
+water (no land portion) when `waterDisplayMode === 'removed'`. Such
+plots have no effective extent in this view — rendering them as
+nothing-but-tooltip-targets was noisy.
+
+### Area schema becomes appliesTo='both' + per-portion display
+
+The virtual Area schema now ships with `appliesTo: 'both'`. When the
+split is visible on a plot, `_renderPlotAreaRow` renders two
+read-only rows — Land area and Water area — each with a small
+percentage hint ("4.2 km² 67%") so the user can see at a glance how
+the plot decomposes. User-defined numeric schemas still default to
+'land'; Area is the special case.
+
+### Coastline-ring half-flip bug
+
+User reported: a water plot containing a closed coastline ring
+showed water on half the ring and not the other half. Root cause
+was v0.8.2's unconditional plot-centroid penalty — it assumed plots
+sit on land and demoted any closure containing ≥ 70 % of plot
+centroids. For a project whose plots ARE the water (the user's
+case: water plots around an island), the centroids cluster INSIDE
+the sea closure → sea closure penalised → algorithm flipped, half
+the bbox came back classified as land.
+
+Reworked `_closeClippedSegmentAsSea` decision order:
+  1. Right-side voting (5 probe points) is the **primary** signal.
+     If one closure wins by ≥ 2 votes, that closure is sea — full
+     stop, plot-centroid never consulted. OGF enforces canonical
+     direction so this resolves cleanly almost every time.
+  2. Plot-centroid is now only the **tiebreaker** for cases where
+     right-side voting is inconclusive (tied / off-by-one).
+
+Net effect: water-heavy projects no longer trip the heuristic, and
+canonical OGF data still gets the correct closure.
+
 ## 0.8.5 — Brick 12c: split-aware property values + inspector UI
 
 Property side of the land/water split. Numeric and categorical schemas
