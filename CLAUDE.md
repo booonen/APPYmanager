@@ -940,6 +940,33 @@ they come up; the plan is a living document.
   - Tradeoff: the land-on-left convention is trusted strictly (per
     the v0.8.7 simplification). Any coastline drawn water-on-left
     inverts its mode classification.
+- **Brick 11c** ✓ (committed, v0.11.0) — manual plot merge.
+  Inverse of plot-split. `js/merge.js` exposes
+  `computePlotMerge(plotIds)` (pure — turf.union fold, boundary-
+  conflict detection, property-value proposal) and
+  `executePlotMerge(plotIds, name, notes, propertyValues,
+  boundarySelections)` (mutates: stores geometry, applies values,
+  rewrites boundary memberships, deletes sources, hooks settlement
+  re-anchor).
+  - `proposePlotMergeValues` in properties.js mirrors
+    `proposePlotSplitValues` in reverse: numeric/sum = sum,
+    numeric/weighted_average = area-weighted, categorical =
+    majority by area, percentage = sum-raws or area-weighted-
+    percent.
+  - Selection UX (decision A.iv): shared `_plotsSelection` Set
+    drives both the Plots-table checkbox column and shift-click on
+    map polygons. Toolbar in the table + floater in the map both
+    surface `{n} selected · Merge · Clear`. Selected plots render
+    with accent stroke. `_refreshPlotSelectionVisuals` keeps the
+    two views in sync.
+  - Boundary conflicts (decision B.b): the modal lists auto-
+    inherited boundaries (every source agrees) and one dropdown
+    per type where sources differ; default pre-pick is the
+    boundary whose overlap covers the largest combined source area.
+  - Adjacency (decision D.ii): non-adjacent sources produce a
+    multi-polygon plot — a warning in the modal flags this.
+  - `ogfRelationId` is null on the merged plot (decision E.i —
+    same rule as split).
 - **Brick 11b #1** ✓ (committed, v0.10.0) — multi-cut + planar
   subdivision. Replaces `_splitOneRing` with `_multiCutOneRing`:
   find every cut↔cut and cut↔ring intersection, slice cuts at those

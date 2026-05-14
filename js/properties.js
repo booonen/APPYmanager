@@ -306,6 +306,119 @@ function clearPlotPropertyValue(plot, schemaId) {
 //
 // Returns: { [schemaId]: [valueForPiece0, valueForPiece1, ...] }
 
+// ============================================================
+// PLOT-MERGE PROPERTY RECONCILIATION (Brick 11c)
+// ============================================================
+// Inverse of proposePlotSplitValues. Given N source plots and their
+// areas, proposes one merged value per schema. Per-kind rules:
+//
+//   • numeric / 'sum'               — sum source values.
+//   • numeric / 'weighted_average'  — area-weighted average across sources.
+//   • categorical                   — majority by area (the value held
+//                                     by plots whose combined area is
+//                                     largest). User-overridable.
+//   • percentage / mode='raw' all   — sum source raws.
+//   • percentage / mode='percent' all — area-weighted percent.
+//   • percentage / mixed modes      — best-effort area-weighted percent
+//                                     across the 'percent' sources; 'raw'
+//                                     sources skip (we can't blend modes
+//                                     reliably without resolving denom).
+//
+// Sources with no stored value for a given schema are skipped — they
+// don't contribute to sums, weighted averages, or the categorical
+// tally. If no source has a value, the schema isn't proposed at all.
+//
+// Returns: { [schemaId]: <mergedValue> }
+
+function proposePlotMergeValues(sourcePlots, sourceAreasM2) {
+  const out = {};
+  if (!Array.isArray(sourcePlots) || sourcePlots.length < 2) return out;
+  if (!Array.isArray(sourceAreasM2) || sourceAreasM2.length !== sourcePlots.length) return out;
+
+  for (const schema of (data.propertySchemas || [])) {
+    if (!appliesAtLevel(schema, 'plot')) continue;
+    if (isVirtualPropertyId(schema.id)) continue;
+
+    const values = sourcePlots.map(p => getPlotPropertyValue(p, schema.id));
+    const hasAny = values.some(v => v !== undefined && v !== null && v !== '');
+    if (!hasAny) continue;
+
+    if (schema.kind === 'numeric') {
+      if (schema.aggregation === 'weighted_average') {
+        let num = 0, denom = 0;
+        for (let i = 0; i < values.length; i++) {
+          const v = Number(values[i]);
+          if (!Number.isFinite(v)) continue;
+          const w = sourceAreasM2[i] > 0 ? sourceAreasM2[i] : 0;
+          num   += v * w;
+          denom += w;
+        }
+        if (denom > 0) out[schema.id] = _maybeRound(num / denom, schema);
+      } else {
+        let sum = 0, any = false;
+        for (let i = 0; i < values.length; i++) {
+          const v = Number(values[i]);
+          if (!Number.isFinite(v)) continue;
+          sum += v; any = true;
+        }
+        if (any) out[schema.id] = _maybeRound(sum, schema);
+      }
+    } else if (schema.kind === 'categorical') {
+      // Majority by area.
+      const tally = new Map();
+      for (let i = 0; i < values.length; i++) {
+        const v = values[i];
+        if (v === undefined || v === null || v === '') continue;
+        const key = String(v);
+        const w = sourceAreasM2[i] > 0 ? sourceAreasM2[i] : 0;
+        tally.set(key, (tally.get(key) || 0) + w);
+      }
+      let best = null, bestArea = -1;
+      for (const [v, area] of tally) {
+        if (area > bestArea) { best = v; bestArea = area; }
+      }
+      if (best !== null) out[schema.id] = best;
+    } else if (schema.kind === 'percentage') {
+      const objs = values.map(v => (v && typeof v === 'object') ? v : null);
+      const present = objs.filter(Boolean);
+      if (present.length === 0) continue;
+      const allRaw     = present.every(o => o.mode === 'raw');
+      const allPercent = present.every(o => o.mode === 'percent');
+      if (allRaw) {
+        let sum = 0;
+        for (const o of present) {
+          const v = Number(o.value);
+          if (Number.isFinite(v)) sum += v;
+        }
+        out[schema.id] = { mode: 'raw', value: _maybeRound(sum, schema) };
+      } else if (allPercent) {
+        let num = 0, denom = 0;
+        for (let i = 0; i < objs.length; i++) {
+          if (!objs[i]) continue;
+          const v = Number(objs[i].value);
+          if (!Number.isFinite(v)) continue;
+          const w = sourceAreasM2[i] > 0 ? sourceAreasM2[i] : 0;
+          num += v * w; denom += w;
+        }
+        if (denom > 0) out[schema.id] = { mode: 'percent', value: _maybeRound(num / denom, schema) };
+      } else {
+        // Mixed-mode: blend only the 'percent' entries (we don't have a
+        // resolved denom to convert 'raw' values into the same space).
+        let num = 0, denom = 0;
+        for (let i = 0; i < objs.length; i++) {
+          if (!objs[i] || objs[i].mode !== 'percent') continue;
+          const v = Number(objs[i].value);
+          if (!Number.isFinite(v)) continue;
+          const w = sourceAreasM2[i] > 0 ? sourceAreasM2[i] : 0;
+          num += v * w; denom += w;
+        }
+        if (denom > 0) out[schema.id] = { mode: 'percent', value: _maybeRound(num / denom, schema) };
+      }
+    }
+  }
+  return out;
+}
+
 function proposePlotSplitValues(plot, pieceAreasM2) {
   const out = {};
   if (!plot || !Array.isArray(pieceAreasM2) || pieceAreasM2.length < 2) return out;

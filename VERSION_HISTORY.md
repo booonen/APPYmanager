@@ -1,3 +1,99 @@
+## 0.11.0 — Brick 11c: manual plot merge
+
+Inverse of plot-split. Pick N ≥ 2 plots, the modal proposes a merged
+geometry (turf.union folded across the sources), reconciles property
+values per kind, resolves any boundary-membership conflicts, and
+creates one new plot in place of the sources.
+
+### Engine — `js/merge.js`
+
+`computePlotMerge(plotIds)` (pure):
+- Folds `turf.union` across the source plots' geometry features.
+  Result is a Polygon for adjacent sources, MultiPolygon for non-
+  adjacent (decision D.ii — non-contig merges allowed).
+- Detects per-boundary-type conflicts: at each `typeId`, finds every
+  boundary that holds at least one source plot as a direct member.
+  One match → auto-inherited. Two or more → conflict (user resolves
+  in the modal, decision B.b).
+- Calls `proposePlotMergeValues` for the proposed property values
+  (see properties.js below).
+
+`executePlotMerge(plotIds, name, notes, propertyValues, boundarySelections)`
+(mutates):
+- Converts the merged feature back to `{ outer, holes }[]` for
+  `storeSubdivisionGeometry`; new plot allocated via
+  `createPlotMaybeClipped` so the project's land/water mode still
+  applies (an all-water merge result drops out the same way as an
+  all-water import).
+- Writes property values onto the new plot.
+- Drops every source plot id from every boundary's members; adds the
+  new plot id to the auto-inherited boundaries plus whichever ones
+  the user picked for each conflict.
+- Removes the source plots from `data.plots`.
+- `invalidateBoundaryGeometry` → settlements re-anchor via the
+  existing hook. `ogfRelationId` is null on the merged output
+  (decision E.i — split's rule).
+
+### Property reconciliation — `proposePlotMergeValues` (properties.js)
+
+Per kind (decision C):
+- **numeric / 'sum'** — sum source values.
+- **numeric / 'weighted_average'** — area-weighted average across
+  sources (weight = each plot's area).
+- **categorical** — majority by area.
+- **percentage / 'raw' all** — sum source raws.
+- **percentage / 'percent' all** — area-weighted percent.
+- **percentage / mixed modes** — best-effort area-weighted percent
+  across just the 'percent' sources; 'raw' sources skip (no resolved
+  denom available without traversing the percent chain at merge time).
+- Sources with no value skip; if no source has a value, the schema
+  isn't proposed at all.
+
+All proposed values are editable in the modal.
+
+### Selection UX — decision A.iv
+
+Multi-select lives in two places, sharing one `_plotsSelection` Set:
+
+- **Plots table** (`renderPlotsBody`): checkbox column on each row, a
+  header "select all in current filter" checkbox (tri-state), a
+  toolbar above the table showing `{n} selected · Merge selected ·
+  Clear` (Merge enabled only when N ≥ 2). Row body click still opens
+  detail; the checkbox cell `stopPropagation` so they don't conflict.
+- **Main map** (`_drawPlotPoly`): shift+click on a plot polygon
+  toggles its multi-select state. Plain click keeps existing
+  single-select behaviour. Selected plots draw with the accent stroke
+  + thicker weight. A floater in the map toolbar shows the same
+  count + Merge / Clear pair plus a small `shift-click` hint.
+
+The two views auto-sync via `_refreshPlotSelectionVisuals`, which
+calls `renderPlotsToolbar`, `renderPlotsBody`, and `redrawMap`.
+
+### Merge modal — `openMergeModal`
+
+- Source plots list (name + area).
+- "These plots are not all adjacent…" warning when the result is
+  multi-polygon.
+- Merged-plot name + notes inputs (default: first source's values).
+- **Boundary memberships**:
+  - Inherited row lists boundaries every source agrees on.
+  - One row per conflict: per-type dropdown listing each candidate
+    boundary + "(None)". Default pre-pick is the boundary whose
+    overlap covers the largest combined source area.
+- **Property values**: one row per applicable schema with the source
+  values shown read-only (compact dot-separated) + an editable input
+  for the merged proposal.
+- Cancel / "Merge into one plot" buttons.
+
+### Misc
+
+- `js/merge.js` registered in `appymanager.html` after `split.js`.
+- New CSS for the plots toolbar, multi-select row highlight, map
+  merge floater, and the merge modal layout.
+- New `plots.*` (selection + merge button) and `plot_merge.*` l10n.
+- Brick 11b's `data-portion` / portion-aware machinery is untouched
+  — merge slots cleanly into the post-12d single-storage model.
+
 ## 0.10.1 — Brick 11b #1 polish: enclave fix, global tile toggle, l10n
 
 Three follow-ups from v0.10.0 testing:

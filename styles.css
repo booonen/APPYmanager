@@ -1160,3 +1160,125 @@ summary.map-toolbar-control:hover {
   font-size: 11px;
   line-height: 1.4;
 }
+
+/* Plots multi-select (Brick 11c) ---------------------------- */
+.plots-select-col {
+  width: 32px;
+  text-align: center;
+  padding: 0 4px;
+}
+.plots-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 4px);
+  background: var(--bg-elev, rgba(255,255,255,0.04));
+}
+.plots-toolbar-count {
+  font-size: 13px;
+  color: var(--text);
+  flex: 1;
+}
+.data-table tr.row-selected {
+  background: var(--accent-glow, rgba(193,39,45,0.08));
+}
+.map-merge-floater {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 4px);
+  background: var(--bg-elev, rgba(255,255,255,0.04));
+  font-size: 12px;
+}
+.map-merge-floater-disabled { opacity: 0.7; }
+
+/* Merge modal ----------------------------------------------- */
+.merge-modal-section {
+  margin-bottom: 14px;
+}
+.merge-modal-section-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+  display: block;
+}
+.merge-modal-section input[type="text"],
+.merge-modal-section textarea {
+  width: 100%;
+  max-width: 100%;
+}
+.merge-sources-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 160px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 4px);
+  padding: 6px;
+  background: var(--bg);
+}
+.merge-source-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+}
+.merge-source-name { flex: 1; }
+.merge-source-area { color: var(--text-muted); font-size: 12px; }
+.merge-warn {
+  margin-top: 6px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm, 4px);
+  background: var(--warn-glow, rgba(217,165,30,0.10));
+  color: var(--warn, #b08020);
+  font-size: 12px;
+}
+.merge-boundaries-auto {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+.merge-boundary-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.merge-boundary-row label {
+  min-width: 120px;
+  font-size: 13px;
+}
+.merge-props {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.merge-prop-row {
+  display: grid;
+  grid-template-columns: 1fr 1.2fr 1fr;
+  gap: 10px;
+  align-items: center;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 4px);
+  background: var(--bg);
+}
+.merge-prop-name { font-size: 13px; }
+.merge-prop-unit { color: var(--text-muted); font-size: 11px; }
+.merge-prop-sources { font-size: 11px; color: var(--text-muted); }
+.merge-prop-input { display: flex; align-items: center; }
+.merge-cell-input { width: 100%; }
+.merge-percent-cell {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+}
+.merge-percent-suffix { font-size: 11px; color: var(--text-muted); }

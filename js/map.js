@@ -205,9 +205,21 @@ function settlementMarkerStyle(settlement, selected) {
   };
 }
 
-function plotPolygonStyle(selected) {
+function plotPolygonStyle(selected, multiSelected) {
   // Neutral slate so plots read as data on the map without competing
   // with the accent (which is reserved for UI affordances).
+  // Brick 11c: a third state — multi-selected for merge — uses the
+  // accent to make the selection visually obvious. Beats single-select
+  // (which is just the standard slate-bold) so the user can tell which
+  // plots are queued for the merge action.
+  if (multiSelected) {
+    return {
+      color: 'var(--accent, #c1272d)',
+      weight: 3.5,
+      fillColor: '#c1272d',
+      fillOpacity: 0.22,
+    };
+  }
   return {
     color: selected ? '#1f2937' : '#475569',
     weight: selected ? 3 : 2,
@@ -824,16 +836,25 @@ function _renderRootLevel(drawnBoundaries) {
 function _drawPlotPoly(plot) {
   const geo = resolvePlotGeometry(plot);
   if (!geo.polygons.length) return;
-  const isSelected = _selectedItemKind === 'plot' && _selectedItemId === plot.id;
+  const isSelected      = _selectedItemKind === 'plot' && _selectedItemId === plot.id;
+  const isMultiSelected = (typeof isPlotSelected === 'function') && isPlotSelected(plot.id);
   // v0.9.0: plot polygons are already shaped by the project's
   // land/water mode at creation time, so there's no per-plot split
   // path here — just draw whatever's stored. The blue water context
   // shows through the `_mapWaterDebugLayer` overlay drawn below.
-  const mainPoly = L.polygon(geo.polygons, plotPolygonStyle(isSelected));
+  const mainPoly = L.polygon(geo.polygons, plotPolygonStyle(isSelected, isMultiSelected));
   mainPoly._appyPlotId = plot.id;
   if (plot.name) mainPoly.bindTooltip(plot.name);
   mainPoly.on('click', (e) => {
     L.DomEvent.stopPropagation(e);
+    // Brick 11c: shift-click toggles a plot's multi-select state for
+    // the merge gesture. Plain click selects the single item as before
+    // (and opens detail via the existing _selectItem path).
+    if (e.originalEvent && e.originalEvent.shiftKey
+        && typeof togglePlotSelection === 'function') {
+      togglePlotSelection(plot.id);
+      return;
+    }
     _selectItem('plot', plot.id);
   });
   _mapPlotLayer.addLayer(mainPoly);
@@ -1536,7 +1557,27 @@ function renderMapToolbar() {
     rowHtml = `<div class="map-toolbar-row">${selectHtml}${placesHtml}</div>`;
   }
 
-  el.innerHTML = breadcrumbHtml + rowHtml;
+  // Brick 11c: merge floater. Shown when 2+ plots are multi-selected.
+  // Sits inline in the toolbar so map sizing stays predictable.
+  let mergeFloater = '';
+  if (typeof selectedPlotIds === 'function') {
+    const ids = selectedPlotIds();
+    if (ids.length >= 1) {
+      const cls = 'map-merge-floater' + (ids.length >= 2 ? '' : ' map-merge-floater-disabled');
+      const btn = ids.length >= 2
+        ? `<button class="btn btn-sm btn-primary" onclick="openMergeModal()">${t('plots.merge_btn')}</button>`
+        : '';
+      mergeFloater = `
+        <div class="${cls}">
+          <span>${t('plots.selected_count', { n: ids.length })}</span>
+          ${btn}
+          <button class="btn btn-sm" onclick="clearPlotSelection()">${t('plots.clear_selection')}</button>
+          <span class="text-dim" style="font-size:11px">${t('plots.shift_click_hint')}</span>
+        </div>`;
+    }
+  }
+
+  el.innerHTML = breadcrumbHtml + rowHtml + mergeFloater;
 
   // The "All types" master needs its indeterminate state set
   // imperatively (HTML can't represent it).

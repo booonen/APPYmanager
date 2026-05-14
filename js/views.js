@@ -38,6 +38,34 @@ function renderDashboard() {
 
 let _plotsSort = { column: 'name', direction: 'asc' };
 let _plotsSearch = '';
+// Brick 11c: multi-selection for the merge gesture. Set is shared by
+// the Plots table (checkbox column) and the map (shift+click). The
+// helpers below keep both views in sync.
+let _plotsSelection = new Set();
+
+function isPlotSelected(id) { return _plotsSelection.has(id); }
+function selectedPlotIds()   { return Array.from(_plotsSelection); }
+function togglePlotSelection(id) {
+  if (_plotsSelection.has(id)) _plotsSelection.delete(id);
+  else                          _plotsSelection.add(id);
+  _refreshPlotSelectionVisuals();
+}
+function setPlotSelection(ids) {
+  _plotsSelection = new Set(ids || []);
+  _refreshPlotSelectionVisuals();
+}
+function clearPlotSelection() { setPlotSelection([]); }
+
+// Repaints the Plots table body (so checkboxes + toolbar stay in sync)
+// and the map (so highlight rings update). Used by both views and the
+// map-side multi-select handlers.
+function _refreshPlotSelectionVisuals() {
+  if (typeof renderPlotsToolbar === 'function') renderPlotsToolbar();
+  if (typeof renderPlotsBody === 'function')    renderPlotsBody();
+  // redrawMap pulls in renderMapToolbar (where the merge floater lives)
+  // AND re-strokes the plot polygons with the new multi-select state.
+  if (typeof redrawMap === 'function')          redrawMap();
+}
 
 function renderPlots() {
   const el = document.getElementById('plots-content');
@@ -70,9 +98,15 @@ function renderPlots() {
         autocomplete="off"
         style="max-width:320px">
     </div>
+    <div id="plots-toolbar"></div>
     <table class="data-table">
       <thead>
         <tr>
+          <th class="plots-select-col">
+            <input type="checkbox" id="plots-select-all"
+              onchange="onPlotsSelectAllToggle(this.checked)"
+              title="${esc(t('plots.select_all'))}">
+          </th>
           ${plotsSortHeader('name', t('plots.col_name'))}
           ${plotsSortHeader('area', t('plots.col_area'))}
           ${plotsSortHeader('ogfId', t('plots.col_ogf_id'))}
@@ -81,7 +115,36 @@ function renderPlots() {
       <tbody id="plots-tbody"></tbody>
     </table>
     <div id="plots-empty-result"></div>`;
+  renderPlotsToolbar();
   renderPlotsBody();
+}
+
+// Compact toolbar above the Plots table: selection count + Merge / Clear.
+function renderPlotsToolbar() {
+  const el = document.getElementById('plots-toolbar');
+  if (!el) return;
+  const n = _plotsSelection.size;
+  if (n === 0) { el.innerHTML = ''; return; }
+  el.innerHTML = `
+    <div class="plots-toolbar">
+      <span class="plots-toolbar-count">${t('plots.selected_count', { n })}</span>
+      <button class="btn btn-sm btn-primary"
+        onclick="openMergeModal()"
+        ${n < 2 ? 'disabled' : ''}>${t('plots.merge_btn')}</button>
+      <button class="btn btn-sm"
+        onclick="clearPlotSelection()">${t('plots.clear_selection')}</button>
+    </div>
+  `;
+}
+
+function onPlotsSelectAllToggle(checked) {
+  if (!checked) { clearPlotSelection(); return; }
+  // Select all in current filtered view.
+  const q = _plotsSearch.trim().toLowerCase();
+  const ids = (data.plots || [])
+    .filter(p => !q || (p.name || '').toLowerCase().includes(q))
+    .map(p => p.id);
+  setPlotSelection(ids);
 }
 
 function plotsSortHeader(col, label) {
@@ -119,12 +182,28 @@ function renderPlotsBody() {
     const hasFlags = p.flags && p.flags.length > 0;
     const flagBadge = hasFlags ? ` <span class="plot-flag-badge" title="${p.flags.map(f => t('plot_detail.flag_' + f)).join('; ')}">⚠</span>` : '';
     const nameCell = (p.name ? esc(p.name) : `<span class="text-muted">${t('plots.unnamed')}</span>`) + flagBadge;
-    return `<tr class="row-click" onclick="openPlotDetail('${esc(p.id)}')">
+    const checked = isPlotSelected(p.id) ? 'checked' : '';
+    const rowCls  = 'row-click' + (isPlotSelected(p.id) ? ' row-selected' : '');
+    return `<tr class="${rowCls}" onclick="openPlotDetail('${esc(p.id)}')">
+      <td class="plots-select-col" onclick="event.stopPropagation()">
+        <input type="checkbox" ${checked}
+          onchange="togglePlotSelection('${esc(p.id)}')">
+      </td>
       <td>${nameCell}</td>
       <td class="mono">${formatArea(plotArea(p))}</td>
       <td class="mono">${p.ogfRelationId != null ? p.ogfRelationId : '<span class="text-muted">—</span>'}</td>
     </tr>`;
   }).join('');
+
+  // Header "select all" tri-state: tick if every visible row is
+  // selected, unchecked if none, indeterminate if partial.
+  const selAll = document.getElementById('plots-select-all');
+  if (selAll) {
+    const visIds = list.map(p => p.id);
+    const selectedHere = visIds.filter(id => _plotsSelection.has(id)).length;
+    selAll.checked = visIds.length > 0 && selectedHere === visIds.length;
+    selAll.indeterminate = selectedHere > 0 && selectedHere < visIds.length;
+  }
 
   if (emptyEl) {
     emptyEl.innerHTML = (q && list.length === 0)
@@ -146,6 +225,255 @@ function onPlotsSort(col) {
     _plotsSort.direction = 'asc';
   }
   renderPlots();
+}
+
+// ============================================================
+// MERGE MODAL (Brick 11c)
+// ============================================================
+// Opened from either the Plots table toolbar or the map's merge
+// floater. Shows source plots, merged-plot name/notes inputs, a
+// boundary-membership reconciler (per-type dropdowns for conflicts),
+// and an editable property-reconciliation row per applicable schema.
+// Confirm calls `executePlotMerge`.
+
+let _mergeState = null;
+
+function openMergeModal() {
+  const ids = selectedPlotIds();
+  if (ids.length < 2) { toast(t('plots.merge_need_two'), 'warning'); return; }
+  if (typeof computePlotMerge !== 'function') { toast(t('plots.merge_no_engine'), 'error'); return; }
+  const pre = computePlotMerge(ids);
+  if (pre.error) { toast(t('plot_merge.error_' + pre.error) || pre.error, 'error'); return; }
+
+  _mergeState = {
+    ids,
+    name:  pre.proposedName,
+    notes: pre.proposedNotes,
+    propertyValues:     { ...pre.proposedValues },
+    boundarySelections: {},
+    sourcePlots:        pre.sourcePlots,
+    sourceAreas:        pre.sourceAreas,
+    isAdjacent:         pre.isAdjacent,
+    conflicts:          pre.conflicts,
+    autoMemberships:    pre.autoMemberships,
+  };
+  // Default each conflict's selection to the boundary holding the most
+  // source-area, so the modal opens with a reasonable pre-pick.
+  for (const c of (_mergeState.conflicts || [])) {
+    _mergeState.boundarySelections[c.typeId] = _defaultBoundaryForConflict(c);
+  }
+
+  _renderMergeModal();
+}
+
+function _defaultBoundaryForConflict(conflict) {
+  // Pick the boundary in the conflict whose member-overlap with the
+  // source plots covers the largest total source area.
+  const sourceIds = new Set(_mergeState.ids);
+  let best = conflict.boundaryIds[0] || '';
+  let bestArea = -1;
+  for (const bId of conflict.boundaryIds) {
+    const b = (data.boundaries || []).find(x => x.id === bId);
+    if (!b) continue;
+    let area = 0;
+    for (const m of (b.members || [])) {
+      if (m.kind !== 'plot' || !sourceIds.has(m.id)) continue;
+      const idx = _mergeState.ids.indexOf(m.id);
+      if (idx >= 0) area += (_mergeState.sourceAreas[idx] || 0);
+    }
+    if (area > bestArea) { best = bId; bestArea = area; }
+  }
+  return best;
+}
+
+function _renderMergeModal() {
+  if (!_mergeState) return;
+  const s = _mergeState;
+  const n = s.ids.length;
+
+  // Source plots list.
+  const sourcesHtml = s.sourcePlots.map((p, i) => `
+    <div class="merge-source-row">
+      <span class="merge-source-name">${p.name ? esc(p.name) : `<span class="text-muted">${t('plots.unnamed')}</span>`}</span>
+      <span class="merge-source-area mono">${esc(formatArea(s.sourceAreas[i] || 0))}</span>
+    </div>
+  `).join('');
+
+  const adjacencyHint = s.isAdjacent
+    ? ''
+    : `<div class="merge-warn">${t('plot_merge.non_adjacent_hint')}</div>`;
+
+  // Boundary memberships.
+  let boundariesHtml = '';
+  const autoNames = (s.autoMemberships || [])
+    .map(bId => (data.boundaries || []).find(b => b.id === bId))
+    .filter(Boolean)
+    .map(b => esc(b.name || `(${getBoundaryTypeName(b.typeId)})`));
+  if (autoNames.length > 0) {
+    boundariesHtml += `<div class="merge-boundaries-auto">${t('plot_merge.boundaries_auto')}: ${autoNames.join(', ')}</div>`;
+  }
+  for (const c of (s.conflicts || [])) {
+    const typeName = getBoundaryTypeName(c.typeId) || c.typeId;
+    const opts = c.boundaryIds.map(bId => {
+      const b = (data.boundaries || []).find(x => x.id === bId);
+      const label = b ? (b.name || `(${typeName})`) : bId;
+      const sel = s.boundarySelections[c.typeId] === bId ? ' selected' : '';
+      return `<option value="${esc(bId)}"${sel}>${esc(label)}</option>`;
+    }).join('');
+    const noneSel = !s.boundarySelections[c.typeId] ? ' selected' : '';
+    boundariesHtml += `
+      <div class="merge-boundary-row">
+        <label>${esc(typeName)}:</label>
+        <select onchange="onMergeBoundaryChange('${esc(c.typeId)}', this.value)">
+          <option value=""${noneSel}>${t('plot_merge.boundary_none')}</option>
+          ${opts}
+        </select>
+      </div>
+    `;
+  }
+  if (!boundariesHtml) {
+    boundariesHtml = `<div class="text-dim" style="font-size:12px">${t('plot_merge.boundaries_none')}</div>`;
+  }
+
+  // Property reconciliation rows.
+  const schemas = (data.propertySchemas || [])
+    .filter(sc => appliesAtLevel(sc, 'plot') && !isVirtualPropertyId(sc.id))
+    .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  const propRows = schemas.map(schema => {
+    const sources = s.sourcePlots.map(p => getPlotPropertyValue(p, schema.id));
+    const hasAny = sources.some(v => v !== undefined && v !== null && v !== '');
+    if (!hasAny) return '';
+    const sourcesDisplay = sources.map((v, i) =>
+      v === undefined || v === null || v === ''
+        ? '—'
+        : esc(_splitFormatParentValue(schema, v))
+    ).join(' · ');
+    const merged = s.propertyValues[schema.id];
+    const inputHtml = _renderMergeInputCell(schema, merged);
+    return `
+      <div class="merge-prop-row">
+        <div class="merge-prop-name">${esc(schema.name)}${schema.unit ? ` <span class="merge-prop-unit">${esc(schema.unit)}</span>` : ''}</div>
+        <div class="merge-prop-sources mono">${sourcesDisplay}</div>
+        <div class="merge-prop-input">${inputHtml}</div>
+      </div>
+    `;
+  }).filter(Boolean).join('');
+  const propSection = propRows
+    ? `<div class="merge-props">${propRows}</div>`
+    : `<div class="text-dim" style="font-size:12px">${t('plot_merge.no_props')}</div>`;
+
+  const body = `
+    <div class="merge-modal-section">
+      <div class="merge-modal-section-label">${t('plot_merge.sources_label')}</div>
+      <div class="merge-sources-list">${sourcesHtml}</div>
+      ${adjacencyHint}
+    </div>
+    <div class="merge-modal-section">
+      <label class="merge-modal-section-label">${t('plot_merge.name_label')}</label>
+      <input type="text" id="merge-name" value="${esc(s.name)}"
+        oninput="_mergeState && (_mergeState.name = this.value)">
+    </div>
+    <div class="merge-modal-section">
+      <label class="merge-modal-section-label">${t('plot_merge.notes_label')}</label>
+      <textarea id="merge-notes" rows="2"
+        oninput="_mergeState && (_mergeState.notes = this.value)">${esc(s.notes)}</textarea>
+    </div>
+    <div class="merge-modal-section">
+      <div class="merge-modal-section-label">${t('plot_merge.boundaries_label')}</div>
+      ${boundariesHtml}
+    </div>
+    <div class="merge-modal-section">
+      <div class="merge-modal-section-label">${t('plot_merge.properties_label')}</div>
+      ${propSection}
+    </div>
+  `;
+  const footer = `
+    <button class="btn" onclick="closeMergeModal()">${t('btn.cancel')}</button>
+    <button class="btn btn-primary" onclick="onMergeConfirm()">${t('plot_merge.confirm_btn', { n })}</button>
+  `;
+  openModal(t('plot_merge.title', { n }), body, footer);
+}
+
+function _renderMergeInputCell(schema, val) {
+  const base = `data-schema-id="${esc(schema.id)}" data-kind="${schema.kind}"`;
+  if (schema.kind === 'numeric') {
+    const n = Number(val);
+    const display = Number.isFinite(n) ? formatPropertyNumber(n) : '';
+    return `<input type="number" step="any" class="merge-cell-input" value="${esc(display)}" ${base} oninput="onMergePropertyInput(this)">`;
+  }
+  if (schema.kind === 'categorical') {
+    return `<input type="text" class="merge-cell-input" value="${esc(val || '')}" ${base} oninput="onMergePropertyInput(this)">`;
+  }
+  if (schema.kind === 'percentage') {
+    const obj = (val && typeof val === 'object') ? val : { mode: 'percent', value: '' };
+    const mode = obj.mode === 'raw' ? 'raw' : 'percent';
+    const n = Number(obj.value);
+    const display = Number.isFinite(n) ? formatPropertyNumber(n) : '';
+    const suffix = mode === 'percent' ? '%' : (findPropertySchema(schema.denominatorPropertyId)?.unit || '');
+    return `
+      <span class="merge-percent-cell">
+        <input type="number" step="any" class="merge-cell-input"
+          value="${esc(display)}" ${base} data-mode="${mode}"
+          oninput="onMergePropertyInput(this)">
+        <span class="merge-percent-suffix">${esc(suffix || '')}</span>
+      </span>
+    `;
+  }
+  return '';
+}
+
+function onMergeBoundaryChange(typeId, value) {
+  if (!_mergeState) return;
+  _mergeState.boundarySelections[typeId] = value || '';
+}
+
+function onMergePropertyInput(inputEl) {
+  if (!_mergeState) return;
+  const schemaId = inputEl.dataset.schemaId;
+  const kind     = inputEl.dataset.kind;
+  const raw      = inputEl.value;
+  if (raw === '' || raw == null) { delete _mergeState.propertyValues[schemaId]; return; }
+  if (kind === 'numeric') {
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return;
+    const schema = findPropertySchema(schemaId);
+    _mergeState.propertyValues[schemaId] = schema?.autoRound ? Math.round(n) : n;
+    return;
+  }
+  if (kind === 'categorical') {
+    _mergeState.propertyValues[schemaId] = raw;
+    return;
+  }
+  if (kind === 'percentage') {
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return;
+    const mode = inputEl.dataset.mode === 'raw' ? 'raw' : 'percent';
+    _mergeState.propertyValues[schemaId] = { mode, value: n };
+    return;
+  }
+}
+
+function onMergeConfirm() {
+  if (!_mergeState) return;
+  const s = _mergeState;
+  if (typeof executePlotMerge !== 'function') {
+    toast(t('plots.merge_no_engine'), 'error');
+    return;
+  }
+  const newId = executePlotMerge(
+    s.ids, s.name, s.notes, s.propertyValues, s.boundarySelections
+  );
+  if (!newId) { toast(t('plot_merge.error_execute'), 'error'); return; }
+  closeMergeModal();
+  clearPlotSelection();
+  refreshAll();
+  redrawMapPlots();
+  toast(t('plot_merge.success_toast', { n: s.ids.length }), 'success');
+}
+
+function closeMergeModal() {
+  _mergeState = null;
+  closeModal();
 }
 
 // ============================================================
