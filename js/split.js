@@ -1,27 +1,35 @@
 // ============================================================
 // SPLIT — Manual plot split (Brick 11 + 11b)
 // ============================================================
-// Unified split engine (Brick 11b #2): a single `computePlotSplit(plot,
-// cuts)` handles both contiguous and non-contiguous plots, with the
-// component-mode behaviour falling out as "non-contig + no cut drawn".
+// `computePlotSplit(plot, cuts)` builds a planar subdivision (Brick 11b
+// #1) from the plot's outer rings + zero or more user-drawn cuts.
 //
-//   • Cuts is an array of polylines (Brick 11b A.ii — `cuts: Polyline[]`).
-//     v1 of #2 keeps `cuts.length <= 1` and the editor only manages
-//     `cuts[0]`; Brick 11b #1 promotes this to N cuts.
-//   • For each outer ring of the plot's geometry:
-//       0 crossings with cut[0] → ring passes through as one piece.
-//       2 crossings           → ring splits into two sub-pieces.
-//       1 / 3 / 4+            → cut rejected (cut must enter and exit).
-//   • An empty cut + non-contig plot → one piece per ring (component
-//     behaviour preserved as the default).
+//   • Cuts is an array of polylines. Empty / sub-2-vertex cuts are
+//     ignored. Self-intersecting cuts are rejected upfront.
+//   • Algorithm per outer ring:
+//       1. Find every intersection: cut↔cut (pairwise), cut↔ring.
+//       2. Slice each cut at its intersection points → sub-segments,
+//          each labelled by endpoint type: 'ring' / 'cutcut' / 'endpoint'.
+//       3. Discard sub-segments whose midpoint lies outside the plot
+//          (outside the outer ring, or inside a hole).
+//       4. Iterative dangling-trim: a sub-segment with an 'endpoint'
+//          end, or a 'cutcut' end whose node now has fewer than 2
+//          slices touching it, is discarded. Repeat until stable.
+//       5. Slice the outer ring at all ring↔cut intersection points.
+//       6. Feed (ring segments + retained cut sub-segments) to
+//          turf.polygonize. Each bounded face inside the plot is a
+//          piece.
+//       7. Holes (inner rings) ride along with whichever piece
+//          contains their first vertex (today's punt — a cut that
+//          physically crosses a hole boundary is unsupported, the
+//          dangling-trim discards those segments quietly).
+//   • No cuts (or every cut dangles away to nothing) → one piece per
+//     outer ring (the old component-mode default).
 //
-// Pieces feed into output groups (Brick 11b B.i): the redistribution
-// panel exposes an "Output" dropdown per piece, multiple pieces can
-// merge into one output, and a single non-contig output is supported
-// (cross-ring merge → multi-polygon plot).
-//
-// `executeSplit` consumes the user's output groups (not raw pieces),
-// unions per-output geometry, and produces one new plot per output.
+// Pieces feed into output groups (Brick 11b #2): the redistribution
+// panel exposes an "Output" dropdown per piece, multiple pieces merge
+// into one output, cross-ring merges produce multi-polygon outputs.
+// `executeSplit` consumes the user's groupings (not raw pieces).
 //
 // Coordinate conventions (mirrors subdivide.js):
 //   Internal / Leaflet: [lat, lon]
@@ -60,24 +68,17 @@ function _pieceArea(piece) {
 //     piece. Falls out as "component mode" for non-contig plots; for
 //     contig plots it just returns the single plot as one piece (and
 //     the panel disables Confirm).
-//   • Cut drawn → run computeRingCutSplit per outer ring. Rings with
-//     0 crossings pass through; rings with 2 crossings split; any ring
-//     with 1/3/4+ crossings aborts the whole split with an error.
-//
-// Returns { pieces, cutInside, error? } where `cutInside` is the in-
-// polygon portion of cut[0] across all crossed rings (for preview
-// rendering — concatenated lat/lng segments).
-
 function computePlotSplit(plot, cuts) {
   if (!plot) return { pieces: [], error: 'no_plot' };
   const geo = resolvePlotGeometry(plot);
   if (geo.polygons.length === 0) return { pieces: [], error: 'no_geometry' };
 
-  const cut = Array.isArray(cuts) && cuts.length > 0 ? cuts[0] : null;
-  const hasCut = Array.isArray(cut) && cut.length >= 2;
+  // Drop empty / single-vertex cuts.
+  const liveCuts = (Array.isArray(cuts) ? cuts : [])
+    .filter(c => Array.isArray(c) && c.length >= 2);
 
-  // No cut drawn → one piece per ring (component-mode default).
-  if (!hasCut) {
+  // No usable cuts → one piece per outer ring (component fallthrough).
+  if (liveCuts.length === 0) {
     const pieces = geo.polygons.map(polygon => {
       const [outer, ...holes] = polygon;
       const piece = { outer, holes };
@@ -87,138 +88,308 @@ function computePlotSplit(plot, cuts) {
     return { pieces, cutInside: null };
   }
 
-  // Cut drawn → per-ring split. Each ring contributes 1 piece (no
-  // crossings) or 2 pieces (2 crossings); other crossing counts reject.
-  const cutLine = turf.lineString(cut.map(([lat, lon]) => [lon, lat]));
-  const allPieces = [];
-  const cutInsideSegments = [];
-  let crossedAny = false;
+  // Self-intersection check — reject the whole split with a single
+  // error pointing at the offending cut index (v0.9.2 trial showed
+  // self-intersecting cuts double-count the loop's interior).
+  for (let i = 0; i < liveCuts.length; i++) {
+    if (_cutSelfIntersects(liveCuts[i])) {
+      return { pieces: [], error: 'cut_self_intersects' };
+    }
+  }
 
+  const allPieces = [];
+  const allCutInside = [];
+  let crossedAny = false;
   for (const polygon of geo.polygons) {
     const [outer, ...holes] = polygon;
     if (!outer || outer.length < 3) continue;
 
-    const split = _splitOneRing(outer, holes, cutLine);
-    if (split.error) return { pieces: [], error: split.error };
-
-    allPieces.push(...split.pieces);
-    if (split.cutInside) {
-      cutInsideSegments.push(split.cutInside);
-      crossedAny = true;
-    }
+    const res = _multiCutOneRing(outer, holes, liveCuts);
+    if (res.error) return { pieces: [], error: res.error };
+    allPieces.push(...res.pieces);
+    if (res.cutInside) allCutInside.push(...res.cutInside);
+    if (res.crossedAny) crossedAny = true;
   }
 
   if (!crossedAny) {
     return { pieces: [], error: 'cut_does_not_cross' };
   }
-  return {
-    pieces: allPieces,
-    cutInside: cutInsideSegments.length === 1 ? cutInsideSegments[0] : cutInsideSegments,
-  };
+  return { pieces: allPieces, cutInside: allCutInside };
 }
 
-// Per-ring cut application. Returns:
-//   { pieces: [one piece],          cutInside: null }   — 0 crossings
-//   { pieces: [piece1, piece2],     cutInside: [...] }  — 2 crossings
-//   { pieces: [], error: '<code>' }                     — 1 / 3 / 4+ crossings
-function _splitOneRing(outer, holes, cutLine) {
-  // Defensively close the ring — assembleRing returns OPEN rings for
-  // multi-way relations but CLOSED rings for single self-closed ways.
+// Per-outer-ring planar subdivision. See the module header for the
+// full algorithm. Returns:
+//   { pieces, cutInside, crossedAny }     — success (≥ 1 piece)
+//   { pieces: [], error: '...' }          — hard failure
+function _multiCutOneRing(outer, holes, cuts) {
+  // Close the ring for line ops.
   const ringClosed = outer.slice();
-  const _f = ringClosed[0], _l = ringClosed[ringClosed.length - 1];
-  if (_f[0] !== _l[0] || _f[1] !== _l[1]) ringClosed.push([_f[0], _f[1]]);
+  const _rf = ringClosed[0], _rl = ringClosed[ringClosed.length - 1];
+  if (_rf[0] !== _rl[0] || _rf[1] !== _rl[1]) ringClosed.push([_rf[0], _rf[1]]);
   const ringLine = turf.lineString(ringClosed.map(([lat, lon]) => [lon, lat]));
+  const cutLines = cuts.map(c => turf.lineString(c.map(([lat, lon]) => [lon, lat])));
 
-  const xs = turf.lineIntersect(ringLine, cutLine);
-  const xPts = _dedupePoints(xs.features.map(f => f.geometry.coordinates));
+  // Cut↔ring intersections per cut.
+  const cutRingIxs = cutLines.map(cl =>
+    _dedupePoints(turf.lineIntersect(cl, ringLine).features.map(f => f.geometry.coordinates))
+  );
+  // Cut↔cut intersections (pairwise) — collected per cut.
+  const cutCutIxs = cutLines.map(() => []);
+  for (let i = 0; i < cutLines.length; i++) {
+    for (let j = i + 1; j < cutLines.length; j++) {
+      const pts = _dedupePoints(
+        turf.lineIntersect(cutLines[i], cutLines[j]).features.map(f => f.geometry.coordinates)
+      );
+      cutCutIxs[i].push(...pts);
+      cutCutIxs[j].push(...pts);
+    }
+  }
 
-  // No crossings → ring passes through unchanged.
-  if (xPts.length === 0) {
+  const hasRingCrossing = cutRingIxs.some(arr => arr.length > 0);
+  if (!hasRingCrossing) {
+    // No cut touches this ring → it passes through whole.
     const piece = { outer, holes: holes || [] };
     piece.area = _pieceArea(piece);
-    return { pieces: [piece], cutInside: null };
-  }
-  // Anything other than 2 crossings is malformed for this brick.
-  // Brick 11b #1 (multi-cut) will revisit 4+ crossings.
-  if (xPts.length !== 2) {
-    return { pieces: [], error: xPts.length === 1 ? 'cut_crosses_ring_once' : 'cut_crosses_too_many_times' };
+    return { pieces: [piece], cutInside: null, crossedAny: false };
   }
 
-  const ringLen = turf.length(ringLine);
-  const cutLen  = turf.length(cutLine);
-
-  const A = _projectPoint(ringLine, cutLine, xPts[0]);
-  const B = _projectPoint(ringLine, cutLine, xPts[1]);
-
-  // Order so the "first crossing on the cut" is A. Keeps cut traversal A→B.
-  let p, q;
-  if (A.cutT <= B.cutT) { p = A; q = B; } else { p = B; q = A; }
-
-  // Cut interior: the part between the two crossings, oriented p→q.
-  const cutInside = _safeLineSliceAlong(cutLine, p.cutT, q.cutT, cutLen);
-  if (!cutInside) return { pieces: [], error: 'cut_slice_failed' };
-  const cutCoordsAtoB = cutInside.geometry.coordinates;
-
-  // Ring arcs: two complementary spans of the ring, both walked forward.
-  // arcAB goes p.ringT → q.ringT; arcBA goes q.ringT → p.ringT (wraps).
-  const arcAB = _ringSliceForward(ringLine, p.ringT, q.ringT, ringLen);
-  const arcBA = _ringSliceForward(ringLine, q.ringT, p.ringT, ringLen);
-  if (!arcAB || !arcBA) return { pieces: [], error: 'cut_slice_failed' };
-  const arcABCoords = arcAB.geometry.coordinates;
-  const arcBACoords = arcBA.geometry.coordinates;
-
-  // **Snap intersection endpoints to canonical coords.** turf.lineSliceAlong
-  // rebuilds each endpoint independently from the line's parameterisation,
-  // so the ring-side and cut-side endpoints disagree by ~1e-12 even
-  // though they "should" be the same point. Forcing both to the canonical
-  // xPt value avoids sliver triangles at each crossing (which surface in
-  // turf.union later when a parent boundary re-dissolves the pieces).
-  const pCoord = [p.pt[0], p.pt[1]];
-  const qCoord = [q.pt[0], q.pt[1]];
-  cutCoordsAtoB[0]                      = pCoord;
-  cutCoordsAtoB[cutCoordsAtoB.length-1] = qCoord;
-  arcABCoords[0]                        = pCoord;
-  arcABCoords[arcABCoords.length-1]     = qCoord;
-  arcBACoords[0]                        = qCoord;
-  arcBACoords[arcBACoords.length-1]     = pCoord;
-
-  const piece1Outer = _joinRingFragments(arcABCoords, cutCoordsAtoB.slice().reverse());
-  const piece2Outer = _joinRingFragments(arcBACoords, cutCoordsAtoB);
-
-  const piece1OuterLatLng = piece1Outer.map(([lon, lat]) => [lat, lon]);
-  const piece2OuterLatLng = piece2Outer.map(([lon, lat]) => [lat, lon]);
-
-  // Assign holes by point-in-polygon on the hole's first vertex.
-  const piece1Feature = turf.polygon([piece1Outer.concat([piece1Outer[0]])]);
-  const piece2Feature = turf.polygon([piece2Outer.concat([piece2Outer[0]])]);
-  const piece1Holes = [];
-  const piece2Holes = [];
-  for (const hole of (holes || [])) {
-    if (!hole || hole.length < 3) continue;
-    const probe = turf.point([hole[0][1], hole[0][0]]);
-    if (turf.booleanPointInPolygon(probe, piece1Feature)) piece1Holes.push(hole);
-    else if (turf.booleanPointInPolygon(probe, piece2Feature)) piece2Holes.push(hole);
+  // Slice each cut at (ringIxs ∪ cutCutIxs); label endpoint types.
+  const slices = [];
+  for (let i = 0; i < cutLines.length; i++) {
+    slices.push(..._sliceCutAtPoints(cutLines[i], cutRingIxs[i], cutCutIxs[i]));
   }
 
-  const piece1 = { outer: piece1OuterLatLng, holes: piece1Holes };
-  const piece2 = { outer: piece2OuterLatLng, holes: piece2Holes };
-  piece1.area = _pieceArea(piece1);
-  piece2.area = _pieceArea(piece2);
+  // Drop slices whose midpoint lies outside the outer ring or inside
+  // a hole — those segments don't divide the plot interior.
+  const insideSlices = slices.filter(s => _sliceMidpointInsidePlot(s, ringClosed, holes));
 
-  // Sanity: refuse if either sub-piece collapsed to ~zero area.
-  if (piece1.area < 1 || piece2.area < 1) {
+  // Iterative dangling-trim: keep only slices whose endpoints are
+  // either on the ring OR at a cutcut node with ≥ 2 surviving touches.
+  const retained = _trimDangling(insideSlices);
+  if (retained.length === 0) {
+    const piece = { outer, holes: holes || [] };
+    piece.area = _pieceArea(piece);
+    return { pieces: [piece], cutInside: null, crossedAny: false };
+  }
+
+  // Build the noded linework for polygonize: ring segments + retained
+  // cut slices. The ring is sliced at every cut-ring intersection that
+  // survived dangling-trim (an intersection from a fully-discarded cut
+  // would be a spurious node).
+  const ringNodes = [];
+  for (const s of retained) {
+    if (s.a === 'ring') ringNodes.push(s.coords[0]);
+    if (s.b === 'ring') ringNodes.push(s.coords[s.coords.length - 1]);
+  }
+  const ringSegments = _sliceRingAtPoints(ringLine, _dedupePoints(ringNodes));
+  const lineworkFeatures = [
+    ...ringSegments.map(coords => turf.lineString(coords)),
+    ...retained.map(s => turf.lineString(s.coords)),
+  ];
+
+  let faces;
+  try {
+    faces = turf.polygonize(turf.featureCollection(lineworkFeatures));
+  } catch (e) {
+    return { pieces: [], error: 'cut_slice_failed' };
+  }
+  if (!faces || !Array.isArray(faces.features)) {
+    return { pieces: [], error: 'cut_slice_failed' };
+  }
+
+  const pieces = [];
+  for (const face of faces.features) {
+    if (!face.geometry || face.geometry.type !== 'Polygon') continue;
+    if (!_faceInsidePlot(face, ringClosed, holes)) continue;
+    const faceLatLng = face.geometry.coordinates[0].map(([lon, lat]) => [lat, lon]);
+    const piece = { outer: faceLatLng, holes: [] };
+    for (const h of (holes || [])) {
+      if (!h || h.length < 3) continue;
+      const probe = turf.point([h[0][1], h[0][0]]);
+      try { if (turf.booleanPointInPolygon(probe, face)) piece.holes.push(h); }
+      catch (_) { /* skip degenerate */ }
+    }
+    piece.area = _pieceArea(piece);
+    if (piece.area > 1) pieces.push(piece);
+  }
+  if (pieces.length === 0) {
     return { pieces: [], error: 'degenerate_split' };
   }
 
-  return {
-    pieces: [piece1, piece2],
-    cutInside: cutCoordsAtoB.map(([lon, lat]) => [lat, lon]),
-  };
+  const cutInside = retained.map(s => s.coords.map(([lon, lat]) => [lat, lon]));
+  return { pieces, cutInside, crossedAny: true };
 }
 
-// Legacy entry points retained as thin wrappers. The unified engine
-// fully covers both — these exist so any straggler caller from earlier
-// bricks keeps working until grep confirms they're all migrated.
+// Slice a single cut polyline at the given ring- and cutcut- intersection
+// points. Returns an array of { coords, a, b } slices, where coords is
+// [[lon,lat],…] and a/b are endpoint types: 'ring' | 'cutcut' | 'endpoint'.
+function _sliceCutAtPoints(cutLine, ringIxs, cutCutIxs) {
+  const cutLen = turf.length(cutLine);
+  const nodes = [];
+  for (const pt of ringIxs) {
+    const t = turf.nearestPointOnLine(cutLine, turf.point(pt)).properties.location;
+    nodes.push({ t, pt, type: 'ring' });
+  }
+  for (const pt of cutCutIxs) {
+    const t = turf.nearestPointOnLine(cutLine, turf.point(pt)).properties.location;
+    nodes.push({ t, pt, type: 'cutcut' });
+  }
+  nodes.sort((a, b) => a.t - b.t);
+
+  const startCoord = cutLine.geometry.coordinates[0];
+  const endCoord   = cutLine.geometry.coordinates[cutLine.geometry.coordinates.length - 1];
+  const full = [
+    { t: 0,      pt: startCoord, type: 'endpoint' },
+    ...nodes,
+    { t: cutLen, pt: endCoord,   type: 'endpoint' },
+  ];
+
+  const subs = [];
+  for (let i = 0; i < full.length - 1; i++) {
+    const a = full[i], b = full[i + 1];
+    if (b.t - a.t < 1e-9) continue;
+    const seg = _safeLineSliceAlong(cutLine, a.t, b.t, cutLen);
+    if (!seg) continue;
+    const coords = seg.geometry.coordinates;
+    coords[0]                  = [a.pt[0], a.pt[1]];  // canonical node coords
+    coords[coords.length - 1]  = [b.pt[0], b.pt[1]];
+    subs.push({ coords, a: a.type, b: b.type });
+  }
+  return subs;
+}
+
+// Slice the outer ring at the given (deduped) intersection points. The
+// ring is closed; we walk around it once, emitting one segment per
+// node→next-node arc.
+function _sliceRingAtPoints(ringLine, points) {
+  if (!points.length) return [ringLine.geometry.coordinates];
+  const ringLen = turf.length(ringLine);
+  const ts = points.map(pt => ({
+    t: turf.nearestPointOnLine(ringLine, turf.point(pt)).properties.location,
+    pt,
+  })).sort((a, b) => a.t - b.t);
+
+  const segments = [];
+  for (let i = 0; i < ts.length; i++) {
+    const cur = ts[i];
+    const nxt = ts[(i + 1) % ts.length];
+    let segCoords;
+    if (i + 1 < ts.length) {
+      const seg = _safeLineSliceAlong(ringLine, cur.t, nxt.t, ringLen);
+      if (!seg) continue;
+      segCoords = seg.geometry.coordinates;
+    } else {
+      // Wrap segment: cur.t → ringLen, then 0 → nxt.t.
+      const first  = _safeLineSliceAlong(ringLine, cur.t, ringLen, ringLen);
+      const second = _safeLineSliceAlong(ringLine, 0, nxt.t, ringLen);
+      if (!first || !second) continue;
+      segCoords = first.geometry.coordinates
+        .concat(second.geometry.coordinates.slice(1));
+    }
+    if (segCoords.length < 2) continue;
+    segCoords[0]                     = [cur.pt[0], cur.pt[1]];
+    segCoords[segCoords.length - 1]  = [nxt.pt[0], nxt.pt[1]];
+    segments.push(segCoords);
+  }
+  return segments;
+}
+
+// Iterative dangling-trim. A slice's endpoint is acceptable if it is:
+//   • 'ring' — sits on the outer ring,    OR
+//   • 'cutcut' — sits at a node that ≥ 2 surviving slices touch.
+// Anything else (an 'endpoint' free-end, or a cutcut node now alone)
+// makes the slice danglate; we discard, then re-check until stable.
+function _trimDangling(slices) {
+  let kept = slices.slice();
+  let changed = true;
+  const key = (pt) => `${pt[0].toFixed(9)},${pt[1].toFixed(9)}`;
+  while (changed) {
+    changed = false;
+    const counts = new Map();
+    for (const s of kept) {
+      if (s.a === 'cutcut') counts.set(key(s.coords[0]), (counts.get(key(s.coords[0])) || 0) + 1);
+      if (s.b === 'cutcut') {
+        const k = key(s.coords[s.coords.length - 1]);
+        counts.set(k, (counts.get(k) || 0) + 1);
+      }
+    }
+    kept = kept.filter(s => {
+      const aOK = s.a === 'ring' ||
+        (s.a === 'cutcut' && (counts.get(key(s.coords[0])) || 0) >= 2);
+      const bOK = s.b === 'ring' ||
+        (s.b === 'cutcut' && (counts.get(key(s.coords[s.coords.length - 1])) || 0) >= 2);
+      const keep = aOK && bOK;
+      if (!keep) changed = true;
+      return keep;
+    });
+  }
+  return kept;
+}
+
+function _sliceMidpointInsidePlot(slice, ringClosed, holes) {
+  if (!slice || !slice.coords || slice.coords.length < 2) return false;
+  let mid;
+  try {
+    const tl = turf.lineString(slice.coords);
+    const len = turf.length(tl);
+    mid = turf.along(tl, len / 2);
+  } catch (_) { return false; }
+  return _pointInsidePlot(mid, ringClosed, holes);
+}
+
+function _faceInsidePlot(face, ringClosed, holes) {
+  let probe;
+  try { probe = turf.pointOnFeature(face); } catch (_) { return false; }
+  return _pointInsidePlot(probe, ringClosed, holes);
+}
+
+function _pointInsidePlot(probePoint, ringClosed, holes) {
+  const outerPoly = turf.polygon([ringClosed.map(([lat, lon]) => [lon, lat])]);
+  try { if (!turf.booleanPointInPolygon(probePoint, outerPoly)) return false; }
+  catch (_) { return false; }
+  for (const h of (holes || [])) {
+    if (!h || h.length < 3) continue;
+    const hClosed = h.slice();
+    const f = hClosed[0], l = hClosed[hClosed.length - 1];
+    if (f[0] !== l[0] || f[1] !== l[1]) hClosed.push([f[0], f[1]]);
+    let holePoly;
+    try { holePoly = turf.polygon([hClosed.map(([lat, lon]) => [lon, lat])]); }
+    catch (_) { continue; }
+    try { if (turf.booleanPointInPolygon(probePoint, holePoly)) return false; }
+    catch (_) { /* skip degenerate */ }
+  }
+  return true;
+}
+
+// Self-intersection: check every pair of non-adjacent segments. Adjacent
+// segments share an endpoint by construction, so those don't count.
+function _cutSelfIntersects(latLngs) {
+  if (!Array.isArray(latLngs) || latLngs.length < 4) return false;
+  for (let i = 0; i < latLngs.length - 1; i++) {
+    for (let j = i + 2; j < latLngs.length - 1; j++) {
+      if (_segmentsCross(latLngs[i], latLngs[i + 1], latLngs[j], latLngs[j + 1])) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// Standard 2D segment-segment proper-intersection test (shared endpoints
+// don't count). Works in [lat, lng] just fine since it's pure topology.
+function _segmentsCross(a, b, c, d) {
+  const dx1 = b[1] - a[1], dy1 = b[0] - a[0];
+  const dx2 = d[1] - c[1], dy2 = d[0] - c[0];
+  const denom = dx1 * dy2 - dy1 * dx2;
+  if (Math.abs(denom) < 1e-15) return false;
+  const tx = c[1] - a[1], ty = c[0] - a[0];
+  const t = (tx * dy2 - ty * dx2) / denom;
+  const u = (tx * dy1 - ty * dx1) / denom;
+  const eps = 1e-9;
+  return t > eps && t < 1 - eps && u > eps && u < 1 - eps;
+}
+
+// Legacy entry points retained as thin wrappers.
 function computeCutLineSplit(plot, cutLatLngs) {
   return computePlotSplit(plot, [cutLatLngs]);
 }
@@ -267,33 +438,6 @@ function _safeLineSliceAlong(line, start, stop, totalLen) {
   const e = Math.max(s + eps, Math.min(totalLen, stop));
   try { return turf.lineSliceAlong(line, s, e); }
   catch (_) { return null; }
-}
-
-// Walk a closed ring forward from start to end (both distances along
-// ringLine, in km). When start > end the slice wraps through the ring's
-// origin: two slices stitched together.
-function _ringSliceForward(ringLine, start, end, totalLen) {
-  if (start === end) return null;
-  if (start < end) return _safeLineSliceAlong(ringLine, start, end, totalLen);
-  const first  = _safeLineSliceAlong(ringLine, start, totalLen, totalLen);
-  const second = _safeLineSliceAlong(ringLine, 0, end, totalLen);
-  if (!first || !second) return null;
-  const a = first.geometry.coordinates;
-  const b = second.geometry.coordinates;
-  // Drop the duplicate junction vertex (ringLine's start === ringLine's end).
-  return turf.lineString(a.concat(b.slice(1)));
-}
-
-// Concat two coord sequences that share their first/last endpoints
-// (arc ends at q, reversed-cut starts at q → drop one of them). The
-// result is an OPEN ring (no closing duplicate); the OSM write-back
-// in storeSubdivisionGeometry adds the self-close.
-function _joinRingFragments(arcCoords, cutCoords) {
-  if (arcCoords.length === 0) return cutCoords.slice();
-  if (cutCoords.length === 0) return arcCoords.slice();
-  // arc's last ≈ cut's first (both are the same intersection point).
-  // Drop cut's first to avoid duplication.
-  return arcCoords.concat(cutCoords.slice(1));
 }
 
 // Drop a closing duplicate vertex if the ring already wraps around to

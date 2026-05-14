@@ -940,6 +940,32 @@ they come up; the plan is a living document.
   - Tradeoff: the land-on-left convention is trusted strictly (per
     the v0.8.7 simplification). Any coastline drawn water-on-left
     inverts its mode classification.
+- **Brick 11b #1** ✓ (committed, v0.10.0) — multi-cut + planar
+  subdivision. Replaces `_splitOneRing` with `_multiCutOneRing`:
+  find every cut↔cut and cut↔ring intersection, slice cuts at those
+  points, discard sub-segments whose midpoint is outside the plot,
+  iteratively trim dangling endpoints, then feed (ring segments +
+  retained cut slices) to `turf.polygonize`. Each bounded face whose
+  `pointOnFeature` is inside the plot is a piece. Holes ride along
+  by first-vertex PIP (today's punt).
+  - State: `_splitState.activeCutIdx`, `_splitState.hoverCutIdx`.
+    Editor handlers retargeted from `cuts[0]` to
+    `cuts[activeCutIdx]`. Empty cut auto-removed when it becomes
+    non-active (decision D).
+  - Cuts list UI in the cut-phase panel (decision A.iii): rows show
+    swatch + "Cut N" + vertex count + ✕ delete, with hover-highlight
+    on the map (decision C). "+ Add cut" button below.
+  - Multi-cut map rendering: every cut drawn, active is thicker +
+    dashed, non-active dimmed, hovered cut bumped. In-polygon
+    overlay is drawn only for the active cut.
+  - Hover-preview line (decision H.iii) now only shows when cursor
+    is within ~60 px of the active cut's nearest endpoint.
+  - Self-intersecting cuts rejected up-front
+    (`cut_self_intersects`) — v0.9.2 trial showed they
+    double-count the loop's interior.
+  - Error codes retired: `cut_crosses_too_many_times`,
+    `cut_crosses_ring_once` — both naturally subsumed by the
+    dangling-trim step.
 - **Brick 11b #2** ✓ (committed, v0.9.1) — cut on non-contiguous
   plots + per-piece grouping. Filed during Brick 11 polish
   (v0.7.2); we picked it up after Brick 12.

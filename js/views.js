@@ -3558,6 +3558,15 @@ let _splitState = null;
 let _splitDraggingVertex = null; // truthy while a real vertex marker is being dragged
 let _splitDraggingGhost = null;  // { vertexIdx } while a ghost marker is being dragged
 let _splitHoverLatLng   = null;  // last cursor position on the split map (for the hover-preview line)
+const _SPLIT_HOVER_PREVIEW_PX = 60; // hover-preview shows only this close to an endpoint (Brick 11b H.iii)
+
+// Pixel distance between two [lat, lng] points on the split map.
+function _latLngToContainerDistance(a, b) {
+  if (!_splitMap) return Infinity;
+  const pa = _splitMap.latLngToContainerPoint(L.latLng(a[0], a[1]));
+  const pb = _splitMap.latLngToContainerPoint(L.latLng(b[0], b[1]));
+  return Math.hypot(pa.x - pb.x, pa.y - pb.y);
+}
 
 function onPlotDetailSplit() {
   if (!_detailPlotId) return;
@@ -3574,10 +3583,13 @@ function onPlotDetailSplit() {
 function _initSplitState(plot) {
   _splitState = {
     plotId:          plot.id,
-    // Brick 11b A.ii: cuts is an array of polylines. v1 of #2 keeps
-    // length === 1 and the editor only touches cuts[0]; #1 (multi-cut)
-    // will let the user add additional entries.
+    // Brick 11b A.ii / #1: cuts is an array of polylines. The editor
+    // targets cuts[activeCutIdx]; only the active cut's vertices,
+    // ghosts and hover-preview are interactive (decision B.i).
     cuts:            [[]],
+    activeCutIdx:    0,
+    // Optional per-cut hover highlight (driven by the cuts list).
+    hoverCutIdx:     null,
     // Phase 1: 'cut' — user draws / edits cut(s) and groups pieces.
     // Phase 2: 'override' — groupings locked, user edits per-output
     // names + property values.
@@ -3654,7 +3666,7 @@ function _onSplitKeyDown(e) {
 function _onSplitMapClick(e) {
   if (!_splitState || _splitState.phase !== 'cut') return;
   if (_splitDraggingVertex || _splitDraggingGhost) return;
-  const verts = _splitState.cuts[0];
+  const verts = _splitState.cuts[_splitState.activeCutIdx];
   const click = [e.latlng.lat, e.latlng.lng];
   // Extend from whichever endpoint is closer. Trivial cases (≤ 1 vertex)
   // always append. This matches the hover-line preview, which always
@@ -3673,7 +3685,7 @@ function _onSplitMapClick(e) {
 function _onSplitCutLineClick(e) {
   // Click on the cut polyline → insert a vertex at the closest segment.
   if (!_splitState || _splitState.phase !== 'cut') return;
-  const verts = _splitState.cuts[0];
+  const verts = _splitState.cuts[_splitState.activeCutIdx];
   if (verts.length < 2) return;
   const click = [e.latlng.lat, e.latlng.lng];
   const idx = _findClosestSegment(click, verts);
@@ -3690,7 +3702,7 @@ function _onSplitCutLineClick(e) {
 
 function _onSplitGhostClick(segIdx, e) {
   if (!_splitState || _splitState.phase !== 'cut') return;
-  const verts = _splitState.cuts[0];
+  const verts = _splitState.cuts[_splitState.activeCutIdx];
   if (segIdx < 0 || segIdx >= verts.length - 1) return;
   const a = verts[segIdx], b = verts[segIdx + 1];
   const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
@@ -3701,7 +3713,7 @@ function _onSplitGhostClick(segIdx, e) {
 
 function _onSplitGhostDragStart(segIdx, e) {
   if (!_splitState || _splitState.phase !== 'cut') return;
-  const verts = _splitState.cuts[0];
+  const verts = _splitState.cuts[_splitState.activeCutIdx];
   if (segIdx < 0 || segIdx >= verts.length - 1) return;
   // Insert at the ghost's initial midpoint position. dragstart fires
   // before any latlng update, so e.target.getLatLng() === midpoint.
@@ -3716,14 +3728,14 @@ function _onSplitGhostDragStart(segIdx, e) {
 function _onSplitGhostDrag(segIdx, e) {
   if (!_splitState || !_splitDraggingGhost) return;
   const ll = e.target.getLatLng();
-  _splitState.cuts[0][_splitDraggingGhost.vertexIdx] = [ll.lat, ll.lng];
+  _splitState.cuts[_splitState.activeCutIdx][_splitDraggingGhost.vertexIdx] = [ll.lat, ll.lng];
   _recomputeSplit();
 }
 
 function _onSplitGhostDragEnd(segIdx, e) {
   if (!_splitState || !_splitDraggingGhost) return;
   const ll = e.target.getLatLng();
-  _splitState.cuts[0][_splitDraggingGhost.vertexIdx] = [ll.lat, ll.lng];
+  _splitState.cuts[_splitState.activeCutIdx][_splitDraggingGhost.vertexIdx] = [ll.lat, ll.lng];
   if (e.target._icon) e.target._icon.classList.remove('dragging');
   _splitDraggingGhost = null;
   _recomputeSplit();
@@ -3757,18 +3769,26 @@ function _refreshSplitHoverLine() {
     drawSplitHoverLine(null, null);
     return;
   }
-  const verts = _splitState.cuts[0];
-  if (verts.length === 0) {
+  const verts = _splitState.cuts[_splitState.activeCutIdx];
+  if (!verts || verts.length === 0) {
     drawSplitHoverLine(null, null);
     return;
   }
   const start = verts[0];
   const end   = verts[verts.length - 1];
   let nearest = end;
+  let nearestDist = _pointDistance(_splitHoverLatLng, end);
   if (verts.length > 1) {
     const dStart = _pointDistance(_splitHoverLatLng, start);
-    const dEnd   = _pointDistance(_splitHoverLatLng, end);
-    nearest = (dStart < dEnd) ? start : end;
+    if (dStart < nearestDist) { nearest = start; nearestDist = dStart; }
+  }
+  // Brick 11b H.iii: only show the preview when the cursor is actually
+  // close to a cut endpoint, so the line doesn't drag across the whole
+  // map every time the mouse moves.
+  const px = _splitMap ? _latLngToContainerDistance(nearest, _splitHoverLatLng) : Infinity;
+  if (px > _SPLIT_HOVER_PREVIEW_PX) {
+    drawSplitHoverLine(null, null);
+    return;
   }
   drawSplitHoverLine(nearest, _splitHoverLatLng);
 }
@@ -3786,14 +3806,14 @@ function _onSplitVertexDrag(i, e) {
   // would leave `_splitDraggingVertex` set and silently skip future vertex
   // renders (this was v0.7.2's "added node doesn't appear" bug).
   const ll = e.target.getLatLng();
-  _splitState.cuts[0][i] = [ll.lat, ll.lng];
+  _splitState.cuts[_splitState.activeCutIdx][i] = [ll.lat, ll.lng];
   _recomputeSplit();
 }
 
 function _onSplitVertexDragEnd(i, e) {
   if (!_splitState) return;
   const ll = e.target.getLatLng();
-  _splitState.cuts[0][i] = [ll.lat, ll.lng];
+  _splitState.cuts[_splitState.activeCutIdx][i] = [ll.lat, ll.lng];
   if (e.target._icon) e.target._icon.classList.remove('dragging');
   _splitDraggingVertex = null;
   _recomputeSplit();
@@ -3803,15 +3823,67 @@ function _onSplitVertexRemove(i, e) {
   if (!_splitState) return;
   L.DomEvent.stopPropagation(e);
   L.DomEvent.preventDefault(e);
-  if (i < 0 || i >= _splitState.cuts[0].length) return;
-  _splitState.cuts[0].splice(i, 1);
+  if (i < 0 || i >= _splitState.cuts[_splitState.activeCutIdx].length) return;
+  _splitState.cuts[_splitState.activeCutIdx].splice(i, 1);
   _recomputeSplit();
 }
 
 function onSplitClearCut() {
   if (!_splitState) return;
-  _splitState.cuts[0] = [];
+  _splitState.cuts[_splitState.activeCutIdx] = [];
   _recomputeSplit();
+}
+
+// Append a new empty cut and make it active. Triggered by the "+ Cut"
+// button in the cuts list.
+function onSplitAddCut() {
+  if (!_splitState) return;
+  _splitState.cuts.push([]);
+  _splitState.activeCutIdx = _splitState.cuts.length - 1;
+  _splitDraggingVertex = null;
+  _splitDraggingGhost = null;
+  _splitHoverLatLng = null;
+  _recomputeSplit();
+}
+
+// Switch the active cut. If the previously-active cut is empty
+// (decision D), drop it on the way out so we don't accumulate ghosts.
+function onSplitSetActiveCut(idx) {
+  if (!_splitState) return;
+  if (idx < 0 || idx >= _splitState.cuts.length) return;
+  const cur = _splitState.activeCutIdx;
+  if (cur !== idx && (_splitState.cuts[cur] || []).length === 0) {
+    _splitState.cuts.splice(cur, 1);
+    if (cur < idx) idx -= 1;
+  }
+  _splitState.activeCutIdx = idx;
+  _splitState.hoverCutIdx = null;
+  _splitDraggingVertex = null;
+  _splitDraggingGhost = null;
+  _splitHoverLatLng = null;
+  _recomputeSplit();
+}
+
+// Delete a cut outright. Triggered by the per-cut "✕" in the list.
+function onSplitDeleteCut(idx) {
+  if (!_splitState) return;
+  if (idx < 0 || idx >= _splitState.cuts.length) return;
+  _splitState.cuts.splice(idx, 1);
+  if (_splitState.cuts.length === 0) _splitState.cuts.push([]);
+  if (_splitState.activeCutIdx >= _splitState.cuts.length) {
+    _splitState.activeCutIdx = _splitState.cuts.length - 1;
+  } else if (_splitState.activeCutIdx > idx) {
+    _splitState.activeCutIdx -= 1;
+  }
+  _splitState.hoverCutIdx = null;
+  _recomputeSplit();
+}
+
+// Highlight a cut on the map when the user hovers its row in the list.
+function onSplitHoverCut(idx) {
+  if (!_splitState) return;
+  _splitState.hoverCutIdx = (idx === null || idx === undefined) ? null : idx;
+  _refreshSplitMap();
 }
 
 // ----- Geometry helpers ------------------------------------------------
@@ -4037,7 +4109,7 @@ function _refreshSplitMap() {
   drawSplitPlot(plot, haveValidPieces ? 'faded' : 'normal');
   if (haveValidPieces) drawSplitPieces(_splitState.pieces, _splitState.outputs);
   else clearSplitPieces();
-  drawSplitCutPath(_splitState.cuts[0], _splitState.cutInside);
+  drawSplitCutPath(_splitState.cuts, _splitState.activeCutIdx, _splitState.cutInside, _splitState.hoverCutIdx);
 
   // Real vs ghost vertices live in separate layers (map.js) so we can
   // freeze whichever marker is being dragged while the other still
@@ -4050,7 +4122,7 @@ function _refreshSplitMap() {
   // Override phase has no editable cut, so both layers clear.
   if (_splitState.phase === 'cut') {
     if (!_splitDraggingVertex && !_splitDraggingGhost) {
-      drawSplitRealVertices(_splitState.cuts[0], {
+      drawSplitRealVertices(_splitState.cuts[_splitState.activeCutIdx], {
         onDragStart: _onSplitVertexDragStart,
         onDrag:      _onSplitVertexDrag,
         onDragEnd:   _onSplitVertexDragEnd,
@@ -4058,7 +4130,7 @@ function _refreshSplitMap() {
       });
     }
     if (!_splitDraggingGhost) {
-      drawSplitGhostVertices(_splitState.cuts[0], {
+      drawSplitGhostVertices(_splitState.cuts[_splitState.activeCutIdx], {
         onClick:     _onSplitGhostClick,
         onDragStart: _onSplitGhostDragStart,
         onDrag:      _onSplitGhostDrag,
@@ -4157,14 +4229,37 @@ function _renderSplitPanelCut(plot, state) {
     `;
   }
 
-  // Cut controls — always shown now that mode is unified.
-  const n = state.cuts[0] ? state.cuts[0].length : 0;
+  // Cuts list — click to switch active, hover to highlight, ✕ to delete.
+  // The active cut shows a "Clear" button at the end of its row.
+  const rows = state.cuts.map((c, i) => {
+    const isActive = i === state.activeCutIdx;
+    const color    = _SPLIT_CUT_COLORS[i % _SPLIT_CUT_COLORS.length];
+    const vn       = (c || []).length;
+    const cls      = 'split-cuts-row' + (isActive ? ' active' : '');
+    const clearBtn = isActive && vn > 0
+      ? `<button class="btn btn-xs" onclick="onSplitClearCut()" onmouseenter="event.stopPropagation()">${t('plot_split.clear_cut')}</button>`
+      : '';
+    return `
+      <div class="${cls}"
+           onclick="onSplitSetActiveCut(${i})"
+           onmouseenter="onSplitHoverCut(${i})"
+           onmouseleave="onSplitHoverCut(null)">
+        <span class="split-overlay-piece-swatch" style="background:${color}"></span>
+        <span class="split-cuts-name">${t('plot_split.cut_n', { n: i + 1 })}</span>
+        <span class="split-cuts-vcount mono">${t('plot_split.cut_vertices', { n: vn })}</span>
+        ${clearBtn}
+        <button class="split-cuts-del" title="${esc(t('plot_split.delete_cut'))}"
+                onclick="event.stopPropagation();onSplitDeleteCut(${i})"
+                ${state.cuts.length === 1 && vn === 0 ? 'disabled' : ''}>✕</button>
+      </div>
+    `;
+  }).join('');
   html += `
     <div class="split-overlay-section">
-      <div class="split-overlay-section-label">${t('plot_split.cut_label')}</div>
-      <div class="split-overlay-cut-controls">
-        <span>${t('plot_split.cut_vertices', { n })}</span>
-        <button class="btn btn-sm" onclick="onSplitClearCut()"${n === 0 ? ' disabled' : ''}>${t('plot_split.clear_cut')}</button>
+      <div class="split-overlay-section-label">${t('plot_split.cuts_label')}</div>
+      <div class="split-cuts-list">${rows}</div>
+      <div class="split-cuts-add">
+        <button class="btn btn-sm" onclick="onSplitAddCut()">${t('plot_split.add_cut')}</button>
       </div>
       <div class="split-overlay-hint-edit">${t('plot_split.edit_hint')}</div>
     </div>

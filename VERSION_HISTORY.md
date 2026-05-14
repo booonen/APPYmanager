@@ -1,3 +1,96 @@
+## 0.10.0 — Brick 11b #1: multi-cut + planar-subdivision engine
+
+The plot-split editor admits multiple cuts on one plot. Cuts can cross
+each other, end at each other (T-junctions), or simply sit
+independently — the geometry engine resolves them as a planar
+subdivision and emits one piece per bounded face. Pieces still feed
+into the per-piece "Output" dropdown from Brick 11b #2, so the
+familiar grouping gesture combines pieces from any cut into shared
+output plots.
+
+### Planar-subdivision engine (`js/split.js`)
+
+Replaces `_splitOneRing` (the single-cut per-ring engine) with
+`_multiCutOneRing`. Per outer ring:
+
+1. Find every intersection — cut↔cut (pairwise) and cut↔ring.
+2. Slice each cut at its intersection points → sub-segments. Each
+   sub-segment is labelled by endpoint type:
+   - `'ring'` — lies on the outer ring,
+   - `'cutcut'` — sits at an intersection between two cuts,
+   - `'endpoint'` — the original cut's free start or end.
+3. Discard sub-segments whose midpoint lies outside the plot (outside
+   the outer ring or inside a hole).
+4. Iterative dangling-trim: a sub-segment with an `'endpoint'` end,
+   or a `'cutcut'` end whose node has fewer than 2 surviving slices
+   touching it, is discarded. Repeat until stable. (This is how the
+   user's "T-junction" 3-way example works — Cut B's dangling far-end
+   gets trimmed, leaving the partial Cut B as a valid divider.)
+5. Slice the outer ring at every retained ring-cut intersection.
+6. Feed (ring segments + retained cut slices) to `turf.polygonize`.
+7. Filter resulting faces to those whose `pointOnFeature` is inside
+   the plot.
+8. Assign holes per face by first-vertex point-in-polygon (today's
+   punt for cuts that physically touch a hole — those segments are
+   dangling-trimmed away).
+
+Several Brick 11b #2 error codes go away under this engine — they were
+artefacts of the single-cut per-ring "exactly 2 crossings" rule:
+
+- `cut_crosses_too_many_times` — removed. 4+ crossings on a ring are
+  now natural multi-cut topology.
+- `cut_crosses_ring_once` — removed. A cut endpoint inside a ring is
+  just a dangling sub-segment that gets trimmed silently.
+
+New error: `cut_self_intersects`. A self-intersecting cut would
+double-count its interior (user-reported failure mode in v0.9.2); we
+reject up-front via a pairwise non-adjacent-segment cross check.
+
+### State + UI (`js/views.js`, `js/map.js`, `styles.css`)
+
+- `_splitState.activeCutIdx` (default 0) — which cut the editor is
+  targeting. Vertex/ghost/hover handlers all retargeted from
+  `cuts[0]` to `cuts[activeCutIdx]`.
+- `_splitState.hoverCutIdx` — the cut currently highlighted on the
+  map because its row in the cuts list is hovered.
+- New handlers: `onSplitAddCut`, `onSplitSetActiveCut(i)`,
+  `onSplitDeleteCut(i)`, `onSplitHoverCut(i)`.
+- Empty-cut housekeeping (decision D): an empty cut is removed the
+  moment it becomes non-active. The cuts array always has at least
+  one entry.
+- **Cuts list** in the cut-phase panel: one row per cut with a
+  colour swatch + name (`Cut N`) + vertex count + ✕ delete. The
+  active row gets an accent border + bold name. Hovering a row
+  triggers `onSplitHoverCut` so the user can see what they're
+  about to delete. "+ Add cut" button at the bottom of the list.
+  "Clear" sits inline on the active row.
+- **Multi-cut map rendering**: `drawSplitCutPath(allCuts, activeIdx,
+  insideSegments, hoverIdx)` draws every cut. Active cut is thicker
+  + dashed at full opacity; non-active cuts thinner + dimmer. The
+  hovered cut bumps weight + opacity. In-polygon overlay (the
+  retained slice coords) is drawn for the active cut only.
+- **Hover preview threshold** (decision H.iii): the dashed
+  "where will the click extend from?" line now shows only when the
+  cursor is within ~60 px of the active cut's nearest endpoint.
+  No more always-on visual noise.
+
+### What stayed the same
+
+- Output grouping (per-piece dropdown, merged outputs, override
+  phase, executor signature).
+- Land-area-weighted property-redistribution defaults.
+- Plot-creation modes from Brick 12d (auto-clip at create time).
+
+### Known limits filed
+
+- A cut that physically crosses a hole's boundary still doesn't
+  split the hole — the segment inside the hole is discarded as
+  "outside the plot" and the rest dangles. Cuts shouldn't go
+  through holes in practice; revisit if needed.
+- Manual property-value overrides still clear when the user
+  re-groups pieces via the dropdown (same v1 simplification as
+  Brick 11b #2).
+
 ## 0.9.2 — Tile-toggle on every Leaflet map
 
 Small ▦ button in the top-right corner of every Leaflet map (main map,

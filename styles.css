@@ -1100,3 +1100,63 @@ summary.map-toolbar-control:hover {
   opacity: 0.45;
   text-decoration: line-through;
 }
+
+/* Cuts list (Brick 11b #1). Each row is one cut polyline. Click the
+   row to make it active; the active row gets an accent border + bold
+   name. Hover triggers a map-side highlight via onSplitHoverCut. */
+.split-cuts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.split-cuts-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm, 4px);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  background: var(--bg);
+}
+.split-cuts-row:hover {
+  background: var(--bg-elev, rgba(255,255,255,0.04));
+}
+.split-cuts-row.active {
+  border-color: var(--accent);
+  background: var(--accent-glow, rgba(193,39,45,0.10));
+}
+.split-cuts-row.active .split-cuts-name {
+  font-weight: 600;
+}
+.split-cuts-name {
+  flex: 1;
+  font-size: 13px;
+}
+.split-cuts-vcount {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.split-cuts-del {
+  width: 22px; height: 22px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 22px;
+  padding: 0;
+  border-radius: var(--radius-sm, 4px);
+}
+.split-cuts-del:hover:not(:disabled) {
+  background: var(--danger-glow, rgba(193,39,45,0.15));
+  color: var(--accent);
+}
+.split-cuts-del:disabled { opacity: 0.3; cursor: not-allowed; }
+.split-cuts-add { margin-bottom: 6px; }
+.btn.btn-xs {
+  padding: 2px 6px;
+  font-size: 11px;
+  line-height: 1.4;
+}

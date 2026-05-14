@@ -355,6 +355,10 @@ let _splitMapBoundsSet = false;
 let _splitPlotCurrentMode = null;
 
 const _SPLIT_PIECE_COLORS = ['#c1272d', '#0d8a8a', '#b58300', '#5a4ea3', '#3f7e3f', '#8a4c8a'];
+// Distinct palette for multi-cut (Brick 11b #1) — deeper saturation so
+// cut polylines stand out against piece fills (which use the lighter
+// _SPLIT_PIECE_COLORS at 30% opacity).
+const _SPLIT_CUT_COLORS   = ['#1f1f1f', '#175c8c', '#7b3a8a', '#8a6f00', '#005f57', '#7a1f1f'];
 
 function ensureSplitMap(containerId, callbacks) {
   callbacks = callbacks || {};
@@ -444,28 +448,50 @@ function drawSplitPieces(pieces, outputs) {
 //  - the in-polygon portion (solid, when valid)
 // Both are clickable; clicking either inserts a vertex between the
 // nearest two user-drawn vertices.
-function drawSplitCutPath(latLngs, insideLatLngs) {
+// Brick 11b #1: draws every cut, not just the active one.
+//   • Active cut: dashed full-length line + solid in-polygon overlay
+//     at the colour for its index, both thicker than non-active.
+//   • Non-active cuts: thinner, dimmed colour, no in-polygon overlay
+//     (the polygonized pieces already encode where they actually cut).
+//   • Hovered cut (from the cuts-list row hover): heavier weight so
+//     the user can see which cut they're about to act on.
+// `insideLatLngs` is the cutInside coords flattened to a single array
+// of segments (each itself [[lat,lng],…]); the active cut renders all
+// of them, non-active cuts ignore them (they're not split per cut).
+function drawSplitCutPath(allCuts, activeIdx, insideSegments, hoverIdx) {
   if (!_splitMap || !_splitCutLayer) return;
   _splitCutLayer.clearLayers();
-  if (!Array.isArray(latLngs) || latLngs.length < 2) return;
+  if (!Array.isArray(allCuts) || allCuts.length === 0) return;
   const cbs = _splitMap._appyCallbacks || {};
+  const insidesArr = Array.isArray(insideSegments) ? insideSegments : [];
 
-  const dashed = L.polyline(latLngs, {
-    color: '#c1272d', weight: 2, opacity: 0.55, dashArray: '5,4',
-  });
-  if (typeof cbs.onCutLineClick === 'function') {
-    dashed.on('click', cbs.onCutLineClick);
-  }
-  _splitCutLayer.addLayer(dashed);
-
-  if (Array.isArray(insideLatLngs) && insideLatLngs.length >= 2) {
-    const inside = L.polyline(insideLatLngs, {
-      color: '#c1272d', weight: 3, opacity: 1,
+  allCuts.forEach((cut, i) => {
+    if (!Array.isArray(cut) || cut.length < 2) return;
+    const isActive = i === activeIdx;
+    const isHover  = i === hoverIdx;
+    const color    = _SPLIT_CUT_COLORS[i % _SPLIT_CUT_COLORS.length];
+    const dashed = L.polyline(cut, {
+      color,
+      weight:    isActive || isHover ? 2.5 : 1.5,
+      opacity:   isActive ? 0.75 : (isHover ? 0.9 : 0.45),
+      dashArray: isActive ? '5,4' : '3,3',
     });
-    if (typeof cbs.onCutLineClick === 'function') {
-      inside.on('click', cbs.onCutLineClick);
+    if (isActive && typeof cbs.onCutLineClick === 'function') {
+      dashed.on('click', cbs.onCutLineClick);
     }
-    _splitCutLayer.addLayer(inside);
+    _splitCutLayer.addLayer(dashed);
+  });
+
+  // In-polygon overlay (active cut only). The retained slices from the
+  // engine show the visible "what actually divides things" portion.
+  if (typeof activeIdx === 'number' && insidesArr.length > 0) {
+    const activeColor = _SPLIT_CUT_COLORS[activeIdx % _SPLIT_CUT_COLORS.length];
+    for (const seg of insidesArr) {
+      if (!Array.isArray(seg) || seg.length < 2) continue;
+      const solid = L.polyline(seg, { color: activeColor, weight: 3.5, opacity: 1 });
+      if (typeof cbs.onCutLineClick === 'function') solid.on('click', cbs.onCutLineClick);
+      _splitCutLayer.addLayer(solid);
+    }
   }
 }
 
