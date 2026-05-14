@@ -509,15 +509,17 @@ function drawSplitHoverLine(fromLatLng, toLatLng) {
   _splitHoverLayer.addLayer(line);
 }
 
-// Brick 12a debug overlay. Reads data.waterCache.waterGeometry — a
-// GeoJSON MultiPolygon in turf's [lng, lat] order — and renders it as a
-// blue translucent fill under the plots layer. Toggled via the settings
-// tab; lets the user sanity-check the coastline/water-build pipeline
-// before plot-level work (12b) starts using these polygons.
+// Project-wide water overlay (v0.9.0). Reads
+// `data.waterCache.waterGeometry` — a turf MultiPolygon in [lng, lat]
+// order — and renders it as a translucent blue fill under the plot
+// layer. Pure visual reference: now that plots are clipped at creation
+// (per project mode), the overlay is what the user sees water "as"
+// rather than the dual-render plot/water layer that the old split
+// system used.
 function _redrawWaterDebugOverlay() {
   if (!_mapWaterDebugLayer) return;
   _mapWaterDebugLayer.clearLayers();
-  if (!getSetting('showWaterDebugOverlay', false)) return;
+  if (!getSetting('showWaterOverlay', true)) return;
   const cache = data.waterCache;
   const geom  = cache && cache.waterGeometry && cache.waterGeometry.geometry;
   if (!geom) return;
@@ -733,51 +735,11 @@ function _drawPlotPoly(plot) {
   const geo = resolvePlotGeometry(plot);
   if (!geo.polygons.length) return;
   const isSelected = _selectedItemKind === 'plot' && _selectedItemId === plot.id;
-
-  // Brick 12b + v0.8.4 correction: when the project split is enabled
-  // AND a water cache exists AND this plot intersects water, render
-  // the plot using the MAP-WIDE `waterDisplayMode` setting:
-  //   • 'split' (default): full plot polygon stays clickable, blue
-  //     water overlay drawn on top, non-interactive.
-  //   • 'removed': the rendered polygon is CLIPPED to the land portion
-  //     only; water area becomes effectively outside the plot. Plots
-  //     that are fully under water (no land portion) HIDE entirely
-  //     in this mode — there's nothing to render and they'd be
-  //     visual noise (v0.8.6 fix).
-  let renderedAsSplit = false;
-  let mainPoly = null;
-  const waterDisplayMode = getSetting('waterDisplayMode', 'split');
-  if (getSetting('landWaterSplitEnabled', false)
-      && data.waterCache && data.waterCache.waterGeometry
-      && typeof getPlotLandWater === 'function') {
-    const lw = getPlotLandWater(plot);
-    if (lw && lw.water) {
-      if (waterDisplayMode === 'removed') {
-        if (lw.land) {
-          // Land-only render: clipped polygon IS the plot on the map.
-          const landPolys = landWaterFeatureToLeafletPolygons(lw.land);
-          if (landPolys.length > 0) {
-            mainPoly = L.polygon(landPolys, plotPolygonStyle(isSelected));
-            renderedAsSplit = true;
-          }
-        } else {
-          // Plot is fully under water and the user has chosen to hide
-          // water. Skip rendering entirely — the plot has no effective
-          // extent in this view.
-          return;
-        }
-      } else if (waterDisplayMode === 'split') {
-        // Default split: full plot polygon stays as the clickable main
-        // shape; water overlay sits on top, non-interactive.
-        mainPoly = L.polygon(geo.polygons, plotPolygonStyle(isSelected));
-        renderedAsSplit = true;
-      }
-    }
-  }
-
-  if (!mainPoly) {
-    mainPoly = L.polygon(geo.polygons, plotPolygonStyle(isSelected));
-  }
+  // v0.9.0: plot polygons are already shaped by the project's
+  // land/water mode at creation time, so there's no per-plot split
+  // path here — just draw whatever's stored. The blue water context
+  // shows through the `_mapWaterDebugLayer` overlay drawn below.
+  const mainPoly = L.polygon(geo.polygons, plotPolygonStyle(isSelected));
   mainPoly._appyPlotId = plot.id;
   if (plot.name) mainPoly.bindTooltip(plot.name);
   mainPoly.on('click', (e) => {
@@ -786,91 +748,22 @@ function _drawPlotPoly(plot) {
   });
   _mapPlotLayer.addLayer(mainPoly);
   _polyIndex.set('plot:' + plot.id, mainPoly);
-
-  // Water overlay (only when displayMode === 'split').
-  if (renderedAsSplit
-      && waterDisplayMode === 'split'
-      && typeof getPlotLandWater === 'function') {
-    const lw = getPlotLandWater(plot);
-    if (lw && lw.water) {
-      const waterPolys = landWaterFeatureToLeafletPolygons(lw.water);
-      for (const coords of waterPolys) {
-        const overlay = L.polygon(coords, {
-          color: '#3b82c6', weight: 1, opacity: 0.7,
-          fillColor: '#3b82c6', fillOpacity: 0.55,
-          interactive: false,
-        });
-        _mapPlotLayer.addLayer(overlay);
-      }
-    }
-  }
 }
 
 function _drawBoundaryPoly(b, color) {
   const geom = resolveBoundaryGeometry(b);
   if (!geom || !geom.polygons.length) return;
   const isSelected = _selectedItemKind === 'boundary' && _selectedItemId === b.id;
-
-  // Mirror _drawPlotPoly's split logic: boundaries cascade from plots,
-  // so when the project split is active and the boundary intersects
-  // water, it should render the same way plots do.
-  //   • 'split' (default): full polygon stays clickable, blue water
-  //     overlay drawn on top, non-interactive.
-  //   • 'removed': clipped to the land portion; fully-submerged
-  //     boundaries hide entirely.
-  let mainPoly = null;
-  let renderedAsSplit = false;
-  const waterDisplayMode = getSetting('waterDisplayMode', 'split');
-  if (getSetting('landWaterSplitEnabled', false)
-      && data.waterCache && data.waterCache.waterGeometry
-      && typeof getBoundaryLandWater === 'function') {
-    const lw = getBoundaryLandWater(b);
-    if (lw && lw.water) {
-      if (waterDisplayMode === 'removed') {
-        if (lw.land) {
-          const landPolys = landWaterFeatureToLeafletPolygons(lw.land);
-          if (landPolys.length > 0) {
-            mainPoly = L.polygon(landPolys, boundaryFilledStyle(color, isSelected));
-            renderedAsSplit = true;
-          }
-        } else {
-          // Boundary is entirely under water — nothing to render.
-          return;
-        }
-      } else if (waterDisplayMode === 'split') {
-        mainPoly = L.polygon(geom.polygons, boundaryFilledStyle(color, isSelected));
-        renderedAsSplit = true;
-      }
-    }
-  }
-
-  if (!mainPoly) {
-    mainPoly = L.polygon(geom.polygons, boundaryFilledStyle(color, isSelected));
-  }
-  mainPoly._appyBoundaryId = b.id;
-  mainPoly.bindTooltip(b.name || `(${getBoundaryTypeName(b.typeId)})`);
-  mainPoly.on('click',    (e) => onBoundaryPolyClick(e, b));
-  mainPoly.on('dblclick', (e) => onBoundaryPolyDblClick(e, b.id));
-  _mapBoundaryLayer.addLayer(mainPoly);
-  _polyIndex.set('boundary:' + b.id, mainPoly);
-
-  // Water overlay (only in 'split' mode).
-  if (renderedAsSplit
-      && waterDisplayMode === 'split'
-      && typeof getBoundaryLandWater === 'function') {
-    const lw = getBoundaryLandWater(b);
-    if (lw && lw.water) {
-      const waterPolys = landWaterFeatureToLeafletPolygons(lw.water);
-      for (const coords of waterPolys) {
-        const overlay = L.polygon(coords, {
-          color: '#3b82c6', weight: 1, opacity: 0.7,
-          fillColor: '#3b82c6', fillOpacity: 0.55,
-          interactive: false,
-        });
-        _mapBoundaryLayer.addLayer(overlay);
-      }
-    }
-  }
+  // v0.9.0: boundaries dissolve from plots, and plots are already mode-
+  // clipped, so the dissolved boundary geometry is land-only (or water-
+  // only, etc.) by construction. No per-boundary split path needed.
+  const poly = L.polygon(geom.polygons, boundaryFilledStyle(color, isSelected));
+  poly._appyBoundaryId = b.id;
+  poly.bindTooltip(b.name || `(${getBoundaryTypeName(b.typeId)})`);
+  poly.on('click',    (e) => onBoundaryPolyClick(e, b));
+  poly.on('dblclick', (e) => onBoundaryPolyDblClick(e, b.id));
+  _mapBoundaryLayer.addLayer(poly);
+  _polyIndex.set('boundary:' + b.id, poly);
 }
 
 function onBoundaryPolyClick(e, b) {

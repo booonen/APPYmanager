@@ -10,16 +10,102 @@ let _db = null;
 let _activeSaveId = '';
 let _saveDebounce = null;
 
+// Bumped to 2 in the v0.9.0 land-only pivot. Pre-v2 saves are migrated on
+// load by migrateData(): the portion-aware property storage is folded
+// down, schema appliesTo is dropped, and the split-toggle settings are
+// replaced by a single project-level mode that's then read-only.
+const SCHEMA_VERSION = 2;
+
+const VALID_LAND_WATER_MODES = [
+  'land_only_sea_water',  // default — clip out sea AND inland water
+  'land_only_sea',        // clip out sea only; inland lakes stay
+  'water_only',           // keep only the water portion
+  'combined',             // no clipping — plots include any water
+];
+
 const EMPTY_DATA = () => ({
+  schemaVersion: SCHEMA_VERSION,
   osm: { nodes: {}, ways: {}, _nextLocalId: 0 },
   plots: [],
   boundaries: [],
   boundaryTypes: [],
   settlements: [],
   propertySchemas: [],
-  settings: {},
+  settings: {
+    landWaterMode: 'land_only_sea_water',  // set at save creation; read-only after
+    showWaterOverlay: true,                // visual water layer on the map
+  },
   waterCache: null  // Brick 12a — populated by fetchAndCacheWater()
 });
+
+// Migration: legacy saves → v2. Idempotent; runs after every load/import
+// merge. Drops the portion-aware property storage that v0.7–v0.8 wired
+// in (`propertyValuesLand`/`Water`, schema `appliesTo`), settles the new
+// `settings.landWaterMode`, and flags the data for one-shot reclip if a
+// water cache is present and the resolved mode actually clips.
+function migrateData(d) {
+  if (!d || typeof d !== 'object') return d;
+  if (d.schemaVersion === SCHEMA_VERSION) return d;
+
+  d.settings = d.settings || {};
+
+  // Legacy `landWaterSplitEnabled` → new mode. Either it was on (so plots
+  // had a water-aware view but were never clipped) or off (the polygons
+  // weren't expected to differ from OGF). Both legacy cases migrate to
+  // the new default `'land_only_sea_water'` so the user gets a clean
+  // land-only model immediately. Combined mode is opt-in via the new
+  // project modal.
+  if (!VALID_LAND_WATER_MODES.includes(d.settings.landWaterMode)) {
+    d.settings.landWaterMode = 'land_only_sea_water';
+  }
+
+  if (d.settings.showWaterOverlay === undefined) {
+    d.settings.showWaterOverlay = true;
+  }
+
+  // Drop legacy settings that the new model supersedes.
+  delete d.settings.landWaterSplitEnabled;
+  delete d.settings.waterDisplayMode;
+  delete d.settings.showWaterDebugOverlay;
+  delete d.settings.coastlineDebug;
+
+  // Fold per-portion property storage on each plot into the combined
+  // `propertyValues`. Land wins on conflicts (it's the canonical
+  // surviving portion); water-only entries are dropped — they were
+  // never aggregated and have no place on a land-only polygon.
+  for (const plot of (d.plots || [])) {
+    if (plot.propertyValuesLand) {
+      plot.propertyValues = plot.propertyValues || {};
+      for (const [k, v] of Object.entries(plot.propertyValuesLand)) {
+        if (v !== undefined && v !== null && v !== '') plot.propertyValues[k] = v;
+      }
+      delete plot.propertyValuesLand;
+    }
+    if (plot.propertyValuesWater) {
+      // Water-only values disappear with the land-only pivot. If a user
+      // had set e.g. salinity on water, that doesn't survive — this is
+      // pre-release test data, documented loss.
+      delete plot.propertyValuesWater;
+    }
+    delete plot.waterDisposition;  // never finalized; v0.8.4 already inert
+  }
+
+  // Drop `appliesTo` from every schema.
+  for (const s of (d.propertySchemas || [])) {
+    delete s.appliesTo;
+  }
+
+  // If a water cache is present and the mode actually clips, mark for a
+  // one-shot reclip. landwater.js consumes the flag during the post-load
+  // pass.
+  if (d.waterCache && d.waterCache.waterGeometry
+      && d.settings.landWaterMode !== 'combined') {
+    d.__needsReclipOnLoad = true;
+  }
+
+  d.schemaVersion = SCHEMA_VERSION;
+  return d;
+}
 
 function openDB() {
   return new Promise((resolve, reject) => {
@@ -104,7 +190,7 @@ async function load() {
   _activeSaveId = localStorage.getItem('appymanager:active') || '';
   if (_activeSaveId) {
     const slot = await dbGet('saves', _activeSaveId);
-    if (slot?.data) data = { ...EMPTY_DATA(), ...slot.data };
+    if (slot?.data) { data = { ...EMPTY_DATA(), ...slot.data }; migrateData(data); }
   }
   if (!_activeSaveId) {
     _activeSaveId = uid();
@@ -119,8 +205,13 @@ async function loadSlot(id) {
   _activeSaveId = id;
   localStorage.setItem('appymanager:active', id);
   const slot = await dbGet('saves', id);
-  if (slot?.data) data = { ...EMPTY_DATA(), ...slot.data };
+  if (slot?.data) { data = { ...EMPTY_DATA(), ...slot.data }; migrateData(data); }
   if (typeof _map !== 'undefined' && _map) { _map.remove(); _map = null; }
+  if (data.__needsReclipOnLoad && typeof reclipAllPlotsToMode === 'function') {
+    delete data.__needsReclipOnLoad;
+    reclipAllPlotsToMode(data.settings?.landWaterMode);
+    save();
+  }
   refreshAll(); renderDashboard(); updateSystemName();
   toast(t('toast.loaded', { name: data.settings?.projectName || t('save_mgr.unnamed') }), 'success');
 }
@@ -204,6 +295,7 @@ function handleImport(e) {
     try {
       const imported = JSON.parse(ev.target.result);
       const tempData = { ...EMPTY_DATA(), ...imported };
+      migrateData(tempData);
       const newId = uid();
       await dbPut('saves', { id: newId, data: tempData });
       await dbPut('registry', {
@@ -313,17 +405,50 @@ document.addEventListener('click', (e) => {
   if (dd && !dd.contains(e.target)) closeSavesDropdown();
 });
 
+// New-project flow. The land/water mode is set here and is read-only
+// after creation (the data model is shaped around it).
 async function newProject() {
-  appConfirm(t('save_mgr.confirm_new'), async () => {
-    await flushSave();
-    data = EMPTY_DATA();
-    _activeSaveId = uid();
-    localStorage.setItem('appymanager:active', _activeSaveId);
-    await flushSave();
-    if (typeof _map !== 'undefined' && _map) { _map.remove(); _map = null; }
-    updateSystemName();
-    switchTab('dashboard');
-    refreshAll(); renderDashboard();
-    toast(t('toast.new_project'), 'success');
-  });
+  const modeOpts = VALID_LAND_WATER_MODES.map(m => `
+    <option value="${m}"${m === 'land_only_sea_water' ? ' selected' : ''}>${t('save_mgr.new_mode_' + m)}</option>
+  `).join('');
+  const body = `
+    <p>${t('save_mgr.confirm_new')}</p>
+    <label style="display:block;margin-top:14px">
+      <div style="font-weight:500;margin-bottom:4px">${t('save_mgr.new_mode_label')}</div>
+      <select id="new-project-mode" style="width:100%;max-width:420px">${modeOpts}</select>
+      <div id="new-project-mode-help" class="text-dim" style="font-size:12px;margin-top:6px">${t('save_mgr.new_mode_help_land_only_sea_water')}</div>
+    </label>
+    <p class="text-dim" style="font-size:11px;margin-top:14px">${t('save_mgr.new_mode_immutable')}</p>
+  `;
+  const footer = `
+    <button class="btn" onclick="closeModal()">${t('btn.cancel')}</button>
+    <button class="btn btn-primary" onclick="_confirmNewProject()">${t('btn.confirm')}</button>
+  `;
+  openModal(t('save_mgr.new_title'), body, footer);
+  setTimeout(() => {
+    const sel = document.getElementById('new-project-mode');
+    const help = document.getElementById('new-project-mode-help');
+    if (sel && help) sel.addEventListener('change', () => {
+      help.textContent = t('save_mgr.new_mode_help_' + sel.value);
+    });
+  }, 0);
+}
+
+async function _confirmNewProject() {
+  const sel = document.getElementById('new-project-mode');
+  const chosen = sel && VALID_LAND_WATER_MODES.includes(sel.value)
+    ? sel.value
+    : 'land_only_sea_water';
+  closeModal();
+  await flushSave();
+  data = EMPTY_DATA();
+  data.settings.landWaterMode = chosen;
+  _activeSaveId = uid();
+  localStorage.setItem('appymanager:active', _activeSaveId);
+  await flushSave();
+  if (typeof _map !== 'undefined' && _map) { _map.remove(); _map = null; }
+  updateSystemName();
+  switchTab('dashboard');
+  refreshAll(); renderDashboard();
+  toast(t('toast.new_project'), 'success');
 }

@@ -1602,12 +1602,12 @@ function renderSettings() {
     `<option value="${l.code}"${l.code === _lang ? ' selected' : ''}>${esc(l.name)}</option>`
   ).join('');
   const snapVal = getSetting('snapToleranceM', 10);
-  const lwEnabled = !!getSetting('landWaterSplitEnabled', false);
+  const lwMode    = getSetting('landWaterMode', 'land_only_sea_water');
   const lwMinArea = Number(getSetting('minWaterBodyAreaM2', 10000)) || 0;
-  const lwDebug   = !!getSetting('showWaterDebugOverlay', false);
+  const lwOverlay = !!getSetting('showWaterOverlay', true);
   const lwSummary = (typeof getWaterCacheSummary === 'function') ? getWaterCacheSummary() : null;
   const lwBusy    = (typeof isLandWaterFetchInFlight === 'function') && isLandWaterFetchInFlight();
-  const lwHide    = getSetting('waterDisplayMode', 'split') === 'removed';
+  const lwClips   = lwMode !== 'combined';
 
   const defaultArea = getSetting('defaultSearchArea', []);
   const areaRows = defaultArea.map((r, i) => `
@@ -1643,11 +1643,11 @@ function renderSettings() {
     <div class="ie-card">
       <h3>${t('settings.landwater_title')}</h3>
       <p>${t('settings.landwater_desc')}</p>
-      <label class="flex" style="align-items:center;gap:8px;margin-top:8px">
-        <input type="checkbox" ${lwEnabled ? 'checked' : ''} onchange="onLandWaterEnabledChange(this.checked)">
-        <span>${t('settings.landwater_enable')}</span>
-      </label>
-      <div class="flex" style="align-items:center;gap:8px;margin-top:10px">
+      <div style="margin-top:10px">
+        <div class="text-dim" style="font-size:12px;margin-bottom:2px">${t('settings.landwater_mode_label')}</div>
+        <div class="mono">${esc(t('save_mgr.new_mode_' + lwMode))}</div>
+      </div>
+      <div class="flex" style="align-items:center;gap:8px;margin-top:14px">
         <span>${t('settings.landwater_min_area')}:</span>
         <input type="number" min="0" step="1000"
           value="${esc(lwMinArea)}"
@@ -1655,20 +1655,17 @@ function renderSettings() {
           style="max-width:140px">
         <span class="text-dim">${t('settings.landwater_min_area_unit')}</span>
       </div>
-      <div class="flex" style="align-items:center;gap:8px;margin-top:10px">
+      <div class="flex" style="align-items:center;gap:8px;margin-top:10px;flex-wrap:wrap">
         <button class="btn btn-sm" onclick="onFetchWaterClick()"${lwBusy ? ' disabled' : ''}>${lwBusy ? t('settings.landwater_fetching_btn') : t('settings.landwater_fetch_btn')}</button>
+        ${lwClips ? `<button class="btn btn-sm" onclick="onReclipPlotsClick()" ${lwSummary ? '' : 'disabled'} title="${esc(t('settings.landwater_reclip_help'))}">${t('settings.landwater_reclip_btn')}</button>` : ''}
         ${lwSummary ? `<span class="text-dim" style="font-size:12px">${t('settings.landwater_cache_summary', {
           when: new Date(lwSummary.fetchedAt).toLocaleString(),
           n: lwSummary.bodyCount
         })}</span>` : `<span class="text-dim" style="font-size:12px">${t('settings.landwater_no_cache')}</span>`}
       </div>
       <label class="flex" style="align-items:center;gap:8px;margin-top:10px">
-        <input type="checkbox" ${lwHide ? 'checked' : ''} onchange="onWaterDisplayModeChange(this.checked)">
-        <span>${t('settings.landwater_hide_water')}</span>
-      </label>
-      <label class="flex" style="align-items:center;gap:8px;margin-top:10px">
-        <input type="checkbox" ${lwDebug ? 'checked' : ''} onchange="onShowWaterDebugChange(this.checked)" ${lwSummary ? '' : 'disabled'}>
-        <span>${t('settings.landwater_debug_overlay')}</span>
+        <input type="checkbox" ${lwOverlay ? 'checked' : ''} onchange="onShowWaterOverlayChange(this.checked)">
+        <span>${t('settings.landwater_overlay_label')}</span>
       </label>
     </div>
     <div class="ie-card" style="border-color:var(--danger,#7a1a1a)">
@@ -1686,21 +1683,7 @@ function onSnapToleranceChange(val) {
   save();
 }
 
-// Brick 12a — Land/water settings handlers
-function onLandWaterEnabledChange(checked) {
-  setLandWaterSplitEnabled(!!checked);
-  if (checked && !getWaterCacheSummary()) {
-    // First-enable convenience: auto-fetch so the user doesn't have to
-    // hunt for the button.
-    fetchAndCacheWater();
-  } else {
-    renderSettings();
-    // Brick 12b: toggling the project-wide split flips every plot's
-    // rendering between single-polygon and land+water-split.
-    if (typeof redrawMap === 'function') redrawMap();
-  }
-}
-
+// Land/water settings handlers (v0.9.0)
 function onMinWaterBodyAreaChange(val) {
   setMinWaterBodyAreaM2(val);
 }
@@ -1709,20 +1692,22 @@ function onFetchWaterClick() {
   fetchAndCacheWater();
 }
 
-function onShowWaterDebugChange(checked) {
-  setShowWaterDebugOverlay(!!checked);
+function onShowWaterOverlayChange(checked) {
+  setShowWaterOverlay(!!checked);
 }
 
-// Brick 12b correction (v0.8.4): map-wide "hide water from plots" toggle
-// replaces the per-plot waterDisposition that v0.8.3 wired into the plot
-// inspector. This is a VIEW preference, not plot data — toggling it once
-// affects every plot on the main map. Future data views (Brick 13+
-// choropleth etc.) will each carry their own equivalent toggle.
-function onWaterDisplayModeChange(checked) {
-  data.settings = data.settings || {};
-  data.settings.waterDisplayMode = checked ? 'removed' : 'split';
+function onReclipPlotsClick() {
+  if (typeof reclipAllPlotsToMode !== 'function') return;
+  if (!data.waterCache || !data.waterCache.waterGeometry) {
+    toast(t('landwater.toast_reclip_no_cache'), 'warning');
+    return;
+  }
+  const mode = getSetting('landWaterMode', 'land_only_sea_water');
+  const res = reclipAllPlotsToMode(mode);
   save();
+  toast(t('landwater.toast_reclipped', { kept: res.kept, dropped: res.dropped }), 'success');
   if (typeof redrawMap === 'function') redrawMap();
+  renderSettings();
 }
 
 function _readDefaultSearchAreaRows() {
@@ -2255,7 +2240,6 @@ function onPlotDetailDelete() {
     if (idx < 0) return;
     data.plots.splice(idx, 1);
     invalidateBoundaryGeometry();
-    if (typeof invalidatePlotLandWater === 'function') invalidatePlotLandWater(_detailPlotId);
     save();
     closePlotDetail();
     refreshAll();
@@ -2288,37 +2272,6 @@ function closePlotDetail() {
 // Auto-save fires on blur (numeric / categorical) or on each keystroke
 // (percentage — so the linked field can update live).  Empty inputs
 // delete the value entirely.
-
-// Brick 12c: which portions to render for a schema on a given plot.
-// Returns an array of 'combined' | 'land' | 'water' identifiers.
-//   • Project split off, or plot has no water, or mode is 'removed':
-//     a single 'combined' row (the existing pre-12c behaviour).
-//   • Split visible on this plot AND schema's appliesTo is 'land':  ['land']
-//   • Split visible AND appliesTo is 'water':                       ['water']
-//   • Split visible AND appliesTo is 'both':                        ['land','water']
-//   • Percentages always render as 'combined' in 12c (portion-aware
-//     denominator resolution deferred to a later brick).
-//   • Hidden cases (return []): a 'water' schema on a plot that has no
-//     water, or on any plot when waterDisplayMode is 'removed'.
-function _portionsForPlotSchema(plot, schema) {
-  if (!schema) return [];
-  if (!getSetting('landWaterSplitEnabled', false)) return ['combined'];
-  if (typeof getPlotLandWater !== 'function') return ['combined'];
-  const lw = getPlotLandWater(plot);
-  const hasWater = !!(lw && lw.water);
-  const mode = getSetting('waterDisplayMode', 'split');
-  const splitVisible = hasWater && mode === 'split' && data.waterCache && data.waterCache.waterGeometry;
-  if (!splitVisible) {
-    // 'water' schemas don't apply where there's no water (or it's hidden).
-    if (schema.appliesTo === 'water') return [];
-    return ['combined'];
-  }
-  if (schema.kind === 'percentage') return ['combined']; // 12c limitation
-  if (schema.appliesTo === 'land')  return ['land'];
-  if (schema.appliesTo === 'water') return ['water'];
-  if (schema.appliesTo === 'both')  return ['land', 'water'];
-  return ['land']; // legacy default
-}
 
 function _renderPlotPropertyRows(plot) {
   // Plot inspector shows schemas where `appliesAtLevel(s, 'plot')` is
@@ -2359,19 +2312,13 @@ function _renderPlotPropertyRows(plot) {
   }
 
   // Recursively render a parent's percentage children, grandchildren, etc.
-  // All nested rows share one indent — visual chain comes from ordering
-  // (each descendant renders directly after its parent). The ancestors
-  // set guards against any cycle that schema validation might have missed.
-  // Brick 12c: percentages stay as a single 'combined' row.
   const renderChildren = (parentId, ancestors) => {
     if (ancestors.has(parentId)) return '';
     const next = new Set(ancestors);
     next.add(parentId);
     let h = '';
     for (const pct of (childrenByDenom.get(parentId) || [])) {
-      for (const portion of _portionsForPlotSchema(plot, pct)) {
-        h += _renderPlotPropertyRow(plot, pct, true, portion);
-      }
+      h += _renderPlotPropertyRow(plot, pct, true);
       h += renderChildren(pct.id, next);
     }
     return h;
@@ -2386,23 +2333,15 @@ function _renderPlotPropertyRows(plot) {
   html += _renderPlotAreaRow(plot);
   html += renderChildren(AREA_VIRTUAL_ID, new Set());
   for (const num of numerics) {
-    for (const portion of _portionsForPlotSchema(plot, num)) {
-      html += _renderPlotPropertyRow(plot, num, false, portion);
-    }
+    html += _renderPlotPropertyRow(plot, num, false);
     html += renderChildren(num.id, new Set());
   }
   for (const cat of categorical) {
-    for (const portion of _portionsForPlotSchema(plot, cat)) {
-      html += _renderPlotPropertyRow(plot, cat, false, portion);
-    }
+    html += _renderPlotPropertyRow(plot, cat, false);
   }
   if (orphans.length > 0) {
     html += `<div class="plot-property-subhead">${t('plot_detail.property_orphan_section')}</div>`;
-    for (const pct of orphans) {
-      for (const portion of _portionsForPlotSchema(plot, pct)) {
-        html += _renderPlotPropertyRow(plot, pct, false, portion);
-      }
-    }
+    for (const pct of orphans) html += _renderPlotPropertyRow(plot, pct, false);
   }
   return html;
 }
@@ -2422,41 +2361,6 @@ function _renderPlotAreaRow(plot) {
       </div>
     </div>`;
 
-  // Brick 12c v0.8.6: when the split is visible on this plot, render
-  // the area as two portion rows (Land + Water) with a percentage hint
-  // so the user can see at a glance how the plot decomposes.
-  if (typeof getPlotLandWater === 'function'
-      && getSetting('landWaterSplitEnabled', false)
-      && data.waterCache && data.waterCache.waterGeometry
-      && getSetting('waterDisplayMode', 'split') === 'split') {
-    const lw = getPlotLandWater(plot);
-    if (lw && lw.water) {
-      let landArea = 0, waterArea = 0;
-      try { landArea  = lw.land  ? turf.area(lw.land)  : 0; } catch (e) {}
-      try { waterArea = lw.water ? turf.area(lw.water) : 0; } catch (e) {}
-      const denom = landArea + waterArea;
-      const landPct  = denom > 0 ? (landArea  / denom) * 100 : 0;
-      const waterPct = denom > 0 ? (waterArea / denom) * 100 : 0;
-      const pct = (n) => `${formatPropertyNumber(Math.round(n * 10) / 10)}%`;
-      const landValue  = `${fmt(landArea)} <span class="plot-property-pct mono">${pct(landPct)}</span>`;
-      const waterValue = `${fmt(waterArea)} <span class="plot-property-pct mono">${pct(waterPct)}</span>`;
-      const landChip   = `<span class="property-portion-chip portion-land">${t('plot_detail.portion_land')}</span>`;
-      const waterChip  = `<span class="property-portion-chip portion-water">${t('plot_detail.portion_water')}</span>`;
-      // Inline HTML (esc would mangle the chip span), so build manually.
-      const portionRow = (chip, value) => `
-        <div class="plot-property-row plot-property-row-readonly" data-area-row="1">
-          <div class="plot-property-label">
-            <span class="plot-property-name">${t('plot_detail.area_label')}</span>
-            ${chip}
-          </div>
-          <div class="plot-property-input">
-            <span class="plot-property-readonly-value mono">${value}</span>
-          </div>
-        </div>`;
-      return portionRow(landChip, landValue) + portionRow(waterChip, waterValue);
-    }
-  }
-
   return baseRow(`<span class="property-unit-chip">${t('plot_detail.computed_chip')}</span>`, fmt(total));
 }
 
@@ -2469,31 +2373,16 @@ function _inputWithSuffix(inputHtml, suffix) {
   return `<div class="input-with-suffix has-suffix">${inputHtml}<span class="input-suffix">${esc(suffix)}</span></div>`;
 }
 
-function _renderPlotPropertyRow(plot, schema, isNested, portion) {
-  // Brick 12c: portion ∈ 'combined' | 'land' | 'water'. The legacy
-  // call sites omitted the argument; default to 'combined' preserves
-  // exact pre-12c behaviour for any caller that doesn't pass it.
-  portion = portion || 'combined';
-  const stored = portion === 'combined'
-    ? getPlotPropertyValue(plot, schema.id)
-    : getPlotPortionPropertyValue(plot, schema.id, portion);
-  // No more label-side unit chip — the unit lives inside the input as a
-  // suffix (see _inputWithSuffix). Read-only system rows (Plot area)
-  // still carry a label chip for "computed" — handled in _renderPlotAreaRow.
-  // For per-portion rows, add a small chip so user can tell Land from Water.
-  const portionChip = portion === 'land'  ? `<span class="property-portion-chip portion-land">${t('plot_detail.portion_land')}</span>`
-                    : portion === 'water' ? `<span class="property-portion-chip portion-water">${t('plot_detail.portion_water')}</span>`
-                    : '';
+function _renderPlotPropertyRow(plot, schema, isNested) {
+  const stored = getPlotPropertyValue(plot, schema.id);
   const label = `<div class="plot-property-label">
     <span class="plot-property-name">${esc(schema.name)}</span>
-    ${portionChip}
   </div>`;
   const rowClass = isNested ? 'plot-property-row plot-property-row-nested' : 'plot-property-row';
-  const portionAttr = portion !== 'combined' ? ` data-portion="${portion}"` : '';
 
   if (schema.kind === 'numeric') {
     const val = stored != null && stored !== '' ? esc(String(stored)) : '';
-    const input = `<input type="number" step="any" data-schema-id="${esc(schema.id)}" data-kind="numeric"${portionAttr}
+    const input = `<input type="number" step="any" data-schema-id="${esc(schema.id)}" data-kind="numeric"
       value="${val}" placeholder="${t('plot_detail.property_empty_placeholder')}"
       onblur="onPlotPropertyBlur(this)">`;
     return `<div class="${rowClass}">
@@ -2506,7 +2395,7 @@ function _renderPlotPropertyRow(plot, schema, isNested, portion) {
 
   if (schema.kind === 'categorical') {
     const val = typeof stored === 'string' ? stored : '';
-    const taId = `ta-${plot.id}-${schema.id}-${portion}`;
+    const taId = `ta-${plot.id}-${schema.id}`;
     return `<div class="${rowClass}">
       ${label}
       <div class="plot-property-input">
@@ -2516,7 +2405,7 @@ function _renderPlotPropertyRow(plot, schema, isNested, portion) {
           placeholder: t('plot_detail.property_empty_placeholder'),
           optionsFnName: 'categoricalSuggestionsForInput',
           commitFnName: 'onPlotPropertyBlur',
-          dataAttrs: { 'schema-id': schema.id, 'kind': 'categorical', 'portion': portion }
+          dataAttrs: { 'schema-id': schema.id, 'kind': 'categorical' }
         })}
       </div>
     </div>`;
@@ -2656,40 +2545,6 @@ function _renderBoundaryAreaRow(boundary) {
   const total = (typeof boundaryArea === 'function') ? boundaryArea(boundary) : 0;
   const fmt = (typeof formatArea === 'function')
     ? (n) => formatArea(n) : (n) => String(n);
-
-  // Mirrors _renderPlotAreaRow: when the project split is visible on
-  // this boundary, render Land + Water as two read-only rows with a
-  // percentage hint.
-  if (typeof getBoundaryLandWater === 'function'
-      && getSetting('landWaterSplitEnabled', false)
-      && data.waterCache && data.waterCache.waterGeometry
-      && getSetting('waterDisplayMode', 'split') === 'split') {
-    const lw = getBoundaryLandWater(boundary);
-    if (lw && lw.water) {
-      let landArea = 0, waterArea = 0;
-      try { landArea  = lw.land  ? turf.area(lw.land)  : 0; } catch (e) {}
-      try { waterArea = lw.water ? turf.area(lw.water) : 0; } catch (e) {}
-      const denom = landArea + waterArea;
-      const landPct  = denom > 0 ? (landArea  / denom) * 100 : 0;
-      const waterPct = denom > 0 ? (waterArea / denom) * 100 : 0;
-      const pct = (n) => `${formatPropertyNumber(Math.round(n * 10) / 10)}%`;
-      const landValue  = `${fmt(landArea)} <span class="plot-property-pct mono">${pct(landPct)}</span>`;
-      const waterValue = `${fmt(waterArea)} <span class="plot-property-pct mono">${pct(waterPct)}</span>`;
-      const landChip   = `<span class="property-portion-chip portion-land">${t('plot_detail.portion_land')}</span>`;
-      const waterChip  = `<span class="property-portion-chip portion-water">${t('plot_detail.portion_water')}</span>`;
-      const portionRow = (chip, value) => `
-        <div class="plot-property-row plot-property-row-readonly" data-area-row="1">
-          <div class="plot-property-label">
-            <span class="plot-property-name">${t('plot_detail.area_label')}</span>
-            ${chip}
-          </div>
-          <div class="plot-property-input">
-            <span class="plot-property-readonly-value mono">${value}</span>
-          </div>
-        </div>`;
-      return portionRow(landChip, landValue) + portionRow(waterChip, waterValue);
-    }
-  }
 
   return `<div class="plot-property-row plot-property-row-readonly" data-area-row="1">
     <div class="plot-property-label">
@@ -2901,10 +2756,6 @@ function _collectCategoricalValues(schemaId, currentVal) {
   };
   for (const plot of (data.plots || [])) {
     tally(plot.propertyValues?.[schemaId]);
-    // Brick 12c: per-portion stores count toward suggestions too, so
-    // values typed on Land/Water portions feed back into typeahead.
-    tally(plot.propertyValuesLand?.[schemaId]);
-    tally(plot.propertyValuesWater?.[schemaId]);
   }
   for (const b of (data.boundaries || [])) {
     tally(b.propertyValues?.[schemaId]);
@@ -2977,28 +2828,16 @@ function onPlotPropertyBlur(inputEl) {
   const schemaId = inputEl.dataset.schemaId;
   const kind = inputEl.dataset.kind;
   const raw = inputEl.value;
-  // Brick 12c: portion ∈ 'combined' (omitted) | 'land' | 'water'. Routes
-  // to the right storage so split-visible edits don't clobber combined
-  // values from a non-split view, and vice versa.
-  const portion = inputEl.dataset.portion || 'combined';
-  const portionSet = (value) => {
-    if (portion === 'combined') setPlotPropertyValue(plot, schemaId, value);
-    else                        setPlotPortionPropertyValue(plot, schemaId, portion, value);
-  };
-  const portionClear = () => {
-    if (portion === 'combined') clearPlotPropertyValue(plot, schemaId);
-    else                        clearPlotPortionPropertyValue(plot, schemaId, portion);
-  };
 
   if (kind === 'numeric') {
     if (raw === '' || raw == null) {
-      portionClear();
+      clearPlotPropertyValue(plot, schemaId);
     } else {
       const n = Number(raw);
       if (!Number.isFinite(n)) return; // invalid — leave previous value alone
       const schema = findPropertySchema(schemaId);
       const stored = schema?.autoRound ? Math.round(n) : n;
-      portionSet(stored);
+      setPlotPropertyValue(plot, schemaId, stored);
       // Reflect the rounded value back into the input so the user sees
       // what got persisted (rather than 50.8 silently becoming 51 in
       // the next render).
@@ -3007,11 +2846,8 @@ function onPlotPropertyBlur(inputEl) {
     save();
     _refreshDependentPercentageRows(schemaId);
   } else if (kind === 'categorical') {
-    if (raw === '' || raw == null) {
-      portionClear();
-    } else {
-      portionSet(raw);
-    }
+    if (raw === '' || raw == null) clearPlotPropertyValue(plot, schemaId);
+    else                            setPlotPropertyValue(plot, schemaId, raw);
     save();
   }
 }
@@ -3378,7 +3214,6 @@ function _openPropertyModal(title, schema) {
   const rollup = !!schema?.rollupDistribution;
   const autoRound = !!schema?.autoRound;
   const rootLevelId = schema?.rootLevelId || 'plot';
-  const appliesTo   = schema?.appliesTo   || 'land';
 
   // Kind dropdown is locked on edit (data-integrity hedge for Brick 9).
   // Add: dropdown is enabled and onchange swaps the kind-specific block.
@@ -3412,15 +3247,6 @@ function _openPropertyModal(title, schema) {
       <label>${t('properties.defined_at_label')}</label>
       <p class="text-dim" style="font-size:12px;margin-bottom:6px">${t('properties.defined_at_help')}</p>
       ${_definedAtSelect(rootLevelId)}
-    </div>
-    <div class="form-group">
-      <label>${t('properties.applies_to_label')}</label>
-      <p class="text-dim" style="font-size:12px;margin-bottom:6px">${t('properties.applies_to_help')}</p>
-      <select id="property-applies-to">
-        <option value="land"  ${appliesTo === 'land'  ? 'selected' : ''}>${t('properties.applies_to_land')}</option>
-        <option value="water" ${appliesTo === 'water' ? 'selected' : ''}>${t('properties.applies_to_water')}</option>
-        <option value="both"  ${appliesTo === 'both'  ? 'selected' : ''}>${t('properties.applies_to_both')}</option>
-      </select>
     </div>
     <div id="property-kind-fields">
       ${_renderPropertyKindFields(kind, { aggregation, weightId, denominatorId, rollup, autoRound })}
@@ -3595,10 +3421,6 @@ function saveProperty() {
   // Common across all kinds: which level this property is defined at.
   // Empty / unknown id falls back to 'plot'.
   const rootLevelId = document.getElementById('property-defined-at')?.value || 'plot';
-  // Brick 12c: which land/water portion this schema applies to when the
-  // project split is enabled. Defaults to 'land' (most demographics).
-  const appliesToRaw = document.getElementById('property-applies-to')?.value || 'land';
-  const appliesTo = PROPERTY_APPLIES_TO.includes(appliesToRaw) ? appliesToRaw : 'land';
 
   if (kind === 'numeric') {
     aggregation = document.getElementById('property-aggregation')?.value || 'sum';
@@ -3657,7 +3479,6 @@ function saveProperty() {
       schema.unit = unit;
       schema.notes = notes;
       schema.rootLevelId = rootLevelId;
-      schema.appliesTo = appliesTo;
       // Kind is locked on edit; we leave schema.kind alone.
       if (schema.kind === 'numeric') {
         schema.aggregation = aggregation;
@@ -3677,7 +3498,6 @@ function saveProperty() {
       denominatorPropertyId,
       autoRound,
       rootLevelId,
-      appliesTo,
     });
   }
 
@@ -4058,7 +3878,15 @@ function _recomputeSplit() {
 
     // Re-seed non-overridden cells with proposed values. Overridden
     // cells keep whatever the user typed.
-    const proposed = proposePlotSplitValues(plot, result.pieces.map(p => p.area || 0));
+    //
+    // v0.9.0: numeric / percentage redistribution is *land-area*-weighted
+    // when feasible. Under a clipping mode the piece geometry is already
+    // land-only, so `p.area` IS land area. Under 'combined' mode we
+    // recompute each piece's land area against the water cache so the
+    // suggestion isn't skewed by a piece that's mostly lake. Falls back
+    // to total piece area if there's no cache to lean on.
+    const pieceAreas = _splitPieceLandAreas(result.pieces);
+    const proposed = proposePlotSplitValues(plot, pieceAreas);
     for (let i = 0; i < result.pieces.length; i++) {
       const obj = _splitState.propertyValues[i] = _splitState.propertyValues[i] || {};
       // Wipe non-overridden entries first (so e.g. a deleted parent
@@ -4089,6 +3917,47 @@ function _recomputeSplit() {
 function _defaultPieceNames(plot, n) {
   const base = plot.name || t('plots.unnamed');
   return Array.from({ length: n }, (_, i) => `${base} (${i + 1})`);
+}
+
+// Returns each piece's effective land area (m²) for use as the
+// proportional-split basis in proposePlotSplitValues. Under any clipping
+// mode the piece geometry is already land-only, so we trust `p.area`.
+// Under 'combined' mode with a water cache we subtract the water
+// intersection so a piece that's mostly lake doesn't take a
+// disproportionate share of (e.g.) population. Falls back to p.area
+// when there's no cache.
+function _splitPieceLandAreas(pieces) {
+  const mode = getSetting('landWaterMode', 'land_only_sea_water');
+  const cache = data.waterCache;
+  if (mode !== 'combined' || !cache || !cache.waterGeometry) {
+    return pieces.map(p => p.area || 0);
+  }
+  return pieces.map(piece => {
+    const total = piece.area || 0;
+    if (total <= 0) return 0;
+    try {
+      const outer = piece.outer.slice();
+      if (outer.length && (outer[0][0] !== outer[outer.length - 1][0] ||
+                           outer[0][1] !== outer[outer.length - 1][1])) {
+        outer.push([outer[0][0], outer[0][1]]);
+      }
+      const lngLat = [outer.map(([lat, lng]) => [lng, lat])];
+      for (const h of (piece.holes || [])) {
+        const ring = h.slice();
+        if (ring.length && (ring[0][0] !== ring[ring.length - 1][0] ||
+                            ring[0][1] !== ring[ring.length - 1][1])) {
+          ring.push([ring[0][0], ring[0][1]]);
+        }
+        lngLat.push(ring.map(([lat, lng]) => [lng, lat]));
+      }
+      const tp = turf.polygon(lngLat);
+      const inter = turf.intersect(tp, cache.waterGeometry);
+      const waterArea = inter ? turf.area(inter) : 0;
+      return Math.max(0, total - waterArea);
+    } catch (_) {
+      return total;  // any turf hiccup → safe fallback to total area
+    }
+  });
 }
 
 // When a vertex is inserted at idx, override keys for pieces ≥ idx

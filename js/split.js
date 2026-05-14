@@ -294,7 +294,12 @@ function executeSplit(plot, pieces, names, propertyValuesPerPiece, notesPerPiece
       holes: (piece.holes || []).map(_openRing),
     }];
     const { outers, inners } = storeSubdivisionGeometry(polygons);
-    const newPlot = createPlot({
+    // The parent plot was already clipped at creation (under a clipping
+    // mode), so a cut producing an all-water piece should be impossible.
+    // Under 'combined' there's no clip to fire either. Either way, a
+    // null return from the helper means we drop that piece silently
+    // rather than create an empty plot.
+    const newPlot = createPlotMaybeClipped({
       name:          names && names[i] != null ? names[i] : (plot.name || ''),
       notes:         notesPerPiece && notesPerPiece[i] != null ? notesPerPiece[i] : (plot.notes || ''),
       ogfRelationId: null, // split breaks the round-trip mapping; cleared until re-sync
@@ -302,6 +307,7 @@ function executeSplit(plot, pieces, names, propertyValuesPerPiece, notesPerPiece
       inners,
       flags:         [],
     });
+    if (!newPlot) continue;
     const valueMap = (propertyValuesPerPiece && propertyValuesPerPiece[i]) || {};
     for (const [schemaId, value] of Object.entries(valueMap)) {
       if (value === undefined || value === null || value === '') continue;
@@ -335,7 +341,6 @@ function executeSplit(plot, pieces, names, propertyValuesPerPiece, notesPerPiece
   // against the new pieces.
   data.plots = data.plots.filter(p => p.id !== plot.id);
   invalidateBoundaryGeometry();
-  if (typeof invalidateAllPlotLandWater === 'function') invalidateAllPlotLandWater();
   save();
 
   return newPlotIds;

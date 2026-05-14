@@ -89,11 +89,13 @@ The atomic geographic unit. Properties:
 - The user can export current plots to a `.osc` file; after upload to OGF,
   the program needs to **re-sync** to assign the correct OGF IDs back to
   each plot.
-- A plot can optionally be split between **land** and **water** (outside
-  coastline / inside water relations). Internally, plots are stored
-  **mixed**; the land/water split is applied on load when enabled.
-  Properties can be set independently on land vs. water portions when the
-  split is on.
+- Plot geometry is shaped by the project's **land/water mode**, set
+  at save creation and immutable thereafter (see Brick 12 entry below
+  for the four modes). Under the default `'land_only_sea_water'` mode,
+  plots are clipped against the cached water geometry the moment they
+  are created — no dual storage, no portion-aware property model. Each
+  plot stores a single polygon; everything else (boundary dissolution,
+  Area, aggregation) reads from it as-is.
 
 ### Boundary
 A higher-level region built from primitives.
@@ -326,13 +328,26 @@ which rules it implements but does not re-state them in full. Read the
   inherits to both; percentage recomputes from its denominator. Show
   the two new plots' areas (and population once Brick 17 lands) to help
   electorate-style splitting decisions.
-- **Brick 12** — Land/water split. Fetch coastlines (`way` with
-  `natural=coastline`) and water relations from OGF. Internal plot
-  storage stays mixed (one polygon per plot). When the split is
-  enabled, plots are split into land/water portions on load.
-  Properties can be set separately on land vs. water portions.
-  Toggling off does **not** destroy data — kept separately and re-applied
-  if the split is toggled on again.
+- **Brick 12** — Land/water mode. Fetch coastlines (`way` with
+  `natural=coastline`) and water relations from OGF, cache them as
+  `data.waterCache`, and use that geometry to shape plot polygons at
+  creation time. The project's `data.settings.landWaterMode` is set
+  at save creation and is read-only after — it picks one of four
+  shapes for what a "plot" geometrically is:
+    - `'land_only_sea_water'` (default) — clip against sea AND inland
+      water; the plot is land.
+    - `'land_only_sea'` — clip against sea only; inland lakes stay
+      part of the plot.
+    - `'water_only'` — keep only the water portion.
+    - `'combined'` — no clipping; legacy "as imported" behaviour.
+  Every plot-creation path (Overpass import, boundary-merge
+  subdivision, manual split) routes through `createPlotMaybeClipped`,
+  which runs the proposed polygons through `clipPolygonsToMode` and
+  rejects all-water imports with a toast. Properties live on the
+  single resulting polygon — no per-portion storage, no
+  `appliesTo` flag on schemas. The plot-split UI's area-proportional
+  suggestions are land-area-weighted (relevant only under `'combined'`
+  mode; the other modes already clip plots to a single portion).
 
 ### Phase 5 — Visualisation & UX
 
@@ -875,28 +890,56 @@ they come up; the plan is a living document.
   equivalent view-level toggle. Persisted-cache + plotArea +
   property-side changes deferred to 12c / 12d.
 - **Brick 12c** ✓ (committed) — split-aware property values + inspector
-  UI. Property schemas gain `appliesTo: 'land' | 'water' | 'both'`
-  (default `'land'`); schema editor exposes a dropdown between
-  "Defined at" and the kind-specific fields. New per-plot storage
-  `plot.propertyValuesLand` / `plot.propertyValuesWater` parallel
-  the existing `propertyValues`. `getPlotPortionPropertyValue`
-  reads with a migration fallback to the legacy `propertyValues`
-  for land/both schemas (water has no fallback — it's new ground).
-  Plot inspector uses `_portionsForPlotSchema` to decide rows per
-  schema: project-split-off → single combined row; split visible →
-  `['land']` / `['water']` / `['land','water']` based on
-  `appliesTo`; percentages stay on `['combined']` in 12c (portion-
-  aware denominators deferred). `_renderPlotPropertyRow(plot,
-  schema, isNested, portion)` accepts a portion arg; land/water
-  rows get a small chip on the label ("LAND" green / "WATER"
-  blue, `.property-portion-chip` styles in styles.css). Inputs
-  carry `data-portion`; `onPlotPropertyBlur` routes to the right
-  storage. Typeahead suggestions
-  (`_collectCategoricalValues`) walk land + water portions too.
-  Boundary aggregation, `plotArea` honouring `'removed'`, and
-  combined-derived auto-mirror are 12d's job. Known trade-off
-  documented: toggling `waterDisplayMode` may show different
-  values for the same schema across the two views (no auto-mirror).
+  UI. Wired `appliesTo: 'land' | 'water' | 'both'` on schemas and
+  `propertyValuesLand` / `propertyValuesWater` on plots. v0.8.6
+  added Land + Water rows on plot Area; v0.8.8 cascaded it to
+  boundary rendering and the boundary Area row. **Superseded by
+  Brick 12d** — see entry below.
+- **Brick 12d** ✓ (committed, v0.9.0) — pivot to land-only by
+  default; dual-storage portion model removed.
+  - `data.settings.landWaterMode` set at save creation, immutable:
+    `'land_only_sea_water'` (default) | `'land_only_sea'` |
+    `'water_only'` | `'combined'`. New-save modal in
+    `persistence.js#newProject` exposes the picker; the settings
+    card shows it read-only.
+  - `clipPolygonsToMode(polygons, mode)` in `landwater.js` is the
+    single chokepoint. `createPlotMaybeClipped` in `plots.js`
+    wraps `createPlot` with the clip + all-water rejection. Wired
+    into Overpass import (`subdivide.js`), boundary-merge
+    subdivision, and manual split (`split.js`). The water cache
+    now stores `seaGeometry` and `inlandGeometry` separately so
+    `'land_only_sea'` can clip against sea alone; the merged
+    `waterGeometry` stays as the union view used by the overlay
+    and the other clipping modes.
+  - `reclipAllPlotsToMode` walks every plot and rewrites its
+    `outers`/`inners` against fresh local-id ways from
+    `storeSubdivisionGeometry`. Fires automatically once on load
+    after the v1→v2 migration when the resolved mode actually
+    clips and a water cache is present; surfaced in the settings
+    card as a "Re-clip existing plots" button for use after a
+    coastline re-fetch.
+  - Migration (`persistence.js#migrateData`): folds
+    `propertyValuesLand` into `propertyValues` (land wins on
+    conflicts; water-only entries dropped), deletes `appliesTo`,
+    `landWaterSplitEnabled`, `waterDisplayMode`,
+    `showWaterDebugOverlay`, `waterDisposition`. Schema version
+    bumps to `2`.
+  - Stripped: `getPlotLandWater`, `getBoundaryLandWater`,
+    `_landWaterByPlot`, `_landWaterByBoundary`, the
+    `_portionsForPlotSchema` decision tree, the dual-row Area
+    render on both plot and boundary inspectors, the schema
+    editor's "Applies to" dropdown, the split path in
+    `_drawPlotPoly` / `_drawBoundaryPoly`. The water layer is now
+    just a project-level overlay (`data.settings.showWaterOverlay`,
+    default `true`).
+  - Plot-split numeric redistribution: under `'combined'` mode with
+    a water cache, each piece's land area is computed at
+    suggestion time so a piece that's mostly lake doesn't take a
+    disproportionate share. Other modes already produce land-only
+    pieces so `p.area` is the right basis.
+  - Tradeoff: the land-on-left convention is trusted strictly (per
+    the v0.8.7 simplification). Any coastline drawn water-on-left
+    inverts its mode classification.
 
 ### Phase 3 — Properties — **complete** (2026-05-11)
 

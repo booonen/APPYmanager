@@ -98,19 +98,20 @@ async function fetchAndCacheWater() {
     const minAreaM2 = Math.max(0, Number(getSetting('minWaterBodyAreaM2', 10000)) || 0);
     const merged = await _mergeAndThreshold(seaGeom, inlandGeom, minAreaM2);
 
+    // v0.9.0: cache sea and inland separately so `'land_only_sea'` mode
+    // can clip against sea alone. `waterGeometry` stays as the merged
+    // view used by clip modes that strip all water and by the overlay.
     data.waterCache = {
-      fetchedAt:     new Date().toISOString(),
+      fetchedAt:      new Date().toISOString(),
       bbox,
-      waterGeometry: merged.geometry,
-      bodyCount:     merged.bodyCount,
+      seaGeometry:    seaGeom    || null,
+      inlandGeometry: inlandGeom || null,
+      waterGeometry:  merged.geometry,
+      bodyCount:      merged.bodyCount,
     };
-    invalidateAllPlotLandWater();     // 12b: per-plot intersections are stale
-    invalidateAllBoundaryLandWater(); // 12c+ boundary equivalent
     save();
 
     toast(t('landwater.toast_fetched', { n: merged.bodyCount }), 'success');
-    // Always redraw — both the debug overlay (12a) and the per-plot
-    // land/water rendering (12b) read from the updated cache.
     if (typeof redrawMap === 'function') redrawMap();
   } finally {
     _landwaterFetchInFlight = false;
@@ -634,12 +635,6 @@ async function _mergeAndThreshold(seaGeom, inlandGeom, minAreaM2) {
 // SETTINGS HELPERS (used by views.js)
 // ------------------------------------------------------------
 
-function setLandWaterSplitEnabled(on) {
-  data.settings = data.settings || {};
-  data.settings.landWaterSplitEnabled = !!on;
-  save();
-}
-
 function setMinWaterBodyAreaM2(val) {
   const n = Math.max(0, Math.round(Number(val) || 0));
   data.settings = data.settings || {};
@@ -647,9 +642,9 @@ function setMinWaterBodyAreaM2(val) {
   save();
 }
 
-function setShowWaterDebugOverlay(on) {
+function setShowWaterOverlay(on) {
   data.settings = data.settings || {};
-  data.settings.showWaterDebugOverlay = !!on;
+  data.settings.showWaterOverlay = !!on;
   save();
   if (typeof redrawMap === 'function') redrawMap();
 }
@@ -665,83 +660,33 @@ function getWaterCacheSummary() {
 }
 
 // ============================================================
-// PER-PLOT LAND/WATER INTERSECTION (Brick 12b)
+// MODE-BASED CLIPPING (v0.9.0)
 // ============================================================
-// For every plot, compute `{ land, water }` GeoJSON Features by
-// intersecting the plot polygon against `data.waterCache.waterGeometry`.
-// Results are memoised in-memory (not persisted in 12b — derived data
-// can always be regenerated from the plot polygon + water cache).
+// The project's `landWaterMode` (set at save creation, read-only after)
+// decides how every newly-created plot is shaped:
 //
-// Invalidation:
-//   • fetchAndCacheWater() success    → clear all entries.
-//   • plot geometry change (split,    → invalidatePlotLandWater(plotId).
-//     import, edit, delete)
-//   • split toggled off               → keep the cache (cheap to retain;
-//     toggling back on doesn't reload from scratch).
+//   'land_only_sea_water' → difference against (sea ∪ inland water).
+//   'land_only_sea'       → difference against sea only; inland lakes
+//                           stay part of the plot.
+//   'water_only'          → intersect with (sea ∪ inland water).
+//   'combined'            → no clipping; the polygon stays as imported.
+//
+// Inputs and outputs are in Leaflet `[lat, lng]` form so the helper
+// drops straight into the existing createPlot pipeline (Overpass
+// import, boundary-merge subdivision, manual split). The water cache
+// stays in turf-native `[lng, lat]`; we convert at the boundaries.
 
-const _landWaterByPlot     = new Map(); // plotId     → { land, water }
-const _landWaterByBoundary = new Map(); // boundaryId → { land, water }
-
-function invalidateAllPlotLandWater() { _landWaterByPlot.clear(); }
-function invalidatePlotLandWater(plotId) { _landWaterByPlot.delete(plotId); }
-function invalidateAllBoundaryLandWater() { _landWaterByBoundary.clear(); }
-function invalidateBoundaryLandWater(boundaryId) { _landWaterByBoundary.delete(boundaryId); }
-
-function getPlotLandWater(plot) {
-  if (!plot) return null;
-  if (_landWaterByPlot.has(plot.id)) return _landWaterByPlot.get(plot.id);
-  const result = _computePlotLandWater(plot);
-  _landWaterByPlot.set(plot.id, result);
-  return result;
-}
-
-// Boundary land/water resolver — mirrors getPlotLandWater. Operates on
-// the dissolved boundary feature from resolveBoundaryGeometry() rather
-// than re-unioning the constituent plot splits. That choice keeps the
-// result in lockstep with the boundary outline the user actually sees
-// on the map, and avoids paying the cost of N plot intersections when
-// one boundary intersection suffices.
-function getBoundaryLandWater(boundary) {
-  if (!boundary) return null;
-  if (_landWaterByBoundary.has(boundary.id)) return _landWaterByBoundary.get(boundary.id);
-  const result = _computeBoundaryLandWater(boundary);
-  _landWaterByBoundary.set(boundary.id, result);
-  return result;
-}
-
-function _computeBoundaryLandWater(boundary) {
-  if (!data.waterCache || !data.waterCache.waterGeometry) return null;
-  if (typeof resolveBoundaryGeometry !== 'function') return null;
-  const geom = resolveBoundaryGeometry(boundary);
-  if (!geom || !geom.feature) return null;
-
-  const waterGeom = data.waterCache.waterGeometry;
-  let water = null;
-  try { water = turf.intersect(geom.feature, waterGeom); } catch (e) { water = null; }
-  if (!water) return { land: geom.feature, water: null };
-
-  let land = null;
-  try { land = turf.difference(geom.feature, water); } catch (e) { land = null; }
-  return { land, water };
-}
-
-function _computePlotLandWater(plot) {
-  if (!data.waterCache || !data.waterCache.waterGeometry) return null;
-  const waterGeom = data.waterCache.waterGeometry;
-
-  if (typeof resolvePlotGeometry !== 'function') return null;
-  let geo;
-  try { geo = resolvePlotGeometry(plot); } catch (e) { return null; }
-  if (!geo || !geo.polygons || geo.polygons.length === 0) return null;
-
-  // Convert plot [lat,lng] → turf [lng,lat]. Force ring closure.
+function _polygonsLatLngToTurf(polygons) {
+  // polygons: Array<Array<Array<[lat,lng]>>> (Leaflet form)
+  // → turf Polygon or MultiPolygon feature, or null.
   const polysLngLat = [];
-  for (const poly of geo.polygons) {
+  for (const poly of (polygons || [])) {
     if (!poly[0] || poly[0].length < 3) continue;
     const rings = poly.map(ring => {
       const out = ring.map(([lat, lng]) => [lng, lat]);
-      if (out.length >= 2 && (out[0][0] !== out[out.length - 1][0] ||
-                              out[0][1] !== out[out.length - 1][1])) {
+      if (out.length >= 2 &&
+          (out[0][0] !== out[out.length - 1][0] ||
+           out[0][1] !== out[out.length - 1][1])) {
         out.push([out[0][0], out[0][1]]);
       }
       return out;
@@ -749,42 +694,128 @@ function _computePlotLandWater(plot) {
     polysLngLat.push(rings);
   }
   if (polysLngLat.length === 0) return null;
-
-  let plotTurf;
   try {
-    if (polysLngLat.length === 1) plotTurf = turf.polygon(polysLngLat[0]);
-    else                          plotTurf = turf.multiPolygon(polysLngLat);
+    if (polysLngLat.length === 1) return turf.polygon(polysLngLat[0]);
+    return turf.multiPolygon(polysLngLat);
   } catch (e) { return null; }
-
-  let water = null;
-  try { water = turf.intersect(plotTurf, waterGeom); } catch (e) { water = null; }
-
-  // Fully on land if the intersection is empty.
-  if (!water) return { land: plotTurf, water: null };
-
-  let land;
-  try {
-    land = turf.difference(plotTurf, water);
-    // If the plot is entirely under water, turf.difference returns null.
-    if (!land) land = null;
-  } catch (e) { land = null; }
-
-  return { land, water };
 }
 
-// Converts a turf Feature (Polygon | MultiPolygon) back to an array of
-// Leaflet polygon coords ([[outer, ...holes], ...]) in [lat,lng] order.
-function landWaterFeatureToLeafletPolygons(feature) {
+function _turfFeatureToLatLngPolygons(feature) {
   if (!feature || !feature.geometry) return [];
   const g = feature.geometry;
-  const out = [];
   const lngLatToLatLng = (ring) => ring.map(([lng, lat]) => [lat, lng]);
-  if (g.type === 'Polygon') {
-    out.push(g.coordinates.map(lngLatToLatLng));
-  } else if (g.type === 'MultiPolygon') {
-    for (const coords of g.coordinates) {
-      out.push(coords.map(lngLatToLatLng));
-    }
+  if (g.type === 'Polygon') return [g.coordinates.map(lngLatToLatLng)];
+  if (g.type === 'MultiPolygon') return g.coordinates.map(rings => rings.map(lngLatToLatLng));
+  return [];
+}
+
+// Returns the cached turf feature appropriate for the mode's clip
+// material, or null if no relevant cache is present.
+function _clipMaterialForMode(mode) {
+  const c = data.waterCache;
+  if (!c) return null;
+  if (mode === 'land_only_sea') return c.seaGeometry || null;
+  return c.waterGeometry || null;  // both land_only_sea_water and water_only
+}
+
+// Given polygons in Leaflet [lat,lng] form, return clipped polygons in
+// the same form (plus a `dropped` flag if the clip consumed the whole
+// polygon — i.e. the would-be plot is rejected). For `'combined'` or
+// when there's no water cache yet, returns the polygons unchanged.
+function clipPolygonsToMode(polygons, mode) {
+  if (!polygons || polygons.length === 0) return { polygons: [], dropped: true };
+  if (mode === 'combined') return { polygons, dropped: false };
+
+  const clipMaterial = _clipMaterialForMode(mode);
+  if (!clipMaterial) return { polygons, dropped: false };  // not fetched yet
+
+  const subject = _polygonsLatLngToTurf(polygons);
+  if (!subject) return { polygons, dropped: true };
+
+  let result = null;
+  try {
+    result = mode === 'water_only'
+      ? turf.intersect(subject, clipMaterial)
+      : turf.difference(subject, clipMaterial);
+  } catch (e) { result = null; }
+
+  if (!result) {
+    // Whole polygon consumed by the clip. For land modes this means
+    // "fully under water"; for water_only it means "no water portion
+    // present in the polygon" — both legitimately rejectable.
+    return { polygons: [], dropped: true };
   }
-  return out;
+  return { polygons: _turfFeatureToLatLngPolygons(result), dropped: false };
+}
+
+// ------------------------------------------------------------
+// ONE-SHOT RECLIP (post-migration / settings-card button)
+// ------------------------------------------------------------
+// Walks every plot, runs its resolved geometry through clipPolygonsToMode,
+// and rewrites the plot's `outers` / `inners` in place via
+// `storeSubdivisionGeometry`. Plots that come out empty are dropped
+// (boundary memberships, settlement anchors, etc. clean up via the
+// existing geometry-invalidation hooks).
+function reclipAllPlotsToMode(mode) {
+  if (!mode || mode === 'combined') return { kept: (data.plots || []).length, dropped: 0 };
+  if (!_clipMaterialForMode(mode)) return { kept: (data.plots || []).length, dropped: 0 };
+  if (typeof resolvePlotGeometry !== 'function' ||
+      typeof storeSubdivisionGeometry !== 'function') {
+    return { kept: (data.plots || []).length, dropped: 0 };
+  }
+
+  const droppedIds = [];
+  for (const plot of (data.plots || [])) {
+    let geo;
+    try { geo = resolvePlotGeometry(plot); } catch (e) { continue; }
+    if (!geo || !geo.polygons || geo.polygons.length === 0) continue;
+
+    const clip = clipPolygonsToMode(geo.polygons, mode);
+    if (clip.dropped || clip.polygons.length === 0) {
+      droppedIds.push(plot.id);
+      continue;
+    }
+
+    // Allocate fresh local-id ways/nodes for the clipped rings. The
+    // previous OSM refs become orphans in `data.osm`; cheap leak in a
+    // single-user app, and Brick 16's re-sync will compact anyway.
+    const polysForStore = clip.polygons.map(poly => ({
+      outer: _openRingForStore(poly[0]),
+      holes: (poly.slice(1) || []).map(_openRingForStore),
+    })).filter(p => p.outer.length >= 3);
+    if (polysForStore.length === 0) {
+      droppedIds.push(plot.id);
+      continue;
+    }
+    const { outers, inners } = storeSubdivisionGeometry(polysForStore);
+    plot.outers = outers;
+    plot.inners = inners;
+  }
+
+  if (droppedIds.length > 0) {
+    data.plots = (data.plots || []).filter(p => !droppedIds.includes(p.id));
+    // Boundary membership rewrite + settlement re-anchoring is the same
+    // cleanup that runs after a manual split.
+    for (const b of (data.boundaries || [])) {
+      if (!Array.isArray(b.members)) continue;
+      b.members = b.members.filter(m => !(m.kind === 'plot' && droppedIds.includes(m.id)));
+    }
+    if (typeof invalidateBoundaryGeometry === 'function') invalidateBoundaryGeometry();
+  } else if (typeof invalidateBoundaryGeometry === 'function') {
+    invalidateBoundaryGeometry();  // plot geometry changed even if no drops
+  }
+
+  return { kept: (data.plots || []).length, dropped: droppedIds.length };
+}
+
+function _openRingForStore(ring) {
+  if (!ring || ring.length < 2) return ring || [];
+  const f = ring[0], l = ring[ring.length - 1];
+  if (f[0] === l[0] && f[1] === l[1]) return ring.slice(0, -1);
+  return ring.slice();
+}
+
+// Re-export: still used by the map overlay layer.
+function waterFeatureToLeafletPolygons(feature) {
+  return _turfFeatureToLatLngPolygons(feature);
 }
