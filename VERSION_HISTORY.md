@@ -1,3 +1,32 @@
+## 0.11.1 — Split editor polish: sticky islands, hover-highlight
+
+Two ergonomics fixes from real-world editor use:
+
+### Islands stay together by default
+
+Previously, opening the split editor on a non-contiguous plot defaulted
+every outer ring to its own output — the user saw "split into N
+components" the moment they opened the modal, even if they only wanted
+to peek. Inverted: with no cut drawn, every piece now starts in Output
+1 (one combined output → Confirm disabled, no accidental split). The
+user must either draw a cut OR explicitly reassign pieces via the
+output dropdown to break them out. Once *any* cut has ≥ 2 vertices the
+old "each piece its own output" default kicks back in so the cut
+actually divides things.
+
+### Piece + output hover-highlight
+
+The cuts list got a hover-highlight in v0.10.0; pieces and output
+cards didn't. Added:
+- `onSplitHoverPiece(i)` — hovering a piece row in the cut-phase
+  panel highlights just that piece on the map.
+- `onSplitHoverOutput(k)` — hovering an output's card (in either the
+  cut phase or the override phase) highlights every piece assigned to
+  that output.
+- `_splitState.hoverPieceIdxs` carries the set; `drawSplitPieces`
+  bumps stroke weight to 4 and fillOpacity to 0.55 for the highlighted
+  pieces.
+
 ## 0.11.0 — Brick 11c: manual plot merge
 
 Inverse of plot-split. Pick N ≥ 2 plots, the modal proposes a merged

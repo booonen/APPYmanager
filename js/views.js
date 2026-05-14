@@ -3918,6 +3918,10 @@ function _initSplitState(plot) {
     activeCutIdx:    0,
     // Optional per-cut hover highlight (driven by the cuts list).
     hoverCutIdx:     null,
+    // Piece indices currently being hovered in the panel — applied as
+    // a thicker stroke on the map. Set by hovering a piece row (one
+    // entry) or an output card (every piece in that bucket).
+    hoverPieceIdxs:  null,
     // Phase 1: 'cut' — user draws / edits cut(s) and groups pieces.
     // Phase 2: 'override' — groupings locked, user edits per-output
     // names + property values.
@@ -4214,6 +4218,29 @@ function onSplitHoverCut(idx) {
   _refreshSplitMap();
 }
 
+// Highlight a single piece when the user hovers its row in the panel.
+function onSplitHoverPiece(idx) {
+  if (!_splitState) return;
+  _splitState.hoverPieceIdxs = (idx === null || idx === undefined) ? null : [idx];
+  _refreshSplitMap();
+}
+
+// Highlight every piece assigned to an output bucket when the user
+// hovers that output's card (in either the cut or override phase).
+function onSplitHoverOutput(outputIdx) {
+  if (!_splitState) return;
+  if (outputIdx === null || outputIdx === undefined) {
+    _splitState.hoverPieceIdxs = null;
+  } else {
+    const idxs = [];
+    for (let i = 0; i < (_splitState.outputs || []).length; i++) {
+      if (_splitState.outputs[i] === outputIdx) idxs.push(i);
+    }
+    _splitState.hoverPieceIdxs = idxs.length ? idxs : null;
+  }
+  _refreshSplitMap();
+}
+
 // ----- Geometry helpers ------------------------------------------------
 
 function _findClosestSegment(pt, vertices) {
@@ -4274,10 +4301,17 @@ function _recomputeSplit() {
   _splitState.status = result.pieces.length >= 2 ? 'valid' : 'pending';
 
   // Piece count changed → reset output assignments + names + values.
-  // Re-grouping or vertex drags within the same piece set preserve
-  // existing names/values where possible.
+  // v0.11.1: with no cut drawn, default every piece into a single
+  // output. A user opening the split editor on a non-contig plot just
+  // to look around doesn't expect "split into N components" — that
+  // takes an explicit re-group via the dropdown. Once any cut has ≥ 2
+  // vertices we revert to "each piece its own output" so the cut
+  // actually divides things.
   if (oldPieceCount !== result.pieces.length) {
-    _splitState.outputs         = result.pieces.map((_, i) => i);
+    const hasCut = _splitState.cuts.some(c => Array.isArray(c) && c.length >= 2);
+    _splitState.outputs = hasCut
+      ? result.pieces.map((_, i) => i)
+      : result.pieces.map(() => 0);
     _splitState.names           = _defaultOutputNames(plot, _outputCount());
     _splitState.propertyValues  = result.pieces.map(() => ({}));
     _splitState.manualOverrides = new Set();
@@ -4435,7 +4469,7 @@ function _refreshSplitMap() {
   if (!plot) return;
   const haveValidPieces = !!_splitState.pieces;
   drawSplitPlot(plot, haveValidPieces ? 'faded' : 'normal');
-  if (haveValidPieces) drawSplitPieces(_splitState.pieces, _splitState.outputs);
+  if (haveValidPieces) drawSplitPieces(_splitState.pieces, _splitState.outputs, _splitState.hoverPieceIdxs);
   else clearSplitPieces();
   drawSplitCutPath(_splitState.cuts, _splitState.activeCutIdx, _splitState.cutInside, _splitState.hoverCutIdx);
 
@@ -4515,7 +4549,9 @@ function _renderSplitPanelCut(plot, state) {
         ? `<select class="split-overlay-piece-output" data-output-idx="${i}" onchange="onSplitPieceOutputChange(${i}, this.value)">${outputOpts(outIdx)}</select>`
         : '';
       return `
-        <div class="split-overlay-piece-row">
+        <div class="split-overlay-piece-row"
+             onmouseenter="onSplitHoverPiece(${i})"
+             onmouseleave="onSplitHoverPiece(null)">
           <span class="split-overlay-piece-swatch" style="background:${color}"></span>
           <span class="split-overlay-piece-area mono">${esc(formatArea(piece.area || 0))}</span>
           ${dropdown}
@@ -4620,7 +4656,9 @@ function _renderSplitOutputSummaries(plot, state) {
       return `<div class="split-output-prop"><span class="split-output-prop-name">${esc(schema.name)}</span><span class="split-output-prop-value mono">${txt}</span></div>`;
     }).filter(Boolean).join('');
     html += `
-      <div class="split-output-summary">
+      <div class="split-output-summary"
+           onmouseenter="onSplitHoverOutput(${k})"
+           onmouseleave="onSplitHoverOutput(null)">
         <div class="split-output-summary-header">
           <span class="split-overlay-piece-swatch" style="background:${color}"></span>
           <input type="text" class="split-overlay-piece-name" value="${esc(state.names[k] || '')}" data-output-idx="${k}" oninput="onSplitNameInput(this)">
@@ -4675,7 +4713,9 @@ function _renderSplitPanelOverride(plot, state) {
       `;
     }).join('');
     cards.push(`
-      <div class="split-override-piece">
+      <div class="split-override-piece"
+           onmouseenter="onSplitHoverOutput(${k})"
+           onmouseleave="onSplitHoverOutput(null)">
         <div class="split-override-piece-header">
           <span class="split-overlay-piece-swatch" style="background:${color}"></span>
           <input type="text" class="split-override-piece-name" value="${esc(state.names[k] || '')}" data-output-idx="${k}" oninput="onSplitNameInput(this)">

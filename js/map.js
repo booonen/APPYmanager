@@ -461,19 +461,26 @@ function clearSplitPieces() {
   if (_splitPiecesLayer) _splitPiecesLayer.clearLayers();
 }
 
-function drawSplitPieces(pieces, outputs) {
+function drawSplitPieces(pieces, outputs, hoverPieceIdxs) {
   if (!_splitMap || !_splitPiecesLayer) return;
   _splitPiecesLayer.clearLayers();
+  const hoverSet = Array.isArray(hoverPieceIdxs) ? new Set(hoverPieceIdxs) : null;
   pieces.forEach((piece, i) => {
     // Brick 11b B.i: pieces are coloured by OUTPUT bucket, not piece
     // index — so pieces grouped into the same output show as one
     // visual entity on the map. `outputs` is optional for back-compat
     // (callers without grouping just get per-piece colours).
+    // v0.11.1: hovered pieces get a heavier stroke + higher fill so
+    // the user can see what they're about to act on.
     const outIdx = (outputs && outputs[i] != null) ? outputs[i] : i;
     const color = _SPLIT_PIECE_COLORS[outIdx % _SPLIT_PIECE_COLORS.length];
+    const hovered = hoverSet && hoverSet.has(i);
     const polyLatLngs = [piece.outer, ...(piece.holes || [])];
     const poly = L.polygon(polyLatLngs, {
-      color, weight: 2, fillColor: color, fillOpacity: 0.30,
+      color,
+      weight:      hovered ? 4   : 2,
+      fillColor:   color,
+      fillOpacity: hovered ? 0.55 : 0.30,
       interactive: false, // don't intercept clicks meant for the cut polyline / map
     });
     _splitPiecesLayer.addLayer(poly);
