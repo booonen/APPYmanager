@@ -1,3 +1,22 @@
+## 0.11.2 — Split editor: per-ring sticky islands when a cut is drawn
+
+Follow-up on v0.11.1. The "no cut → all in one output" default was
+right, but the moment a cut was drawn, even rings the cut didn't touch
+got reset into separate outputs — defeating the sticky behaviour the
+user wanted.
+
+Fix: the engine now tags each piece with `cutAffected: bool`. In
+`_multiCutOneRing`, the early-return path (no slices retained for this
+ring) emits `cutAffected: false`; the polygonize path emits
+`cutAffected: true`. The no-cut fallback in `computePlotSplit` emits
+all pieces as `cutAffected: false`.
+
+`_recomputeSplit` in views.js seeds default outputs from the flag:
+untouched pieces share output 0, cut-affected pieces each get their
+own. So when you cut just island A on a three-island plot, the cut
+splits A into two outputs, while islands B and C stay grouped as one
+"everything else" output.
+
 ## 0.11.1 — Split editor polish: sticky islands, hover-highlight
 
 Two ergonomics fixes from real-world editor use:

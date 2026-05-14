@@ -81,7 +81,7 @@ function computePlotSplit(plot, cuts) {
   if (liveCuts.length === 0) {
     const pieces = geo.polygons.map(polygon => {
       const [outer, ...holes] = polygon;
-      const piece = { outer, holes };
+      const piece = { outer, holes, cutAffected: false };
       piece.area = _pieceArea(piece);
       return piece;
     }).filter(p => p.outer && p.outer.length >= 3);
@@ -163,7 +163,10 @@ function _multiCutOneRing(outer, holes, cuts) {
   // either on the ring OR at a cutcut node with ≥ 2 surviving touches.
   const retained = _trimDangling(insideSlices);
   if (retained.length === 0) {
-    const piece = { outer, holes: holes || [] };
+    // No retained slices → no cut affected this ring. Tagging the
+    // piece as untouched lets the panel keep islands grouped in the
+    // default output (v0.11.2).
+    const piece = { outer, holes: holes || [], cutAffected: false };
     piece.area = _pieceArea(piece);
     return { pieces: [piece], cutInside: null, crossedAny: false };
   }
@@ -201,7 +204,7 @@ function _multiCutOneRing(outer, holes, cuts) {
     if (!face.geometry || face.geometry.type !== 'Polygon') continue;
     if (!_faceInsidePlot(face, ringClosed, holes)) continue;
     const faceLatLng = face.geometry.coordinates[0].map(([lon, lat]) => [lat, lon]);
-    const piece = { outer: faceLatLng, holes: [] };
+    const piece = { outer: faceLatLng, holes: [], cutAffected: true };
     // Original plot holes (from plot.inners) — assign by first-vertex PIP.
     for (const h of (holes || [])) {
       if (!h || h.length < 3) continue;

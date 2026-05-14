@@ -4301,17 +4301,16 @@ function _recomputeSplit() {
   _splitState.status = result.pieces.length >= 2 ? 'valid' : 'pending';
 
   // Piece count changed → reset output assignments + names + values.
-  // v0.11.1: with no cut drawn, default every piece into a single
-  // output. A user opening the split editor on a non-contig plot just
-  // to look around doesn't expect "split into N components" — that
-  // takes an explicit re-group via the dropdown. Once any cut has ≥ 2
-  // vertices we revert to "each piece its own output" so the cut
-  // actually divides things.
+  // v0.11.2: pieces from rings the cut(s) didn't touch stay GROUPED
+  // in one default output. Pieces from cut-affected rings each get
+  // their own output, so the cut actually divides things. Without a
+  // cut, every piece is untouched → all in one output.
   if (oldPieceCount !== result.pieces.length) {
-    const hasCut = _splitState.cuts.some(c => Array.isArray(c) && c.length >= 2);
-    _splitState.outputs = hasCut
-      ? result.pieces.map((_, i) => i)
-      : result.pieces.map(() => 0);
+    let nextOut = 1;
+    const raw = result.pieces.map(p =>
+      p.cutAffected ? nextOut++ : 0
+    );
+    _splitState.outputs         = _normalizeOutputs(raw);
     _splitState.names           = _defaultOutputNames(plot, _outputCount());
     _splitState.propertyValues  = result.pieces.map(() => ({}));
     _splitState.manualOverrides = new Set();
