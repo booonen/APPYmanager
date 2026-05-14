@@ -814,8 +814,3 @@ function _openRingForStore(ring) {
   if (f[0] === l[0] && f[1] === l[1]) return ring.slice(0, -1);
   return ring.slice();
 }
-
-// Re-export: still used by the map overlay layer.
-function waterFeatureToLeafletPolygons(feature) {
-  return _turfFeatureToLatLngPolygons(feature);
-}
