@@ -1,23 +1,33 @@
 // ============================================================
-// SPLIT — Manual plot split (Brick 11)
+// SPLIT — Manual plot split (Brick 11 + 11b)
 // ============================================================
-// Two split flavours:
-//   • CUT-LINE  — user draws a polyline through a contiguous plot;
-//                 the plot becomes two new plots, joined along the cut.
-//   • COMPONENT — non-contiguous plot (>1 outer ring) is split into N
-//                 plots, one per connected component. No drawing needed.
+// Unified split engine (Brick 11b #2): a single `computePlotSplit(plot,
+// cuts)` handles both contiguous and non-contiguous plots, with the
+// component-mode behaviour falling out as "non-contig + no cut drawn".
 //
-// Both flavours funnel through `executeSplit`, which:
-//   - writes new geometry into data.osm via storeSubdivisionGeometry (Brick 5),
-//   - creates new plots and copies redistributed property values onto them,
-//   - rewrites every boundary's `members` to swap the old plot for the new ids,
-//   - invalidates boundary geometry (which also re-anchors settlements).
+//   • Cuts is an array of polylines (Brick 11b A.ii — `cuts: Polyline[]`).
+//     v1 of #2 keeps `cuts.length <= 1` and the editor only manages
+//     `cuts[0]`; Brick 11b #1 promotes this to N cuts.
+//   • For each outer ring of the plot's geometry:
+//       0 crossings with cut[0] → ring passes through as one piece.
+//       2 crossings           → ring splits into two sub-pieces.
+//       1 / 3 / 4+            → cut rejected (cut must enter and exit).
+//   • An empty cut + non-contig plot → one piece per ring (component
+//     behaviour preserved as the default).
+//
+// Pieces feed into output groups (Brick 11b B.i): the redistribution
+// panel exposes an "Output" dropdown per piece, multiple pieces can
+// merge into one output, and a single non-contig output is supported
+// (cross-ring merge → multi-polygon plot).
+//
+// `executeSplit` consumes the user's output groups (not raw pieces),
+// unions per-output geometry, and produces one new plot per output.
 //
 // Coordinate conventions (mirrors subdivide.js):
 //   Internal / Leaflet: [lat, lon]
 //   GeoJSON / Turf:     [lon, lat]
 //
-// The two `compute*Split` functions return pure data (no side effects).
+// The compute* functions return pure data (no side effects).
 // `executeSplit` is the only function that mutates `data`.
 
 // ============================================================
@@ -39,67 +49,99 @@ function _pieceArea(piece) {
 }
 
 // ============================================================
-// COMPONENT SPLIT
+// UNIFIED PLOT SPLIT
 // ============================================================
-// Splits a non-contiguous plot along its connected components. Each
-// polygon in `resolvePlotGeometry().polygons` becomes its own piece.
-
-function computeComponentSplit(plot) {
-  if (!plot) return { pieces: [], error: 'no_plot' };
-  const geo = resolvePlotGeometry(plot);
-  if (geo.polygons.length < 2) {
-    return { pieces: [], error: 'contiguous' };
-  }
-  const pieces = geo.polygons.map(polygon => {
-    const [outer, ...holes] = polygon;
-    const piece = { outer, holes };
-    piece.area = _pieceArea(piece);
-    return piece;
-  });
-  return { pieces };
-}
-
-// ============================================================
-// CUT-LINE SPLIT
-// ============================================================
-// User-drawn polyline cuts a contiguous plot into two pieces. The cut
-// must enter and exit the outer ring exactly twice. Holes ride along
-// with whichever piece contains their first vertex (v1 limitation —
-// holes crossed by the cut aren't sub-split).
+// Single entry point. `cuts` is `Polyline[]`; Brick 11b #2 only ever
+// uses cuts.length <= 1 (the active cut), but the signature accepts
+// the array so #1's multi-cut work doesn't need to reshape the engine.
 //
-// Returns { pieces: [piece1, piece2], cutVertices } on success, where
-// `cutVertices` is the in-polygon portion of the cut for preview rendering.
-// Returns { pieces: [], error: '<code>' } on failure.
+// Behaviour:
+//   • No cut drawn (or cut < 2 vertices) → every outer ring becomes one
+//     piece. Falls out as "component mode" for non-contig plots; for
+//     contig plots it just returns the single plot as one piece (and
+//     the panel disables Confirm).
+//   • Cut drawn → run computeRingCutSplit per outer ring. Rings with
+//     0 crossings pass through; rings with 2 crossings split; any ring
+//     with 1/3/4+ crossings aborts the whole split with an error.
+//
+// Returns { pieces, cutInside, error? } where `cutInside` is the in-
+// polygon portion of cut[0] across all crossed rings (for preview
+// rendering — concatenated lat/lng segments).
 
-function computeCutLineSplit(plot, cutLatLngs) {
+function computePlotSplit(plot, cuts) {
   if (!plot) return { pieces: [], error: 'no_plot' };
-  if (!Array.isArray(cutLatLngs) || cutLatLngs.length < 2) {
-    return { pieces: [], error: 'cut_too_short' };
-  }
-
   const geo = resolvePlotGeometry(plot);
   if (geo.polygons.length === 0) return { pieces: [], error: 'no_geometry' };
-  if (geo.polygons.length > 1) {
-    return { pieces: [], error: 'non_contiguous' };
+
+  const cut = Array.isArray(cuts) && cuts.length > 0 ? cuts[0] : null;
+  const hasCut = Array.isArray(cut) && cut.length >= 2;
+
+  // No cut drawn → one piece per ring (component-mode default).
+  if (!hasCut) {
+    const pieces = geo.polygons.map(polygon => {
+      const [outer, ...holes] = polygon;
+      const piece = { outer, holes };
+      piece.area = _pieceArea(piece);
+      return piece;
+    }).filter(p => p.outer && p.outer.length >= 3);
+    return { pieces, cutInside: null };
   }
 
-  const [outer, ...holes] = geo.polygons[0];
-  if (!outer || outer.length < 3) return { pieces: [], error: 'no_geometry' };
+  // Cut drawn → per-ring split. Each ring contributes 1 piece (no
+  // crossings) or 2 pieces (2 crossings); other crossing counts reject.
+  const cutLine = turf.lineString(cut.map(([lat, lon]) => [lon, lat]));
+  const allPieces = [];
+  const cutInsideSegments = [];
+  let crossedAny = false;
 
+  for (const polygon of geo.polygons) {
+    const [outer, ...holes] = polygon;
+    if (!outer || outer.length < 3) continue;
+
+    const split = _splitOneRing(outer, holes, cutLine);
+    if (split.error) return { pieces: [], error: split.error };
+
+    allPieces.push(...split.pieces);
+    if (split.cutInside) {
+      cutInsideSegments.push(split.cutInside);
+      crossedAny = true;
+    }
+  }
+
+  if (!crossedAny) {
+    return { pieces: [], error: 'cut_does_not_cross' };
+  }
+  return {
+    pieces: allPieces,
+    cutInside: cutInsideSegments.length === 1 ? cutInsideSegments[0] : cutInsideSegments,
+  };
+}
+
+// Per-ring cut application. Returns:
+//   { pieces: [one piece],          cutInside: null }   — 0 crossings
+//   { pieces: [piece1, piece2],     cutInside: [...] }  — 2 crossings
+//   { pieces: [], error: '<code>' }                     — 1 / 3 / 4+ crossings
+function _splitOneRing(outer, holes, cutLine) {
   // Defensively close the ring — assembleRing returns OPEN rings for
   // multi-way relations but CLOSED rings for single self-closed ways.
   const ringClosed = outer.slice();
   const _f = ringClosed[0], _l = ringClosed[ringClosed.length - 1];
   if (_f[0] !== _l[0] || _f[1] !== _l[1]) ringClosed.push([_f[0], _f[1]]);
   const ringLine = turf.lineString(ringClosed.map(([lat, lon]) => [lon, lat]));
-  const cutLine  = turf.lineString(cutLatLngs.map(([lat, lon]) => [lon, lat]));
 
-  // Find all crossings, dedup tightly-clustered ones (turf can return
-  // a vertex-coincident hit twice — once per adjacent ring segment).
   const xs = turf.lineIntersect(ringLine, cutLine);
   const xPts = _dedupePoints(xs.features.map(f => f.geometry.coordinates));
+
+  // No crossings → ring passes through unchanged.
+  if (xPts.length === 0) {
+    const piece = { outer, holes: holes || [] };
+    piece.area = _pieceArea(piece);
+    return { pieces: [piece], cutInside: null };
+  }
+  // Anything other than 2 crossings is malformed for this brick.
+  // Brick 11b #1 (multi-cut) will revisit 4+ crossings.
   if (xPts.length !== 2) {
-    return { pieces: [], error: xPts.length < 2 ? 'cut_does_not_cross' : 'cut_crosses_too_many_times' };
+    return { pieces: [], error: xPts.length === 1 ? 'cut_crosses_ring_once' : 'cut_crosses_too_many_times' };
   }
 
   const ringLen = turf.length(ringLine);
@@ -127,15 +169,10 @@ function computeCutLineSplit(plot, cutLatLngs) {
 
   // **Snap intersection endpoints to canonical coords.** turf.lineSliceAlong
   // rebuilds each endpoint independently from the line's parameterisation,
-  // so `arcAB.coords[end]` and `cutInside.coords[end]` both *intend* to be
-  // q.pt but disagree by ~1e-12. Without correction, piece1's ring-side
-  // hits q-via-ring while its cut-side hits q-via-cut — a tiny sliver
-  // triangle at each crossing. Most consumers (Leaflet, area math)
-  // tolerate it, but turf.union (run when a parent boundary re-dissolves
-  // piece1+piece2) latches onto the mismatch and leaves the sliver as a
-  // visible boundary artefact. Forcing both ends of both arcs AND both
-  // ends of the cut to the SAME canonical xPt value eliminates the
-  // disagreement at source.
+  // so the ring-side and cut-side endpoints disagree by ~1e-12 even
+  // though they "should" be the same point. Forcing both to the canonical
+  // xPt value avoids sliver triangles at each crossing (which surface in
+  // turf.union later when a parent boundary re-dissolves the pieces).
   const pCoord = [p.pt[0], p.pt[1]];
   const qCoord = [q.pt[0], q.pt[1]];
   cutCoordsAtoB[0]                      = pCoord;
@@ -145,25 +182,18 @@ function computeCutLineSplit(plot, cutLatLngs) {
   arcBACoords[0]                        = qCoord;
   arcBACoords[arcBACoords.length-1]     = pCoord;
 
-  // Piece 1 outer = arcAB (p→q along ring) + reversed cut (q→p along cut)
-  // Piece 2 outer = arcBA (q→p along ring) + cut (p→q along cut)
-  // Each is a closed ring traversed in one direction with no duplicate
-  // endpoint; storeSubdivisionGeometry will self-close on write.
   const piece1Outer = _joinRingFragments(arcABCoords, cutCoordsAtoB.slice().reverse());
   const piece2Outer = _joinRingFragments(arcBACoords, cutCoordsAtoB);
 
-  // Convert back to [lat, lon] for our internal coord system.
   const piece1OuterLatLng = piece1Outer.map(([lon, lat]) => [lat, lon]);
   const piece2OuterLatLng = piece2Outer.map(([lon, lat]) => [lat, lon]);
 
-  // Assign holes by point-in-polygon on the hole's first vertex. Holes
-  // that aren't unambiguously inside either piece are dropped (rare;
-  // would mean the hole sits exactly on the cut line).
+  // Assign holes by point-in-polygon on the hole's first vertex.
   const piece1Feature = turf.polygon([piece1Outer.concat([piece1Outer[0]])]);
   const piece2Feature = turf.polygon([piece2Outer.concat([piece2Outer[0]])]);
   const piece1Holes = [];
   const piece2Holes = [];
-  for (const hole of holes) {
+  for (const hole of (holes || [])) {
     if (!hole || hole.length < 3) continue;
     const probe = turf.point([hole[0][1], hole[0][0]]);
     if (turf.booleanPointInPolygon(probe, piece1Feature)) piece1Holes.push(hole);
@@ -175,8 +205,7 @@ function computeCutLineSplit(plot, cutLatLngs) {
   piece1.area = _pieceArea(piece1);
   piece2.area = _pieceArea(piece2);
 
-  // Sanity: refuse the split if either piece collapsed to ~zero area
-  // (would mean the cut grazes the polygon without really dividing it).
+  // Sanity: refuse if either sub-piece collapsed to ~zero area.
   if (piece1.area < 1 || piece2.area < 1) {
     return { pieces: [], error: 'degenerate_split' };
   }
@@ -185,6 +214,16 @@ function computeCutLineSplit(plot, cutLatLngs) {
     pieces: [piece1, piece2],
     cutInside: cutCoordsAtoB.map(([lon, lat]) => [lat, lon]),
   };
+}
+
+// Legacy entry points retained as thin wrappers. The unified engine
+// fully covers both — these exist so any straggler caller from earlier
+// bricks keeps working until grep confirms they're all migrated.
+function computeCutLineSplit(plot, cutLatLngs) {
+  return computePlotSplit(plot, [cutLatLngs]);
+}
+function computeComponentSplit(plot) {
+  return computePlotSplit(plot, []);
 }
 
 // ============================================================
@@ -268,47 +307,101 @@ function _openRing(ring) {
   return ring.slice();
 }
 
+// Convert an output's pieces into the [{ outer, holes }, ...] shape
+// `storeSubdivisionGeometry` expects. Single-piece outputs pass straight
+// through; multi-piece outputs are unioned via turf so a merged output
+// becomes one new plot (potentially multi-polygon when the pieces come
+// from different rings of a non-contig parent).
+function _outputToStorePolygons(output) {
+  const pieces = (output && output.pieces) || [];
+  if (pieces.length === 0) return [];
+  if (pieces.length === 1) {
+    const p = pieces[0];
+    return [{
+      outer: _openRing(p.outer),
+      holes: (p.holes || []).map(_openRing),
+    }];
+  }
+  // Multi-piece: union to a single Feature, then unpack each polygon
+  // back to { outer, holes } form.
+  const features = [];
+  for (const p of pieces) {
+    if (!p.outer || p.outer.length < 3) continue;
+    const rings = [_ringToTurf(p.outer)];
+    for (const h of (p.holes || [])) {
+      if (h && h.length >= 3) rings.push(_ringToTurf(h));
+    }
+    try { features.push(turf.polygon(rings)); } catch (_) { /* skip degenerate */ }
+  }
+  if (features.length === 0) return [];
+  let merged = features[0];
+  for (let i = 1; i < features.length; i++) {
+    try {
+      const u = turf.union(merged, features[i]);
+      if (u) merged = u;
+    } catch (_) { /* keep last successful merge */ }
+  }
+  const g = merged.geometry;
+  const polys = [];
+  if (g.type === 'Polygon') {
+    polys.push(_turfPolygonToLeaflet(g.coordinates));
+  } else if (g.type === 'MultiPolygon') {
+    for (const polyCoords of g.coordinates) {
+      polys.push(_turfPolygonToLeaflet(polyCoords));
+    }
+  }
+  return polys;
+}
+
+// Helpers used only by _outputToStorePolygons.
+function _ringToTurf(ringLatLng) {
+  const out = ringLatLng.map(([lat, lon]) => [lon, lat]);
+  if (out.length >= 2 &&
+      (out[0][0] !== out[out.length - 1][0] || out[0][1] !== out[out.length - 1][1])) {
+    out.push([out[0][0], out[0][1]]);
+  }
+  return out;
+}
+function _turfPolygonToLeaflet(polyCoords) {
+  const rings = polyCoords.map(ring => ring.map(([lon, lat]) => [lat, lon]));
+  const outer = _openRing(rings[0]);
+  const holes = rings.slice(1).map(_openRing);
+  return { outer, holes };
+}
+
 // ============================================================
 // EXECUTOR
 // ============================================================
-// Replaces `plot` with one new plot per piece. Writes geometry,
-// rewrites boundary memberships, applies property values, removes
-// the original, and invalidates caches.
+// Replaces `plot` with one new plot per OUTPUT (Brick 11b B.i). Each
+// output is `{ pieces: [piece, ...] }` — single-piece outputs slot
+// straight through, multi-piece outputs are unioned via turf so a
+// merged output becomes one new plot (potentially multi-polygon when
+// pieces come from different rings of a non-contig parent).
 //
-// names: ['name1', 'name2', ...] — one entry per piece.
-// propertyValuesPerPiece: [{ [schemaId]: <value> }, ...] — one entry
-//   per piece. Values follow the same shape as plot.propertyValues.
-// notesPerPiece: optional. Defaults to inheriting the original's notes
-//   on every piece.
+// names: ['name0', 'name1', ...] — one entry per output.
+// propertyValuesPerOutput: [{ [schemaId]: <value> }, ...] — per output.
+// notesPerOutput: optional; defaults to inheriting parent notes.
 
-function executeSplit(plot, pieces, names, propertyValuesPerPiece, notesPerPiece) {
-  if (!plot || !pieces || pieces.length < 2) return null;
+function executeSplit(plot, outputs, names, propertyValuesPerOutput, notesPerOutput) {
+  if (!plot || !outputs || outputs.length < 2) return null;
 
   const newPlotIds = [];
-  for (let i = 0; i < pieces.length; i++) {
-    const piece = pieces[i];
-    // storeSubdivisionGeometry self-closes the ring on write, so we MUST
-    // hand it an OPEN ring or we'd duplicate the closing vertex.
-    const polygons = [{
-      outer: _openRing(piece.outer),
-      holes: (piece.holes || []).map(_openRing),
-    }];
+  for (let i = 0; i < outputs.length; i++) {
+    const output = outputs[i];
+    const polygons = _outputToStorePolygons(output);
+    if (polygons.length === 0) continue;
+
     const { outers, inners } = storeSubdivisionGeometry(polygons);
-    // The parent plot was already clipped at creation (under a clipping
-    // mode), so a cut producing an all-water piece should be impossible.
-    // Under 'combined' there's no clip to fire either. Either way, a
-    // null return from the helper means we drop that piece silently
-    // rather than create an empty plot.
     const newPlot = createPlotMaybeClipped({
       name:          names && names[i] != null ? names[i] : (plot.name || ''),
-      notes:         notesPerPiece && notesPerPiece[i] != null ? notesPerPiece[i] : (plot.notes || ''),
-      ogfRelationId: null, // split breaks the round-trip mapping; cleared until re-sync
+      notes:         notesPerOutput && notesPerOutput[i] != null ? notesPerOutput[i] : (plot.notes || ''),
+      ogfRelationId: null, // split breaks the round-trip mapping; re-sync restores it
       outers,
       inners,
       flags:         [],
     });
     if (!newPlot) continue;
-    const valueMap = (propertyValuesPerPiece && propertyValuesPerPiece[i]) || {};
+    const valueMap = (propertyValuesPerOutput && propertyValuesPerOutput[i]) || {};
     for (const [schemaId, value] of Object.entries(valueMap)) {
       if (value === undefined || value === null || value === '') continue;
       newPlot.propertyValues = newPlot.propertyValues || {};

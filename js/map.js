@@ -386,11 +386,16 @@ function clearSplitPieces() {
   if (_splitPiecesLayer) _splitPiecesLayer.clearLayers();
 }
 
-function drawSplitPieces(pieces) {
+function drawSplitPieces(pieces, outputs) {
   if (!_splitMap || !_splitPiecesLayer) return;
   _splitPiecesLayer.clearLayers();
   pieces.forEach((piece, i) => {
-    const color = _SPLIT_PIECE_COLORS[i % _SPLIT_PIECE_COLORS.length];
+    // Brick 11b B.i: pieces are coloured by OUTPUT bucket, not piece
+    // index — so pieces grouped into the same output show as one
+    // visual entity on the map. `outputs` is optional for back-compat
+    // (callers without grouping just get per-piece colours).
+    const outIdx = (outputs && outputs[i] != null) ? outputs[i] : i;
+    const color = _SPLIT_PIECE_COLORS[outIdx % _SPLIT_PIECE_COLORS.length];
     const polyLatLngs = [piece.outer, ...(piece.holes || [])];
     const poly = L.polygon(polyLatLngs, {
       color, weight: 2, fillColor: color, fillOpacity: 0.30,

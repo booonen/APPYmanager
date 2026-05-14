@@ -1,3 +1,83 @@
+## 0.9.1 — Brick 11b #2: cut non-contig plots + per-piece grouping
+
+The manual-split editor stops force-routing non-contiguous plots into a
+separate "component" mode. Every plot now opens in the same cut-edit
+UI; if it happens to be non-contig and no cut is drawn, you see one
+piece per ring (matching the old component behaviour as a natural
+default). Draw a cut and it splits whichever rings it crosses; rings
+the cut doesn't touch pass through unchanged.
+
+Pieces can then be **merged into shared output plots** via a per-piece
+"Output" dropdown. This is the same gesture that Brick 11b #1 (multi-
+cut) will reuse for grouping pieces from multiple cuts. Cross-ring
+merges are allowed: a multi-piece output becomes a single new plot
+whose geometry is the turf-union of its pieces (possibly multi-polygon).
+
+### Unified geometry engine (`js/split.js`)
+
+- `computePlotSplit(plot, cuts)` is the single entry point. `cuts` is a
+  `Polyline[]` (decision A.ii); v1 of #2 only ever uses `cuts[0]`, but
+  the engine accepts the array so #1's multi-cut work doesn't reshape
+  the signature again.
+- Per-ring application via the new `_splitOneRing` helper:
+  - 0 crossings → ring passes through as one piece.
+  - 2 crossings → ring splits into two sub-pieces (existing logic
+    extracted from the old `computeCutLineSplit`).
+  - 1 crossing → `error_cut_crosses_ring_once` (cut starts or ends
+    inside that ring).
+  - 4+ crossings → `error_cut_crosses_too_many_times`; multi-cut
+    (Brick 11b #1) is the right place to revisit.
+- Empty cut + non-contig plot → one piece per ring (old component
+  behaviour, derived as a fallthrough).
+- `computeCutLineSplit` and `computeComponentSplit` retained as thin
+  wrappers around `computePlotSplit` so any stale caller still works.
+
+### State shape (`js/views.js`)
+
+- `_splitState.cuts: Polyline[]` replaces `_splitState.cutLatLngs`. All
+  vertex-edit handlers access `_splitState.cuts[0]`.
+- `_splitState.mode` dropped — no more cut-vs-component distinction.
+- `_splitState.outputs: number[]` — `outputs[pieceIdx]` is the dense
+  index of the output bucket the piece belongs to. Re-normalised to
+  `[0, K-1]` in order of first appearance after every dropdown change.
+- `propertyValues` / `names` / `manualOverrides` / `manualNames` are
+  keyed by **output** index (not piece). v1 simplification: dropdown
+  changes reseed proposed values and clear manual overrides for
+  affected outputs; the user can rename freely afterwards.
+
+### UI
+
+- Cut panel: pieces list shows a colour swatch + area + Output
+  dropdown per piece. Output cards underneath show the merged area
+  and proposed values per output. Cut controls (vertex count, Clear)
+  are now always shown (no more `state.mode === 'cut'` gate).
+- Map pieces colour by **output bucket**, not piece index — pieces
+  grouped into the same output share a colour. `drawSplitPieces`
+  takes `outputs` as a second argument.
+- Override panel collapses from per-piece to per-output cards.
+- Status bar: `"Will create N new plot(s)"` (`status_outputs`)
+  replaces the mode-specific messages. `'pending'` status (1-piece
+  result, no actual split) prompts the user; `'valid'` (≥ 2 outputs)
+  enables Continue.
+
+### Executor (`executeSplit`)
+
+Now takes `outputs: [{ pieces: [...] }]` rather than raw pieces. A
+single-piece output passes straight through; a multi-piece output is
+turf-unioned to one Feature, unpacked back to `{ outer, holes }` form
+via `_outputToStorePolygons`, and stored as a (possibly multi-polygon)
+plot. `ogfRelationId` is always null (decision F.i — split breaks the
+round-trip mapping; Brick 16 re-sync restores it).
+
+### Tradeoffs / known limits
+
+- 4+ crossings on a single ring still reject. Brick 11b #1 (multi-cut)
+  will admit them by treating each pair of crossings as its own
+  sub-cut.
+- Manual property-value overrides don't survive a re-grouping
+  dropdown change. Cheap, predictable; can revisit if it becomes
+  annoying in practice.
+
 ## 0.9.0 — Land-only by default; dual-storage portion model removed
 
 Brick 12 finale. The dual-storage portion model from 12c (land/water

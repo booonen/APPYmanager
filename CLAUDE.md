@@ -940,6 +940,41 @@ they come up; the plan is a living document.
   - Tradeoff: the land-on-left convention is trusted strictly (per
     the v0.8.7 simplification). Any coastline drawn water-on-left
     inverts its mode classification.
+- **Brick 11b #2** ✓ (committed, v0.9.1) — cut on non-contiguous
+  plots + per-piece grouping. Filed during Brick 11 polish
+  (v0.7.2); we picked it up after Brick 12.
+  - Unified geometry engine `computePlotSplit(plot, cuts)` in
+    `split.js` replaces the cut-vs-component branch. Walks each
+    outer ring: 0 crossings → ring passes through whole;
+    2 crossings → ring splits; 1 / 3 / 4+ → reject (4+ is
+    deferred to Brick 11b #1 multi-cut). Empty cut + non-contig
+    plot = one piece per ring, matching the old component
+    behaviour without a dedicated mode. `computeCutLineSplit` and
+    `computeComponentSplit` retained as thin wrappers.
+  - State shape: `_splitState.cuts: Polyline[]` (decision A.ii) —
+    editor still manages only `cuts[0]`; #1 will let users add
+    more entries. `mode` field dropped.
+  - Per-piece "Output" dropdown (decision B.i): each piece is
+    assigned to an output bucket; multiple pieces → one bucket =
+    merge. Default seeding: each piece is its own output
+    (decision C.i). Cross-ring merges allowed (decision D); the
+    resulting output plot is a multi-polygon. `outputs[i] = k`
+    with the array re-normalised to dense [0, K-1] on every
+    change. v1 simplification: dropdown changes reseed proposed
+    values and clear manual overrides for affected outputs.
+  - Map pieces colour by output bucket so the grouping is visible
+    at a glance. `drawSplitPieces(pieces, outputs)` gained the
+    second arg.
+  - `executeSplit` rewritten: takes `outputs: [{ pieces: [...] }]`
+    rather than raw pieces. `_outputToStorePolygons` unions a
+    multi-piece output via `turf.union` and unpacks the resulting
+    Polygon / MultiPolygon back into the `{ outer, holes }` shape
+    `storeSubdivisionGeometry` expects. `ogfRelationId` always
+    null (decision F.i).
+  - Status bar + panels: "Will create N new plot(s)" replaces the
+    old mode-specific messages. `'pending'` status (1 piece, no
+    actual split) → cut prompt; `'valid'` (2+ pieces) → Continue
+    enabled.
 
 ### Phase 3 — Properties — **complete** (2026-05-11)
 
