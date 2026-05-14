@@ -10,6 +10,61 @@
 // import modal to preview to-be-imported shapes before commit.
 
 const OGF_TILE_URL = 'https://tile.opengeofiction.net/ogf-carto/{z}/{x}/{y}.png';
+
+// Global tile-toggle (v0.10.1). One shared state across the main map,
+// preview map, plot-detail map, and split-editor map. Clicking the ▦
+// button on any of them flips every map at once.
+const _tileToggleRegistry = []; // { map, tileLayer, div }
+let _tilesVisible = true;
+
+function _setTilesVisible(visible) {
+  _tilesVisible = !!visible;
+  // Walk backwards so we can drop entries for unmounted maps.
+  for (let i = _tileToggleRegistry.length - 1; i >= 0; i--) {
+    const r = _tileToggleRegistry[i];
+    if (!r.map || !r.map._container || !document.contains(r.map._container)) {
+      _tileToggleRegistry.splice(i, 1);
+      continue;
+    }
+    if (_tilesVisible) {
+      if (!r.map.hasLayer(r.tileLayer)) r.tileLayer.addTo(r.map);
+      if (r.div) r.div.classList.remove('off');
+    } else {
+      if (r.map.hasLayer(r.tileLayer)) r.map.removeLayer(r.tileLayer);
+      if (r.div) r.div.classList.add('off');
+    }
+  }
+}
+
+function _addTileToggleControl(map, tileLayer) {
+  if (!map || !tileLayer) return;
+  // Honour current global state on first add: if tiles are off, strip
+  // them from this newly-created map immediately.
+  if (!_tilesVisible && map.hasLayer(tileLayer)) map.removeLayer(tileLayer);
+
+  let div = null;
+  const Toggle = L.Control.extend({
+    options: { position: 'topright' },
+    onAdd: function () {
+      div = L.DomUtil.create('div', 'leaflet-bar leaflet-control map-tile-toggle');
+      if (!_tilesVisible) div.classList.add('off');
+      const a = L.DomUtil.create('a', '', div);
+      a.href = '#';
+      a.title = 'Toggle map tiles';
+      a.setAttribute('role', 'button');
+      a.textContent = '▦';
+      L.DomEvent.on(a, 'click', (e) => {
+        L.DomEvent.preventDefault(e);
+        L.DomEvent.stopPropagation(e);
+        _setTilesVisible(!_tilesVisible);
+      });
+      L.DomEvent.disableClickPropagation(div);
+      return div;
+    },
+  });
+  new Toggle().addTo(map);
+  _tileToggleRegistry.push({ map, tileLayer, div });
+}
 const OGF_OVERPASS_URL = 'https://overpass.opengeofiction.net/api/interpreter';
 
 let _map = null;
@@ -33,6 +88,7 @@ const BOUNDARY_TYPE_PALETTE = [
 ];
 let _mapSettlementLayer  = null;        // L.featureGroup for settlement markers (always on)
 let _mapBoundaryLayer    = null;        // single L.featureGroup for boundary polygons
+let _mapWaterDebugLayer  = null;        // Brick 12a debug overlay — cached water geometry
 let _mapCurrentTypeId    = null;        // type selected in dropdown (null = uninitialized → Plots)
 let _drillStack          = [];          // [{ boundaryId, name, typeId }, ...]
 let _boundaryClickTimer  = null;        // single-click vs double-click guard
@@ -78,7 +134,11 @@ function initMap() {
     maxZoom: 19,
     attribution: 'Tiles © <a href="https://opengeofiction.net">OpenGeofiction</a>'
   }).addTo(_map);
+  _addTileToggleControl(_map, _mapTileLayer);
 
+  // Water debug overlay sits BELOW everything else so plots / boundaries
+  // / settlements / hover hints all draw on top of it.
+  _mapWaterDebugLayer = L.featureGroup().addTo(_map);
   _mapPlotLayer       = L.featureGroup().addTo(_map);
   _mapBoundaryLayer   = L.featureGroup().addTo(_map);
   _mapSettlementLayer = L.featureGroup().addTo(_map);
@@ -145,9 +205,21 @@ function settlementMarkerStyle(settlement, selected) {
   };
 }
 
-function plotPolygonStyle(selected) {
+function plotPolygonStyle(selected, multiSelected) {
   // Neutral slate so plots read as data on the map without competing
   // with the accent (which is reserved for UI affordances).
+  // Brick 11c: a third state — multi-selected for merge — uses the
+  // accent to make the selection visually obvious. Beats single-select
+  // (which is just the standard slate-bold) so the user can tell which
+  // plots are queued for the merge action.
+  if (multiSelected) {
+    return {
+      color: 'var(--accent, #c1272d)',
+      weight: 3.5,
+      fillColor: '#c1272d',
+      fillOpacity: 0.22,
+    };
+  }
   return {
     color: selected ? '#1f2937' : '#475569',
     weight: selected ? 3 : 2,
@@ -182,7 +254,8 @@ function ensurePreviewMap(containerId) {
     zoomControl: true, attributionControl: false,
   });
   _previewMap._appyContainer = el;
-  L.tileLayer(OGF_TILE_URL, { maxZoom: 19 }).addTo(_previewMap);
+  const _previewTile = L.tileLayer(OGF_TILE_URL, { maxZoom: 19 }).addTo(_previewMap);
+  _addTileToggleControl(_previewMap, _previewTile);
   _previewLayer = L.featureGroup().addTo(_previewMap);
   // Leaflet sizes against the container's bounding rect; modals layout
   // asynchronously, so refresh once the next frame settles.
@@ -269,7 +342,8 @@ function ensureDetailMap(containerId) {
     zoomControl: true, attributionControl: false,
   });
   _detailMap._appyContainer = el;
-  L.tileLayer(OGF_TILE_URL, { maxZoom: 19 }).addTo(_detailMap);
+  const _detailTile = L.tileLayer(OGF_TILE_URL, { maxZoom: 19 }).addTo(_detailMap);
+  _addTileToggleControl(_detailMap, _detailTile);
   _detailLayer = L.featureGroup().addTo(_detailMap);
   setTimeout(() => _detailMap && _detailMap.invalidateSize(), 50);
   return _detailMap;
@@ -288,6 +362,307 @@ function drawDetailPlot(plot) {
 function destroyDetailMap() {
   if (_detailLayer) { _detailLayer.clearLayers(); _detailLayer = null; }
   if (_detailMap) { _detailMap.remove(); _detailMap = null; }
+}
+
+// ============================================================
+// SPLIT MAP (inside the plot-split overlay — Brick 11)
+// ============================================================
+// Four stacked layers so we can refresh each independently while the
+// user is editing the cut live (v0.7.2):
+//   plot     — baseline polygon (faded once pieces draw)
+//   pieces   — proposed split pieces (filled, distinct colors)
+//   cutPath  — the cut polyline; in-polygon portion overlaid solid
+//   vertices — draggable vertex markers, real cut vertices only
+//
+// `_splitMapBoundsSet` ensures fitBounds happens exactly once per
+// overlay open. Otherwise the map would re-centre on every cut tweak.
+
+let _splitMap = null;
+let _splitPlotLayer = null;
+let _splitPiecesLayer = null;
+let _splitCutLayer = null;
+let _splitVertexLayer = null;   // real (draggable) cut vertices
+let _splitGhostLayer = null;    // midpoint ghosts — separate layer so we
+                                // can re-render ghosts on every vertex
+                                // drag tick without disturbing the
+                                // real-vertex marker being dragged.
+let _splitHoverLayer = null;    // dashed preview line from nearest cut
+                                // endpoint to the cursor.
+let _splitMapBoundsSet = false;
+let _splitPlotCurrentMode = null;
+
+const _SPLIT_PIECE_COLORS = ['#c1272d', '#0d8a8a', '#b58300', '#5a4ea3', '#3f7e3f', '#8a4c8a'];
+// Distinct palette for multi-cut (Brick 11b #1) — deeper saturation so
+// cut polylines stand out against piece fills (which use the lighter
+// _SPLIT_PIECE_COLORS at 30% opacity).
+const _SPLIT_CUT_COLORS   = ['#1f1f1f', '#175c8c', '#7b3a8a', '#8a6f00', '#005f57', '#7a1f1f'];
+
+function ensureSplitMap(containerId, callbacks) {
+  callbacks = callbacks || {};
+  const el = document.getElementById(containerId);
+  if (!el) return null;
+  if (_splitMap) {
+    if (_splitMap._appyContainer === el) return _splitMap;
+    destroySplitMap();
+  }
+  _splitMap = L.map(el, {
+    center: [0, 0], zoom: 1, minZoom: 1, maxZoom: 19,
+    zoomControl: true, attributionControl: false,
+    doubleClickZoom: false,
+  });
+  _splitMap._appyContainer = el;
+  _splitMap._appyCallbacks = callbacks;
+  const _splitTile = L.tileLayer(OGF_TILE_URL, { maxZoom: 19 }).addTo(_splitMap);
+  _addTileToggleControl(_splitMap, _splitTile);
+  _splitPlotLayer   = L.featureGroup().addTo(_splitMap);
+  _splitPiecesLayer = L.featureGroup().addTo(_splitMap);
+  _splitCutLayer    = L.featureGroup().addTo(_splitMap);
+  _splitHoverLayer  = L.featureGroup().addTo(_splitMap);
+  _splitGhostLayer  = L.featureGroup().addTo(_splitMap);
+  _splitVertexLayer = L.featureGroup().addTo(_splitMap);
+  if (typeof callbacks.onMapClick === 'function') {
+    _splitMap.on('click', callbacks.onMapClick);
+  }
+  if (typeof callbacks.onMapMouseMove === 'function') {
+    _splitMap.on('mousemove', callbacks.onMapMouseMove);
+  }
+  if (typeof callbacks.onMapMouseOut === 'function') {
+    _splitMap.on('mouseout', callbacks.onMapMouseOut);
+  }
+  _splitMapBoundsSet = false;
+  setTimeout(() => _splitMap && _splitMap.invalidateSize(), 50);
+  return _splitMap;
+}
+
+// mode: 'normal' (full styling) or 'faded' (outline-only — when pieces
+// are drawn on top, the baseline is just there as a reference).
+// Skips when the mode hasn't changed — drawSplitPlot is called on every
+// cut edit, and the polygon itself never moves; the only reason to
+// redraw is to flip styles when pieces appear / disappear.
+function drawSplitPlot(plot, mode) {
+  if (!_splitMap || !_splitPlotLayer) return;
+  if (_splitPlotCurrentMode === mode && _splitPlotLayer.getLayers().length > 0) return;
+  _splitPlotLayer.clearLayers();
+  const geo = resolvePlotGeometry(plot);
+  if (!geo.polygons.length) return;
+  const style = mode === 'faded'
+    ? { color: '#475569', weight: 1, fillColor: '#475569', fillOpacity: 0.04, opacity: 0.45 }
+    : plotPolygonStyle(false);
+  const poly = L.polygon(geo.polygons, style);
+  _splitPlotLayer.addLayer(poly);
+  _splitPlotCurrentMode = mode;
+  if (!_splitMapBoundsSet) {
+    _splitMap.fitBounds(poly.getBounds(), { padding: [40, 40] });
+    _splitMapBoundsSet = true;
+  }
+}
+
+function clearSplitPieces() {
+  if (_splitPiecesLayer) _splitPiecesLayer.clearLayers();
+}
+
+function drawSplitPieces(pieces, outputs, hoverPieceIdxs) {
+  if (!_splitMap || !_splitPiecesLayer) return;
+  _splitPiecesLayer.clearLayers();
+  const hoverSet = Array.isArray(hoverPieceIdxs) ? new Set(hoverPieceIdxs) : null;
+  pieces.forEach((piece, i) => {
+    // Brick 11b B.i: pieces are coloured by OUTPUT bucket, not piece
+    // index — so pieces grouped into the same output show as one
+    // visual entity on the map. `outputs` is optional for back-compat
+    // (callers without grouping just get per-piece colours).
+    // v0.11.1: hovered pieces get a heavier stroke + higher fill so
+    // the user can see what they're about to act on.
+    const outIdx = (outputs && outputs[i] != null) ? outputs[i] : i;
+    const color = _SPLIT_PIECE_COLORS[outIdx % _SPLIT_PIECE_COLORS.length];
+    const hovered = hoverSet && hoverSet.has(i);
+    const polyLatLngs = [piece.outer, ...(piece.holes || [])];
+    const poly = L.polygon(polyLatLngs, {
+      color,
+      weight:      hovered ? 4   : 2,
+      fillColor:   color,
+      fillOpacity: hovered ? 0.55 : 0.30,
+      interactive: false, // don't intercept clicks meant for the cut polyline / map
+    });
+    _splitPiecesLayer.addLayer(poly);
+  });
+}
+
+// The cut path has two visual layers:
+//  - the user-drawn polyline (dashed, full length)
+//  - the in-polygon portion (solid, when valid)
+// Both are clickable; clicking either inserts a vertex between the
+// nearest two user-drawn vertices.
+// Brick 11b #1: draws every cut, not just the active one.
+//   • Active cut: dashed full-length line + solid in-polygon overlay
+//     at the colour for its index, both thicker than non-active.
+//   • Non-active cuts: thinner, dimmed colour, no in-polygon overlay
+//     (the polygonized pieces already encode where they actually cut).
+//   • Hovered cut (from the cuts-list row hover): heavier weight so
+//     the user can see which cut they're about to act on.
+// `insideLatLngs` is the cutInside coords flattened to a single array
+// of segments (each itself [[lat,lng],…]); the active cut renders all
+// of them, non-active cuts ignore them (they're not split per cut).
+function drawSplitCutPath(allCuts, activeIdx, insideSegments, hoverIdx) {
+  if (!_splitMap || !_splitCutLayer) return;
+  _splitCutLayer.clearLayers();
+  if (!Array.isArray(allCuts) || allCuts.length === 0) return;
+  const cbs = _splitMap._appyCallbacks || {};
+  const insidesArr = Array.isArray(insideSegments) ? insideSegments : [];
+
+  allCuts.forEach((cut, i) => {
+    if (!Array.isArray(cut) || cut.length < 2) return;
+    const isActive = i === activeIdx;
+    const isHover  = i === hoverIdx;
+    const color    = _SPLIT_CUT_COLORS[i % _SPLIT_CUT_COLORS.length];
+    const dashed = L.polyline(cut, {
+      color,
+      weight:    isActive || isHover ? 2.5 : 1.5,
+      opacity:   isActive ? 0.75 : (isHover ? 0.9 : 0.45),
+      dashArray: isActive ? '5,4' : '3,3',
+    });
+    if (isActive && typeof cbs.onCutLineClick === 'function') {
+      dashed.on('click', cbs.onCutLineClick);
+    }
+    _splitCutLayer.addLayer(dashed);
+  });
+
+  // In-polygon overlay (active cut only). The retained slices from the
+  // engine show the visible "what actually divides things" portion.
+  if (typeof activeIdx === 'number' && insidesArr.length > 0) {
+    const activeColor = _SPLIT_CUT_COLORS[activeIdx % _SPLIT_CUT_COLORS.length];
+    for (const seg of insidesArr) {
+      if (!Array.isArray(seg) || seg.length < 2) continue;
+      const solid = L.polyline(seg, { color: activeColor, weight: 3.5, opacity: 1 });
+      if (typeof cbs.onCutLineClick === 'function') solid.on('click', cbs.onCutLineClick);
+      _splitCutLayer.addLayer(solid);
+    }
+  }
+}
+
+// Real cut vertices — accent dots, draggable, right-click removes.
+// On its own layer (`_splitVertexLayer`) so the layer can be frozen
+// while a marker is being dragged (rebuilding markers mid-drag would
+// destroy the dragged one). Ghost-midpoint markers live separately in
+// `_splitGhostLayer`.
+function drawSplitRealVertices(latLngs, callbacks) {
+  if (!_splitMap || !_splitVertexLayer) return;
+  _splitVertexLayer.clearLayers();
+  if (!Array.isArray(latLngs)) return;
+  callbacks = callbacks || {};
+  for (let i = 0; i < latLngs.length; i++) {
+    const idx = i;
+    const m = L.marker(latLngs[i], {
+      icon: L.divIcon({
+        className: 'split-vertex', html: '',
+        iconSize: [12, 12], iconAnchor: [6, 6],
+      }),
+      draggable: true,
+      bubblingMouseEvents: false,
+    });
+    if (callbacks.onDragStart) m.on('dragstart',   (e) => callbacks.onDragStart(idx, e));
+    if (callbacks.onDrag)      m.on('drag',        (e) => callbacks.onDrag(idx, e));
+    if (callbacks.onDragEnd)   m.on('dragend',     (e) => callbacks.onDragEnd(idx, e));
+    if (callbacks.onRemove)    m.on('contextmenu', (e) => callbacks.onRemove(idx, e));
+    _splitVertexLayer.addLayer(m);
+  }
+}
+
+// Ghost midpoint markers — smaller, half-transparent dots at the
+// midpoint of every consecutive-vertex pair. Two interactions:
+//   • click  → onGhostClick(segIdx, e). Insert a vertex at the midpoint
+//              (caller decides; we just signal "user picked this gap").
+//   • drag   → onGhostDragStart/Drag/DragEnd(segIdx, e). The caller
+//              inserts a new vertex at dragstart, then the same ghost
+//              icon serves as the live position indicator until release.
+// Leaflet only fires `click` when the user mouseup'd without moving past
+// its drag threshold, so click vs drag is unambiguous to the caller.
+function drawSplitGhostVertices(latLngs, callbacks) {
+  if (!_splitMap || !_splitGhostLayer) return;
+  _splitGhostLayer.clearLayers();
+  if (!Array.isArray(latLngs) || latLngs.length < 2) return;
+  callbacks = callbacks || {};
+  for (let i = 0; i < latLngs.length - 1; i++) {
+    const segIdx = i;
+    const a = latLngs[i], b = latLngs[i + 1];
+    const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+    const g = L.marker(mid, {
+      icon: L.divIcon({
+        className: 'split-vertex-ghost', html: '',
+        iconSize: [10, 10], iconAnchor: [5, 5],
+      }),
+      draggable: true,
+      bubblingMouseEvents: false,
+      // Lower z-index so a real vertex stays on top wherever they overlap.
+      zIndexOffset: -100,
+    });
+    if (callbacks.onClick)     g.on('click',     (e) => callbacks.onClick(segIdx, e));
+    if (callbacks.onDragStart) g.on('dragstart', (e) => callbacks.onDragStart(segIdx, e));
+    if (callbacks.onDrag)      g.on('drag',      (e) => callbacks.onDrag(segIdx, e));
+    if (callbacks.onDragEnd)   g.on('dragend',   (e) => callbacks.onDragEnd(segIdx, e));
+    _splitGhostLayer.addLayer(g);
+  }
+}
+
+// Dashed preview line from a known endpoint to the cursor — gives the
+// user a visual cue of where the next clicked vertex will attach. The
+// `from` arg is whichever cut endpoint (start or end) is nearest to
+// the cursor; null/null clears the layer.
+function drawSplitHoverLine(fromLatLng, toLatLng) {
+  if (!_splitMap || !_splitHoverLayer) return;
+  _splitHoverLayer.clearLayers();
+  if (!fromLatLng || !toLatLng) return;
+  const line = L.polyline([fromLatLng, toLatLng], {
+    color: '#c1272d', weight: 1.5, opacity: 0.55, dashArray: '2,5',
+    interactive: false,
+  });
+  _splitHoverLayer.addLayer(line);
+}
+
+// Project-wide water overlay (v0.9.0). Reads
+// `data.waterCache.waterGeometry` — a turf MultiPolygon in [lng, lat]
+// order — and renders it as a translucent blue fill under the plot
+// layer. Pure visual reference: now that plots are clipped at creation
+// (per project mode), the overlay is what the user sees water "as"
+// rather than the dual-render plot/water layer that the old split
+// system used.
+function _redrawWaterDebugOverlay() {
+  if (!_mapWaterDebugLayer) return;
+  _mapWaterDebugLayer.clearLayers();
+  if (!getSetting('showWaterOverlay', true)) return;
+  const cache = data.waterCache;
+  const geom  = cache && cache.waterGeometry && cache.waterGeometry.geometry;
+  if (!geom) return;
+
+  const style = {
+    color: '#3b82c6', weight: 1.5,
+    fillColor: '#3b82c6', fillOpacity: 0.28,
+    lineJoin: 'round', interactive: false,
+  };
+
+  // GeoJSON polygon coords come in as [[outer], [hole1], ...] with each
+  // ring as [[lng, lat], ...]. Leaflet wants [[lat, lng], ...].
+  const toLeafletPoly = (polyCoords) =>
+    polyCoords.map(ring => ring.map(([lng, lat]) => [lat, lng]));
+
+  if (geom.type === 'Polygon') {
+    _mapWaterDebugLayer.addLayer(L.polygon(toLeafletPoly(geom.coordinates), style));
+  } else if (geom.type === 'MultiPolygon') {
+    for (const polyCoords of geom.coordinates) {
+      _mapWaterDebugLayer.addLayer(L.polygon(toLeafletPoly(polyCoords), style));
+    }
+  }
+}
+
+function destroySplitMap() {
+  if (_splitPlotLayer)   { _splitPlotLayer.clearLayers();   _splitPlotLayer = null; }
+  if (_splitPiecesLayer) { _splitPiecesLayer.clearLayers(); _splitPiecesLayer = null; }
+  if (_splitCutLayer)    { _splitCutLayer.clearLayers();    _splitCutLayer = null; }
+  if (_splitHoverLayer)  { _splitHoverLayer.clearLayers();  _splitHoverLayer = null; }
+  if (_splitGhostLayer)  { _splitGhostLayer.clearLayers();  _splitGhostLayer = null; }
+  if (_splitVertexLayer) { _splitVertexLayer.clearLayers(); _splitVertexLayer = null; }
+  if (_splitMap) { _splitMap.remove(); _splitMap = null; }
+  _splitMapBoundsSet = false;
+  _splitPlotCurrentMode = null;
 }
 
 // ============================================================
@@ -383,6 +758,7 @@ function redrawMap() {
   _mapBoundaryLayer.clearLayers();
   if (_mapSettlementLayer) _mapSettlementLayer.clearLayers();
   if (_hoverLayer) _hoverLayer.clearLayers();
+  _redrawWaterDebugOverlay();
 
   // Layer 0: dropdown's selected level (every boundary of that type, OR
   // every plot when the synthetic "Plots" option is picked).
@@ -467,22 +843,38 @@ function _renderRootLevel(drawnBoundaries) {
 function _drawPlotPoly(plot) {
   const geo = resolvePlotGeometry(plot);
   if (!geo.polygons.length) return;
-  const isSelected = _selectedItemKind === 'plot' && _selectedItemId === plot.id;
-  const poly = L.polygon(geo.polygons, plotPolygonStyle(isSelected));
-  poly._appyPlotId = plot.id;
-  if (plot.name) poly.bindTooltip(plot.name);
-  poly.on('click', (e) => {
+  const isSelected      = _selectedItemKind === 'plot' && _selectedItemId === plot.id;
+  const isMultiSelected = (typeof isPlotSelected === 'function') && isPlotSelected(plot.id);
+  // v0.9.0: plot polygons are already shaped by the project's
+  // land/water mode at creation time, so there's no per-plot split
+  // path here — just draw whatever's stored. The blue water context
+  // shows through the `_mapWaterDebugLayer` overlay drawn below.
+  const mainPoly = L.polygon(geo.polygons, plotPolygonStyle(isSelected, isMultiSelected));
+  mainPoly._appyPlotId = plot.id;
+  if (plot.name) mainPoly.bindTooltip(plot.name);
+  mainPoly.on('click', (e) => {
     L.DomEvent.stopPropagation(e);
+    // Brick 11c: shift-click toggles a plot's multi-select state for
+    // the merge gesture. Plain click selects the single item as before
+    // (and opens detail via the existing _selectItem path).
+    if (e.originalEvent && e.originalEvent.shiftKey
+        && typeof togglePlotSelection === 'function') {
+      togglePlotSelection(plot.id);
+      return;
+    }
     _selectItem('plot', plot.id);
   });
-  _mapPlotLayer.addLayer(poly);
-  _polyIndex.set('plot:' + plot.id, poly);
+  _mapPlotLayer.addLayer(mainPoly);
+  _polyIndex.set('plot:' + plot.id, mainPoly);
 }
 
 function _drawBoundaryPoly(b, color) {
   const geom = resolveBoundaryGeometry(b);
   if (!geom || !geom.polygons.length) return;
   const isSelected = _selectedItemKind === 'boundary' && _selectedItemId === b.id;
+  // v0.9.0: boundaries dissolve from plots, and plots are already mode-
+  // clipped, so the dissolved boundary geometry is land-only (or water-
+  // only, etc.) by construction. No per-boundary split path needed.
   const poly = L.polygon(geom.polygons, boundaryFilledStyle(color, isSelected));
   poly._appyBoundaryId = b.id;
   poly.bindTooltip(b.name || `(${getBoundaryTypeName(b.typeId)})`);
@@ -1172,7 +1564,27 @@ function renderMapToolbar() {
     rowHtml = `<div class="map-toolbar-row">${selectHtml}${placesHtml}</div>`;
   }
 
-  el.innerHTML = breadcrumbHtml + rowHtml;
+  // Brick 11c: merge floater. Shown when 2+ plots are multi-selected.
+  // Sits inline in the toolbar so map sizing stays predictable.
+  let mergeFloater = '';
+  if (typeof selectedPlotIds === 'function') {
+    const ids = selectedPlotIds();
+    if (ids.length >= 1) {
+      const cls = 'map-merge-floater' + (ids.length >= 2 ? '' : ' map-merge-floater-disabled');
+      const btn = ids.length >= 2
+        ? `<button class="btn btn-sm btn-primary" onclick="openMergeModal()">${t('plots.merge_btn')}</button>`
+        : '';
+      mergeFloater = `
+        <div class="${cls}">
+          <span>${t('plots.selected_count', { n: ids.length })}</span>
+          ${btn}
+          <button class="btn btn-sm" onclick="clearPlotSelection()">${t('plots.clear_selection')}</button>
+          <span class="text-dim" style="font-size:11px">${t('plots.shift_click_hint')}</span>
+        </div>`;
+    }
+  }
+
+  el.innerHTML = breadcrumbHtml + rowHtml + mergeFloater;
 
   // The "All types" master needs its indeterminate state set
   // imperatively (HTML can't represent it).

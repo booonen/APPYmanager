@@ -31,6 +31,60 @@ function createPlot({ name, notes, ogfRelationId, outers, inners, flags }) {
   return plot;
 }
 
+// Wraps createPlot with project-level mode clipping (v0.9.0). If the
+// project's land/water mode requires clipping AND a water cache is
+// present, the provided geometry is run through clipPolygonsToMode
+// before storage. Plots fully consumed by the clip are rejected (toast
+// + null return) rather than created. Modes 'combined' or no-cache
+// fall through to plain createPlot with the caller's original refs.
+//
+// Inputs match createPlot. Returns the new plot, or null on rejection.
+function createPlotMaybeClipped(meta) {
+  const mode = (data.settings && data.settings.landWaterMode) || 'land_only_sea_water';
+  if (mode === 'combined' || !data.waterCache || !data.waterCache.waterGeometry) {
+    return createPlot(meta);
+  }
+  if (typeof clipPolygonsToMode !== 'function' ||
+      typeof storeSubdivisionGeometry !== 'function') {
+    return createPlot(meta);
+  }
+  const tempPlot = { outers: meta.outers || [], inners: meta.inners || [] };
+  const geo = resolvePlotGeometry(tempPlot);
+  if (!geo || !geo.polygons || geo.polygons.length === 0) return createPlot(meta);
+
+  const clip = clipPolygonsToMode(geo.polygons, mode);
+  if (clip.dropped || clip.polygons.length === 0) {
+    if (typeof toast === 'function') {
+      toast(t('landwater.toast_plot_all_water', { name: meta.name || '?' }), 'warning');
+    }
+    return null;
+  }
+  // Reference-equal return means clipPolygonsToMode short-circuited
+  // (no-cache or 'combined' fallback) and the caller's refs are still
+  // good.
+  if (clip.polygons === geo.polygons) return createPlot(meta);
+
+  const polysForStore = clip.polygons.map(poly => ({
+    outer: _openRingForCreate(poly[0]),
+    holes: (poly.slice(1) || []).map(_openRingForCreate),
+  })).filter(p => p.outer.length >= 3);
+  if (polysForStore.length === 0) {
+    if (typeof toast === 'function') {
+      toast(t('landwater.toast_plot_all_water', { name: meta.name || '?' }), 'warning');
+    }
+    return null;
+  }
+  const { outers, inners } = storeSubdivisionGeometry(polysForStore);
+  return createPlot({ ...meta, outers, inners });
+}
+
+function _openRingForCreate(ring) {
+  if (!ring || ring.length < 2) return ring || [];
+  const f = ring[0], l = ring[ring.length - 1];
+  if (f[0] === l[0] && f[1] === l[1]) return ring.slice(0, -1);
+  return ring.slice();
+}
+
 // ============================================================
 // GEOMETRY RESOLUTION
 // ============================================================

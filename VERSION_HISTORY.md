@@ -1,3 +1,1242 @@
+## 0.11.2 — Split editor: per-ring sticky islands when a cut is drawn
+
+Follow-up on v0.11.1. The "no cut → all in one output" default was
+right, but the moment a cut was drawn, even rings the cut didn't touch
+got reset into separate outputs — defeating the sticky behaviour the
+user wanted.
+
+Fix: the engine now tags each piece with `cutAffected: bool`. In
+`_multiCutOneRing`, the early-return path (no slices retained for this
+ring) emits `cutAffected: false`; the polygonize path emits
+`cutAffected: true`. The no-cut fallback in `computePlotSplit` emits
+all pieces as `cutAffected: false`.
+
+`_recomputeSplit` in views.js seeds default outputs from the flag:
+untouched pieces share output 0, cut-affected pieces each get their
+own. So when you cut just island A on a three-island plot, the cut
+splits A into two outputs, while islands B and C stay grouped as one
+"everything else" output.
+
+## 0.11.1 — Split editor polish: sticky islands, hover-highlight
+
+Two ergonomics fixes from real-world editor use:
+
+### Islands stay together by default
+
+Previously, opening the split editor on a non-contiguous plot defaulted
+every outer ring to its own output — the user saw "split into N
+components" the moment they opened the modal, even if they only wanted
+to peek. Inverted: with no cut drawn, every piece now starts in Output
+1 (one combined output → Confirm disabled, no accidental split). The
+user must either draw a cut OR explicitly reassign pieces via the
+output dropdown to break them out. Once *any* cut has ≥ 2 vertices the
+old "each piece its own output" default kicks back in so the cut
+actually divides things.
+
+### Piece + output hover-highlight
+
+The cuts list got a hover-highlight in v0.10.0; pieces and output
+cards didn't. Added:
+- `onSplitHoverPiece(i)` — hovering a piece row in the cut-phase
+  panel highlights just that piece on the map.
+- `onSplitHoverOutput(k)` — hovering an output's card (in either the
+  cut phase or the override phase) highlights every piece assigned to
+  that output.
+- `_splitState.hoverPieceIdxs` carries the set; `drawSplitPieces`
+  bumps stroke weight to 4 and fillOpacity to 0.55 for the highlighted
+  pieces.
+
+## 0.11.0 — Brick 11c: manual plot merge
+
+Inverse of plot-split. Pick N ≥ 2 plots, the modal proposes a merged
+geometry (turf.union folded across the sources), reconciles property
+values per kind, resolves any boundary-membership conflicts, and
+creates one new plot in place of the sources.
+
+### Engine — `js/merge.js`
+
+`computePlotMerge(plotIds)` (pure):
+- Folds `turf.union` across the source plots' geometry features.
+  Result is a Polygon for adjacent sources, MultiPolygon for non-
+  adjacent (decision D.ii — non-contig merges allowed).
+- Detects per-boundary-type conflicts: at each `typeId`, finds every
+  boundary that holds at least one source plot as a direct member.
+  One match → auto-inherited. Two or more → conflict (user resolves
+  in the modal, decision B.b).
+- Calls `proposePlotMergeValues` for the proposed property values
+  (see properties.js below).
+
+`executePlotMerge(plotIds, name, notes, propertyValues, boundarySelections)`
+(mutates):
+- Converts the merged feature back to `{ outer, holes }[]` for
+  `storeSubdivisionGeometry`; new plot allocated via
+  `createPlotMaybeClipped` so the project's land/water mode still
+  applies (an all-water merge result drops out the same way as an
+  all-water import).
+- Writes property values onto the new plot.
+- Drops every source plot id from every boundary's members; adds the
+  new plot id to the auto-inherited boundaries plus whichever ones
+  the user picked for each conflict.
+- Removes the source plots from `data.plots`.
+- `invalidateBoundaryGeometry` → settlements re-anchor via the
+  existing hook. `ogfRelationId` is null on the merged output
+  (decision E.i — split's rule).
+
+### Property reconciliation — `proposePlotMergeValues` (properties.js)
+
+Per kind (decision C):
+- **numeric / 'sum'** — sum source values.
+- **numeric / 'weighted_average'** — area-weighted average across
+  sources (weight = each plot's area).
+- **categorical** — majority by area.
+- **percentage / 'raw' all** — sum source raws.
+- **percentage / 'percent' all** — area-weighted percent.
+- **percentage / mixed modes** — best-effort area-weighted percent
+  across just the 'percent' sources; 'raw' sources skip (no resolved
+  denom available without traversing the percent chain at merge time).
+- Sources with no value skip; if no source has a value, the schema
+  isn't proposed at all.
+
+All proposed values are editable in the modal.
+
+### Selection UX — decision A.iv
+
+Multi-select lives in two places, sharing one `_plotsSelection` Set:
+
+- **Plots table** (`renderPlotsBody`): checkbox column on each row, a
+  header "select all in current filter" checkbox (tri-state), a
+  toolbar above the table showing `{n} selected · Merge selected ·
+  Clear` (Merge enabled only when N ≥ 2). Row body click still opens
+  detail; the checkbox cell `stopPropagation` so they don't conflict.
+- **Main map** (`_drawPlotPoly`): shift+click on a plot polygon
+  toggles its multi-select state. Plain click keeps existing
+  single-select behaviour. Selected plots draw with the accent stroke
+  + thicker weight. A floater in the map toolbar shows the same
+  count + Merge / Clear pair plus a small `shift-click` hint.
+
+The two views auto-sync via `_refreshPlotSelectionVisuals`, which
+calls `renderPlotsToolbar`, `renderPlotsBody`, and `redrawMap`.
+
+### Merge modal — `openMergeModal`
+
+- Source plots list (name + area).
+- "These plots are not all adjacent…" warning when the result is
+  multi-polygon.
+- Merged-plot name + notes inputs (default: first source's values).
+- **Boundary memberships**:
+  - Inherited row lists boundaries every source agrees on.
+  - One row per conflict: per-type dropdown listing each candidate
+    boundary + "(None)". Default pre-pick is the boundary whose
+    overlap covers the largest combined source area.
+- **Property values**: one row per applicable schema with the source
+  values shown read-only (compact dot-separated) + an editable input
+  for the merged proposal.
+- Cancel / "Merge into one plot" buttons.
+
+### Misc
+
+- `js/merge.js` registered in `appymanager.html` after `split.js`.
+- New CSS for the plots toolbar, multi-select row highlight, map
+  merge floater, and the merge modal layout.
+- New `plots.*` (selection + merge button) and `plot_merge.*` l10n.
+- Brick 11b's `data-portion` / portion-aware machinery is untouched
+  — merge slots cleanly into the post-12d single-storage model.
+
+## 0.10.1 — Brick 11b #1 polish: enclave fix, global tile toggle, l10n
+
+Three follow-ups from v0.10.0 testing:
+
+### Enclave fix (`js/split.js`)
+
+User reported: a cut that crosses the ring once + a second cut that
+crosses the first cut twice should produce one enclosed piece (the
+enclave) and one surrounding piece. v0.10.0 instead produced the
+enclave AND a surrounding piece that still *included* the enclave's
+area — i.e. the enclave was double-counted.
+
+Root cause: `turf.polygonize` emits each bounded face independently,
+without honouring "this face is inside that face" relationships. The
+outer face's polygon was the full ring perimeter; the enclave was a
+separate small polygon overlapping with the outer.
+
+Fix: after polygonize, walk faces sorted by area DESC; for each face,
+the *smallest* face strictly containing it becomes its parent, and the
+child's outer ring is appended to the parent's `holes`. Net effect:
+the enclave stays as its own piece, and the outer piece is now a
+polygon-with-hole that excludes the enclave area.
+
+Also removed the `hasRingCrossing` early return — a closed loop formed
+by two cuts entirely inside the ring (no ring crossings at all) is a
+legitimate enclave; the engine should still run the planar
+subdivision. The dangling-trim already handles "cuts that do nothing"
+by discarding everything.
+
+### Tile-toggle is now global (`js/map.js`)
+
+The v0.9.2 per-map tile toggles are replaced by one shared state. A
+small `_tileToggleRegistry` tracks every (map, tileLayer, controlDiv);
+clicking the ▦ on any map calls `_setTilesVisible(!_tilesVisible)`,
+which walks the registry and flips every map at once. Unmounted maps
+(detail/preview/split overlays after close) drop out of the registry
+on the next flip.
+
+### l10n key fix
+
+`error_cut_self_intersects` was added to the engine but missed in
+`lang/en.js`, so the user saw the bare key string in the toast. Added.
+While there, simplified `error_cut_does_not_cross` (the old wording
+was redundant now that "the cut needs to enter AND exit" is enforced
+by the planar-subdivision invariant, not a hard ring-crossing rule).
+
+## 0.10.0 — Brick 11b #1: multi-cut + planar-subdivision engine
+
+The plot-split editor admits multiple cuts on one plot. Cuts can cross
+each other, end at each other (T-junctions), or simply sit
+independently — the geometry engine resolves them as a planar
+subdivision and emits one piece per bounded face. Pieces still feed
+into the per-piece "Output" dropdown from Brick 11b #2, so the
+familiar grouping gesture combines pieces from any cut into shared
+output plots.
+
+### Planar-subdivision engine (`js/split.js`)
+
+Replaces `_splitOneRing` (the single-cut per-ring engine) with
+`_multiCutOneRing`. Per outer ring:
+
+1. Find every intersection — cut↔cut (pairwise) and cut↔ring.
+2. Slice each cut at its intersection points → sub-segments. Each
+   sub-segment is labelled by endpoint type:
+   - `'ring'` — lies on the outer ring,
+   - `'cutcut'` — sits at an intersection between two cuts,
+   - `'endpoint'` — the original cut's free start or end.
+3. Discard sub-segments whose midpoint lies outside the plot (outside
+   the outer ring or inside a hole).
+4. Iterative dangling-trim: a sub-segment with an `'endpoint'` end,
+   or a `'cutcut'` end whose node has fewer than 2 surviving slices
+   touching it, is discarded. Repeat until stable. (This is how the
+   user's "T-junction" 3-way example works — Cut B's dangling far-end
+   gets trimmed, leaving the partial Cut B as a valid divider.)
+5. Slice the outer ring at every retained ring-cut intersection.
+6. Feed (ring segments + retained cut slices) to `turf.polygonize`.
+7. Filter resulting faces to those whose `pointOnFeature` is inside
+   the plot.
+8. Assign holes per face by first-vertex point-in-polygon (today's
+   punt for cuts that physically touch a hole — those segments are
+   dangling-trimmed away).
+
+Several Brick 11b #2 error codes go away under this engine — they were
+artefacts of the single-cut per-ring "exactly 2 crossings" rule:
+
+- `cut_crosses_too_many_times` — removed. 4+ crossings on a ring are
+  now natural multi-cut topology.
+- `cut_crosses_ring_once` — removed. A cut endpoint inside a ring is
+  just a dangling sub-segment that gets trimmed silently.
+
+New error: `cut_self_intersects`. A self-intersecting cut would
+double-count its interior (user-reported failure mode in v0.9.2); we
+reject up-front via a pairwise non-adjacent-segment cross check.
+
+### State + UI (`js/views.js`, `js/map.js`, `styles.css`)
+
+- `_splitState.activeCutIdx` (default 0) — which cut the editor is
+  targeting. Vertex/ghost/hover handlers all retargeted from
+  `cuts[0]` to `cuts[activeCutIdx]`.
+- `_splitState.hoverCutIdx` — the cut currently highlighted on the
+  map because its row in the cuts list is hovered.
+- New handlers: `onSplitAddCut`, `onSplitSetActiveCut(i)`,
+  `onSplitDeleteCut(i)`, `onSplitHoverCut(i)`.
+- Empty-cut housekeeping (decision D): an empty cut is removed the
+  moment it becomes non-active. The cuts array always has at least
+  one entry.
+- **Cuts list** in the cut-phase panel: one row per cut with a
+  colour swatch + name (`Cut N`) + vertex count + ✕ delete. The
+  active row gets an accent border + bold name. Hovering a row
+  triggers `onSplitHoverCut` so the user can see what they're
+  about to delete. "+ Add cut" button at the bottom of the list.
+  "Clear" sits inline on the active row.
+- **Multi-cut map rendering**: `drawSplitCutPath(allCuts, activeIdx,
+  insideSegments, hoverIdx)` draws every cut. Active cut is thicker
+  + dashed at full opacity; non-active cuts thinner + dimmer. The
+  hovered cut bumps weight + opacity. In-polygon overlay (the
+  retained slice coords) is drawn for the active cut only.
+- **Hover preview threshold** (decision H.iii): the dashed
+  "where will the click extend from?" line now shows only when the
+  cursor is within ~60 px of the active cut's nearest endpoint.
+  No more always-on visual noise.
+
+### What stayed the same
+
+- Output grouping (per-piece dropdown, merged outputs, override
+  phase, executor signature).
+- Land-area-weighted property-redistribution defaults.
+- Plot-creation modes from Brick 12d (auto-clip at create time).
+
+### Known limits filed
+
+- A cut that physically crosses a hole's boundary still doesn't
+  split the hole — the segment inside the hole is discarded as
+  "outside the plot" and the rest dangles. Cuts shouldn't go
+  through holes in practice; revisit if needed.
+- Manual property-value overrides still clear when the user
+  re-groups pieces via the dropdown (same v1 simplification as
+  Brick 11b #2).
+
+## 0.9.2 — Tile-toggle on every Leaflet map
+
+Small ▦ button in the top-right corner of every Leaflet map (main map,
+preview map, plot-detail map, split-overlay map). Click to hide the
+OGF basemap tiles; click again to bring them back. State is per-map
+and in-memory only — toggling one map doesn't blank the others. Useful
+when the basemap is competing with plot outlines you're trying to
+read.
+
+Shared helper `_addTileToggleControl(map, tileLayer)` in `js/map.js`;
+each map-init call site captures its tile layer reference and passes
+both through. CSS pairs the dimmed/strikethrough state on `.off` so
+the toggle's current state is obvious at a glance.
+
+## 0.9.1 — Brick 11b #2: cut non-contig plots + per-piece grouping
+
+The manual-split editor stops force-routing non-contiguous plots into a
+separate "component" mode. Every plot now opens in the same cut-edit
+UI; if it happens to be non-contig and no cut is drawn, you see one
+piece per ring (matching the old component behaviour as a natural
+default). Draw a cut and it splits whichever rings it crosses; rings
+the cut doesn't touch pass through unchanged.
+
+Pieces can then be **merged into shared output plots** via a per-piece
+"Output" dropdown. This is the same gesture that Brick 11b #1 (multi-
+cut) will reuse for grouping pieces from multiple cuts. Cross-ring
+merges are allowed: a multi-piece output becomes a single new plot
+whose geometry is the turf-union of its pieces (possibly multi-polygon).
+
+### Unified geometry engine (`js/split.js`)
+
+- `computePlotSplit(plot, cuts)` is the single entry point. `cuts` is a
+  `Polyline[]` (decision A.ii); v1 of #2 only ever uses `cuts[0]`, but
+  the engine accepts the array so #1's multi-cut work doesn't reshape
+  the signature again.
+- Per-ring application via the new `_splitOneRing` helper:
+  - 0 crossings → ring passes through as one piece.
+  - 2 crossings → ring splits into two sub-pieces (existing logic
+    extracted from the old `computeCutLineSplit`).
+  - 1 crossing → `error_cut_crosses_ring_once` (cut starts or ends
+    inside that ring).
+  - 4+ crossings → `error_cut_crosses_too_many_times`; multi-cut
+    (Brick 11b #1) is the right place to revisit.
+- Empty cut + non-contig plot → one piece per ring (old component
+  behaviour, derived as a fallthrough).
+- `computeCutLineSplit` and `computeComponentSplit` retained as thin
+  wrappers around `computePlotSplit` so any stale caller still works.
+
+### State shape (`js/views.js`)
+
+- `_splitState.cuts: Polyline[]` replaces `_splitState.cutLatLngs`. All
+  vertex-edit handlers access `_splitState.cuts[0]`.
+- `_splitState.mode` dropped — no more cut-vs-component distinction.
+- `_splitState.outputs: number[]` — `outputs[pieceIdx]` is the dense
+  index of the output bucket the piece belongs to. Re-normalised to
+  `[0, K-1]` in order of first appearance after every dropdown change.
+- `propertyValues` / `names` / `manualOverrides` / `manualNames` are
+  keyed by **output** index (not piece). v1 simplification: dropdown
+  changes reseed proposed values and clear manual overrides for
+  affected outputs; the user can rename freely afterwards.
+
+### UI
+
+- Cut panel: pieces list shows a colour swatch + area + Output
+  dropdown per piece. Output cards underneath show the merged area
+  and proposed values per output. Cut controls (vertex count, Clear)
+  are now always shown (no more `state.mode === 'cut'` gate).
+- Map pieces colour by **output bucket**, not piece index — pieces
+  grouped into the same output share a colour. `drawSplitPieces`
+  takes `outputs` as a second argument.
+- Override panel collapses from per-piece to per-output cards.
+- Status bar: `"Will create N new plot(s)"` (`status_outputs`)
+  replaces the mode-specific messages. `'pending'` status (1-piece
+  result, no actual split) prompts the user; `'valid'` (≥ 2 outputs)
+  enables Continue.
+
+### Executor (`executeSplit`)
+
+Now takes `outputs: [{ pieces: [...] }]` rather than raw pieces. A
+single-piece output passes straight through; a multi-piece output is
+turf-unioned to one Feature, unpacked back to `{ outer, holes }` form
+via `_outputToStorePolygons`, and stored as a (possibly multi-polygon)
+plot. `ogfRelationId` is always null (decision F.i — split breaks the
+round-trip mapping; Brick 16 re-sync restores it).
+
+### Tradeoffs / known limits
+
+- 4+ crossings on a single ring still reject. Brick 11b #1 (multi-cut)
+  will admit them by treating each pair of crossings as its own
+  sub-cut.
+- Manual property-value overrides don't survive a re-grouping
+  dropdown change. Cheap, predictable; can revisit if it becomes
+  annoying in practice.
+
+## 0.9.0 — Land-only by default; dual-storage portion model removed
+
+Brick 12 finale. The dual-storage portion model from 12c (land/water
+property values, schema `appliesTo`, the dual-row inspector, the
+split paths in `_drawPlotPoly`/`_drawBoundaryPoly`, the `getPlotLandWater`
+/ `getBoundaryLandWater` resolvers) is replaced by a single
+project-level mode that shapes the *stored* plot geometry at creation
+time. Plots become land-only (or whatever mode the project chose),
+properties live on the single resulting polygon, and the entire
+portion-aware aggregation surface goes away.
+
+### Project mode (read-only after creation)
+
+`data.settings.landWaterMode`:
+
+- `'land_only_sea_water'` (default) — clip against sea + inland water.
+- `'land_only_sea'` — clip against sea only; inland lakes stay part
+  of the plot.
+- `'water_only'` — keep only the water portion.
+- `'combined'` — no clipping; legacy "as imported" behaviour.
+
+Picked in the new-save modal (`persistence.js#newProject`); shown
+read-only in the settings card. Save-schema bumps to `2`.
+
+### Single clipping chokepoint
+
+- `clipPolygonsToMode(polygons, mode)` in `landwater.js` is the
+  one place that knows how each mode shapes a polygon. Returns
+  `{ polygons, dropped }`; an all-water-consumed clip drops the
+  plot.
+- `createPlotMaybeClipped(meta)` in `plots.js` wraps `createPlot`
+  with the clip. Wired into every plot-creation path: Overpass
+  import (free candidates), boundary-merge subdivision (pieces +
+  remainders), wrap gap fills, and manual split. All-water imports
+  toast a "Skipped: <name> is entirely water" warning rather than
+  creating an empty plot.
+- Water cache now stores `seaGeometry` and `inlandGeometry`
+  separately (so `'land_only_sea'` clips against sea alone). The
+  merged `waterGeometry` stays as the union view used by the
+  overlay and by the other clipping modes.
+
+### One-shot reclip + migration
+
+- `migrateData(data)` in `persistence.js`: legacy `landWaterSplitEnabled`,
+  `waterDisplayMode`, `showWaterDebugOverlay`, `waterDisposition`,
+  `appliesTo` all drop. `plot.propertyValuesLand` folds into
+  `plot.propertyValues` (land wins on conflicts; water-only entries
+  drop — pre-release test data, acceptable loss). Migrated saves
+  get `landWaterMode = 'land_only_sea_water'` and are flagged for
+  reclip if a water cache exists.
+- `reclipAllPlotsToMode(mode)` in `landwater.js`: walks every plot,
+  runs its resolved geometry through `clipPolygonsToMode`, allocates
+  fresh local-id ways via `storeSubdivisionGeometry`, rewrites
+  `plot.outers`/`plot.inners`. Plots fully consumed by the clip are
+  dropped (boundary memberships rewritten; settlements re-anchored
+  via the existing `invalidateBoundaryGeometry` hook). Fires once
+  on load after migration, and is available on demand via the
+  settings card's "Re-clip existing plots" button.
+
+### Stripped (~400 LOC net deletion)
+
+- `getPlotLandWater` / `getBoundaryLandWater`, `_landWaterByPlot` /
+  `_landWaterByBoundary`, `invalidate*LandWater`,
+  `_computePlotLandWater` / `_computeBoundaryLandWater`.
+- `getPlotPortionPropertyValue` / `setPlotPortionPropertyValue` /
+  `clearPlotPortionPropertyValue`. `_portionsForPlotSchema`.
+- Dual-row `_renderPlotAreaRow` and `_renderBoundaryAreaRow` → both
+  collapse to single rows. `_renderPlotPropertyRow` loses the
+  `portion` argument; `onPlotPropertyBlur` loses the data-portion
+  routing.
+- Schema editor's "Applies to" dropdown, `PROPERTY_APPLIES_TO`
+  constant, `appliesTo` field on `createPropertySchema`.
+- Split paths in `_drawPlotPoly` and `_drawBoundaryPoly`. The water
+  layer is now just a project-level overlay
+  (`data.settings.showWaterOverlay`, default on) rather than a
+  per-plot/boundary blue fill drawn on top.
+- `setLandWaterSplitEnabled`, `setShowWaterDebugOverlay`,
+  `onLandWaterEnabledChange`, `onWaterDisplayModeChange`,
+  `onShowWaterDebugChange`. Settings card rewritten around the
+  read-only mode display, fetch button, re-clip button (only shown
+  when the mode clips), and overlay toggle.
+
+### Plot-split: land-area-weighted suggestions
+
+`_splitPieceLandAreas` in `views.js`. Under any clipping mode the
+piece geometry is already land-only, so `p.area` is used as-is.
+Under `'combined'` mode with a water cache, each piece's land area
+is computed (`turf.intersect` against the cache; subtract the water
+portion's area) so a piece that's mostly lake doesn't take a
+disproportionate share of the proportional split. Falls back to
+`p.area` if the turf op chokes.
+
+### Tradeoffs acknowledged
+
+- Strict land-on-left enforcement (inherited from v0.8.7's
+  simplification). Any coastline drawn water-on-left inverts its
+  classification for the resulting mode.
+- Re-clip via `storeSubdivisionGeometry` allocates fresh local-id
+  ways/nodes. The previous OSM refs become orphans in `data.osm`;
+  cheap leak in a single-user app, and Brick 16's re-sync compacts
+  anyway.
+- Water-only property values entered under 12c are not recoverable
+  through migration. Pre-release test data, documented loss.
+
+## 0.8.8 — Split cascade: boundaries render and area-report like plots
+
+Boundaries cascade from plots, so when the project's land/water split
+is active the boundary layer should behave the same as the plot
+layer. v0.8.7 left it as a flat dissolve that ignored the water
+cache: the boundary outline included its plots' water portions
+unconditionally, and the inspector's Area row showed a single
+combined total. Fixed.
+
+### Boundary land/water resolver (`js/landwater.js`)
+
+New `getBoundaryLandWater(b)` / `invalidateBoundaryLandWater(id)` /
+`invalidateAllBoundaryLandWater()` mirror the plot side. The
+resolver intersects `resolveBoundaryGeometry(b).feature` against
+`data.waterCache.waterGeometry` once per boundary (rather than
+re-unioning constituent plot splits), so the result stays in
+lockstep with the boundary outline the user actually sees and
+avoids paying N plot intersections when one suffices.
+
+Invalidation piggy-backs on the existing boundary geometry cache:
+`invalidateBoundaryGeometry()` in `js/boundaries.js` now also
+drops the matching boundary land/water entry, so every existing
+member-change call site picks up correctly without edits.
+`fetchAndCacheWater()` clears both caches on success.
+
+### Split-aware boundary rendering (`js/map.js`)
+
+`_drawBoundaryPoly` now mirrors `_drawPlotPoly`'s split path:
+
+- `waterDisplayMode === 'split'` (default): full boundary polygon
+  stays clickable, blue water overlay drawn on top, non-interactive.
+- `waterDisplayMode === 'removed'`: clipped to the land portion.
+  Boundaries fully under water hide entirely (same noise-reduction
+  call as v0.8.6 made for plots).
+- Split off / no water cache: unchanged.
+
+### Land + Water rows on boundary Area (`js/views.js`)
+
+`_renderBoundaryAreaRow` mirrors `_renderPlotAreaRow`. When the
+split is visible on this boundary, the row splits into two
+read-only "Area / Land" + "Area / Water" rows with percentage
+hints. Otherwise one combined row, as before. Other boundary
+properties (Population, custom numerics) still render as single
+rows — per-portion aggregation across arbitrary properties remains
+the deferred Brick 12d work.
+
+### Tradeoff acknowledged
+
+The resolver clips the dissolved boundary feature directly against
+the water cache instead of unioning the already-computed per-plot
+splits. The two approaches agree when boundary geometry is a
+faithful dissolve of its plots; if a future change introduced
+boundary-level geometry edits independent of plot membership, the
+resolver would diverge. Worth revisiting alongside Brick 12d.
+
+## 0.8.7 — Coastline closure: drop voting heuristic, stitch arcs CW
+
+The open-chain coastline closure had grown three layers of
+defensive heuristics across 12a → 12b → 12c — right-side probe
+voting, plot-centroid tiebreaker, demoted-to-tiebreaker after the
+0.8.5 archipelago bug, etc. — to handle the possibility that an
+OGF mapper might draw coastline water-on-left instead of
+land-on-left. OGF enforces land-on-left at the site level (the
+tile rendering breaks without it), so in practice the heuristic
+was insurance against a case that doesn't occur in healthy data.
+Replaced with a deterministic algorithm that trusts the
+convention.
+
+### New `_buildSeaGeometry` flow
+
+- Closed chains classified by signed area as before (CCW = island,
+  CW = inland sea).
+- Open chains are still clipped to the bbox by
+  `_clipChainToBboxAll`, giving one or more interior sub-arcs each
+  with both endpoints on a bbox edge.
+- All sub-arcs from all open chains are pooled into one list and
+  passed to a new `_stitchArcsToSeaPolygons`. From each unused
+  arc's exit, the stitcher walks the bbox perimeter CW (parameter
+  increasing on `[0, 4)`) to the nearest entry point — which may
+  belong to a *different* arc, in which case the two arcs merge
+  into one sea polygon rather than producing two overlapping
+  fragments. Any bbox corners crossed along the way are inserted.
+  Each cycle closes one polygon. CW perimeter traversal keeps
+  water on the right of travel, matching the canonical chain
+  direction → each resulting ring encloses sea.
+- Output interface unchanged: one turf Feature or null, fed into
+  the existing `_mergeAndThreshold` and per-plot intersection
+  pipeline. `data.waterCache` consumers are not affected.
+
+### Deleted
+
+- `_closeClippedSegmentAsSea` (~70 LOC of vote-counting +
+  tiebreaker logic)
+- `_closeChainAlongBbox` (close-both-ways helper)
+- `_rightSideTestPoints` (5-probe right-perpendicular sampler)
+- `_computePlotCentroids` (centroid hint for tiebreaker)
+
+`js/landwater.js` shrinks from 837 to 756 LOC.
+
+### Tradeoff (acknowledged)
+
+The voting heuristics were buying tolerance for coastlines drawn
+water-on-left. Any such section is now classified inverse (land
+and water swap). Per user: OGF rejects this at the site level so
+real data is ~99.5% canonical — good enough.
+
+## 0.8.6 — Brick 12c polish: hide water-only plots, split-aware Area, ring-bug fix
+
+Three follow-ups from user testing of v0.8.5:
+
+### Hide water-only plots when display mode is 'removed'
+
+`_drawPlotPoly` now returns early for plots that are fully under
+water (no land portion) when `waterDisplayMode === 'removed'`. Such
+plots have no effective extent in this view — rendering them as
+nothing-but-tooltip-targets was noisy.
+
+### Area schema becomes appliesTo='both' + per-portion display
+
+The virtual Area schema now ships with `appliesTo: 'both'`. When the
+split is visible on a plot, `_renderPlotAreaRow` renders two
+read-only rows — Land area and Water area — each with a small
+percentage hint ("4.2 km² 67%") so the user can see at a glance how
+the plot decomposes. User-defined numeric schemas still default to
+'land'; Area is the special case.
+
+### Coastline-ring half-flip bug
+
+User reported: a water plot containing a closed coastline ring
+showed water on half the ring and not the other half. Root cause
+was v0.8.2's unconditional plot-centroid penalty — it assumed plots
+sit on land and demoted any closure containing ≥ 70 % of plot
+centroids. For a project whose plots ARE the water (the user's
+case: water plots around an island), the centroids cluster INSIDE
+the sea closure → sea closure penalised → algorithm flipped, half
+the bbox came back classified as land.
+
+Reworked `_closeClippedSegmentAsSea` decision order:
+  1. Right-side voting (5 probe points) is the **primary** signal.
+     If one closure wins by ≥ 2 votes, that closure is sea — full
+     stop, plot-centroid never consulted. OGF enforces canonical
+     direction so this resolves cleanly almost every time.
+  2. Plot-centroid is now only the **tiebreaker** for cases where
+     right-side voting is inconclusive (tied / off-by-one).
+
+Net effect: water-heavy projects no longer trip the heuristic, and
+canonical OGF data still gets the correct closure.
+
+## 0.8.5 — Brick 12c: split-aware property values + inspector UI
+
+Property side of the land/water split. Numeric and categorical schemas
+become portion-aware in the plot inspector when a plot is showing the
+split. No boundary aggregation changes — 12d's territory.
+
+### New schema field
+
+`schema.appliesTo: 'land' | 'water' | 'both'` (default `'land'`).
+Schema editor grows a third "Applies to" dropdown between "Defined at"
+and the kind-specific fields. Existing schemas migrate to `'land'`
+implicitly (the bootstrap defaults + the read-fallback both treat
+absent `appliesTo` as land).
+
+### New per-plot storage
+
+`plot.propertyValuesLand` and `plot.propertyValuesWater`, parallel to
+the existing `plot.propertyValues`. Three helpers in `properties.js`:
+- `getPlotPortionPropertyValue(plot, schemaId, portion)` — read with
+  migration fallback (land/'both' schemas fall back to legacy
+  `propertyValues` when the portion is unset; water has no fallback).
+- `setPlotPortionPropertyValue(plot, schemaId, portion, value)`.
+- `clearPlotPortionPropertyValue(plot, schemaId, portion)`.
+
+No auto-mirror between portions and combined: writes only touch the
+requested portion. Trade-off documented below.
+
+### Plot inspector
+
+New helper `_portionsForPlotSchema(plot, schema)` decides what rows
+to render per schema:
+- Project split off: `['combined']` (existing behaviour).
+- Plot has no water OR `waterDisplayMode === 'removed'`: `'water'`
+  schemas hide; others render `['combined']`.
+- Split visible AND `appliesTo === 'land'`:  `['land']`.
+- Split visible AND `appliesTo === 'water'`: `['water']`.
+- Split visible AND `appliesTo === 'both'`:  `['land', 'water']`.
+- Percentages always render `['combined']` in 12c (portion-aware
+  denominator resolution is a future brick).
+
+`_renderPlotPropertyRow` accepts a `portion` argument. Land/water rows
+get a coloured chip on the label ("LAND" / "WATER", green / blue) and
+their inputs carry `data-portion`. `onPlotPropertyBlur` reads
+`data-portion` and routes to the right storage via the new helpers.
+
+`_collectCategoricalValues` walks `propertyValuesLand` and
+`propertyValuesWater` too, so typeahead suggestions reflect values
+entered on portions.
+
+`deletePropertySchema` cascade also clears the per-portion storages.
+
+### Known trade-off (12c v1)
+
+Because there's no auto-mirror, toggling `waterDisplayMode` between
+'split' and 'removed' may show different values for the same schema:
+- 'split' view reads portion storage (with fallback for land).
+- 'removed' view reads `propertyValues` only.
+
+If a user enters values in split view, then switches to the removed
+view, those values are not visible (but ARE persisted). Switching
+back restores them. Boundary aggregation (still reading
+`propertyValues` until 12d) likewise won't see portion-only edits
+yet. Documented limitation; 12d revisits with portion-aware
+aggregation.
+
+## 0.8.4 — Brick 12b correction: water-display toggle is map-wide, not per-plot
+
+v0.8.3 wired the "hide water from this plot" control onto every
+individual plot's inspector. That was wrong: hiding water on the
+map is a VIEW preference, not plot data — toggling it once should
+affect every plot. Per-plot toggling would be tedious for a
+fully-loaded country (the user's flag).
+
+Replaced with a single map-wide setting:
+  • `data.settings.waterDisplayMode: 'split' | 'removed'` (default
+    `'split'`). Persisted in the save.
+  • Surfaced as one checkbox in the Land / water settings card:
+    "Hide water from plots (clip plot rendering to land only)".
+  • `_drawPlotPoly` now reads `getSetting('waterDisplayMode', ...)`
+    instead of `plot.waterDisposition`.
+
+Removed from v0.8.3:
+  • `_renderPlotWaterDispositionBlock` + `onPlotWaterDispositionChange`
+    in views.js (and the call site in the plot detail modal).
+  • `plot_detail.landwater_*` l10n keys.
+
+Future data views (Brick 13 choropleth, etc.) will each get their
+own equivalent view-level toggle — this brick just handles the main
+map view.
+
+Existing saves: any `plot.waterDisposition` fields written by v0.8.3
+are now inert (not read, not deleted). Harmless legacy data.
+
+## 0.8.3 — Brick 12b: per-plot land/water intersection + map render
+
+The cached water geometry (12a) now hits the plots. When the project
+split is on, every plot is intersected against `data.waterCache` and
+rendered as land + water portions on the main map. The intersection
+is memoised in-memory keyed by plot id; persisted storage is 12c's
+problem.
+
+### `js/landwater.js` additions
+
+- `_computePlotLandWater(plot)` — converts the plot's polygons to
+  turf `[lng,lat]`, intersects with the cached water MultiPolygon,
+  returns `{ land, water }` Features. Either side can be null when
+  the plot is fully on land (water = null) or fully in water (land
+  = null).
+- `getPlotLandWater(plot)` — memoised accessor.
+- `invalidatePlotLandWater(plotId)` / `invalidateAllPlotLandWater()`
+  — bust the cache. Wired from:
+  - successful `fetchAndCacheWater` → invalidate all.
+  - plot delete → invalidate that id.
+  - plot split (`executeSplit`) → invalidate all.
+  - boundary-import subdivision → invalidate all.
+- `landWaterFeatureToLeafletPolygons(feature)` — turf feature →
+  Leaflet `[lat,lng]` polygon coords.
+
+### Map rendering (`_drawPlotPoly`)
+
+When the project split is enabled AND a water cache exists AND the
+plot has a water portion:
+- Default (`waterDisposition === 'split'`): the full plot polygon
+  stays as the clickable main shape (selection, tooltip), with a
+  blue water overlay (`interactive: false`) drawn on top of it.
+- `waterDisposition === 'removed'`: the plot's rendered polygon is
+  CLIPPED to the land portion only — clicking water no longer
+  selects the plot, because conceptually the water isn't part of
+  this plot anymore.
+
+Plots fully on land render normally regardless of the toggle.
+
+### Per-plot `waterDisposition` field
+
+New plot field, default `'split'`. Persisted alongside other plot
+data. A small `<select>` in the plot detail modal (only shown when
+the project split is enabled AND the plot has water) flips between
+`'split'` and `'removed'`. Plot-detail blob redraws the main map
+immediately on change.
+
+### Out of scope for 12b (still 12c / 12d)
+
+- Property values per portion.
+- Boundary aggregation considering portions.
+- `plotArea` honouring `waterDisposition === 'removed'`.
+- Persisting the per-plot intersection cache (so it survives a
+  reload without recomputation). For now the cache rebuilds on
+  first redraw after load.
+
+## 0.8.2 — Brick 12a fixes: robust sea-side detection + longer Overpass timeout
+
+v0.8.1 fixed the direction-sign bug but the user's second dataset
+still came back with "everything except closed coastline rings is
+water." Root cause: the single right-side test point only works when
+the source data follows OSM convention (land on left). Some OGF
+mappers draw coastlines with water-on-left; for those, the
+"right-side" probe lands on the LAND side and the closure check picks
+the land closure as "sea". The result: SEA = entire bbox minus the
+small CCW-island patches.
+
+### Multi-point voting + plot-centroid robustness anchor
+
+`_closeClippedSegmentAsSea` now scores each candidate closure rather
+than picking the first to contain a single test point:
+
+1. **Multi-point vote (primary):** 5 right-side probe points along
+   the chain (instead of 1 at the midpoint). Each adds +1 to the
+   closure containing it. Reduces sensitivity to one-vertex
+   weirdness at the midpoint.
+2. **Plot-centroid penalty (anchor):** plots are almost always on
+   land, so if a closure contains ≥ 70% of the project's plot
+   centroids, it's almost certainly the LAND closure — heavy penalty
+   (-100 score). Recovers from non-canonical coastline direction in
+   the source data without the user needing to flip a setting.
+
+Probe step bumped from 0.5% to 1% of the bbox diagonal so the test
+points stay well clear of the chain itself.
+
+Limitation: if a project has zero plots, the plot-centroid anchor
+contributes nothing and we fall back to chain-direction alone. New
+projects fetching coastlines before importing plots will still be
+vulnerable to reversed-direction OGF data.
+
+### Longer Overpass timeout
+
+`[timeout:60]` → `[timeout:120]`. v0.8.1 was timing out for the
+user's bbox. Two minutes is still well under typical browser
+fetch limits and matches what coastline-heavy queries actually need.
+
+## 0.8.1 — Brick 12a fixes: sea-side direction sign, multi-segment chains, non-blocking fetch
+
+Three correctness + UX bugs surfaced by the first real-world test:
+
+### Sea-side direction sign was inverted
+
+`_rightSideTestPoint` rotated the chain direction the wrong way, so
+the "right side" test point landed on the LAND side. The closure
+check then picked the polygon containing land, and "sea" came back as
+the entire bbox minus the small land patch. Reported as "only a small
+bit of land is marked as such in the corner, but the entire rest of
+the bbox is marked as water."
+
+Fix: rotation in the (lng, lat) plane is `right = (-dlng, +dlat)`,
+not `(+dlng, -dlat)`. One-line sign flip.
+
+### Multi-segment chain clipping
+
+When a coastline enters and exits the bbox more than once (peninsula
+running along the edge, archipelago, big island chain), each
+entry/exit pair forms its own sea polygon. v0.8.0's
+`_clipChainToBbox` took only the LONGEST inside subchain and dropped
+the rest — meaning a chain with 4 bbox crossings would only have 1
+of its 2 sea polygons built.
+
+Fix: `_clipChainToBboxAll` returns **every** inside subchain.
+`_buildSeaGeometry` iterates them and closes each via
+`_closeClippedSegmentAsSea` independently; the union step
+naturally merges overlapping closures.
+
+### Non-blocking fetch
+
+v0.8.0's pipeline ran the turf-heavy build steps synchronously after
+the Overpass `await`, freezing the UI for the duration. For a typical
+country bbox with many lakes + complex coastlines, that's 5–30
+seconds of frozen browser.
+
+Fixes:
+- `fetchAndCacheWater` `await _yield()`s between every major stage
+  (parse → sea-build → inland-build → merge+threshold) so the UI can
+  paint and the user gets a visible busy state instead of a frozen
+  screen.
+- `_unionAll` → `_unionAllAsync` uses **binary-tree union** (halve N
+  per level instead of linear-accumulate), which both reduces total
+  work from O(N²) to O(N log N) and yields between tree levels.
+- Inland-water + island-subtraction loops also yield periodically.
+- `_landwaterFetchInFlight` flag prevents re-entrancy; the settings
+  card disables the Fetch button and swaps its label to "Fetching…"
+  (`landwater_fetching_btn`) for the duration.
+
+The fetch is still bounded by Overpass response time and turf's
+clipping cost, but the browser stays responsive and the user can
+see that something is happening.
+
+## 0.8.0 — Brick 12a: coastline + inland-water ingest
+
+First step toward the project-wide land/water split. **No** plot UI
+or property changes yet — those land in 12c+12d. This brick lays the
+geometry pipeline + settings UI + a debug overlay so the result can
+be visually verified before plot-level work begins.
+
+### New module: `js/landwater.js`
+
+`fetchAndCacheWater()` is the public entry point. Pipeline:
+
+1. **Project bbox** — union of every plot's `plotBounds`, padded 10%.
+   No plots = "no plots" toast, abort.
+2. **Overpass query** scoped to that bbox for
+   `way["natural"="coastline"]`, `way["natural"="water"]`, and
+   `relation["natural"="water"]`. Standard `(._;>;);out body;` close
+   pulls every referenced node.
+3. **Sea geometry from coastlines.** Stitch ways sharing endpoint
+   nodes into chains preserving node-order direction (land-on-left).
+   - **Closed chains**: orientation test (signed area in lng/lat).
+     CCW → island (land inside; subtracted from sea later).
+     CW → inland sea (sea inside; added to sea).
+   - **Open chains**: clip to bbox, then build sea polygon via a
+     bbox-edge walk on the chain's right side. We construct both
+     candidate closures (CW / CCW around the bbox from chain end to
+     chain start) and pick whichever contains a small right-side
+     test point at the chain's midpoint.
+4. **Inland water from `natural=water`.** Self-closed ways become
+   simple polygons. `type=multipolygon` relations get outer + inner
+   ring assembly via `groupWaysIntoRings`, with inner rings assigned
+   to the outer they sit inside.
+5. **Merge + threshold.** Union sea + inland → split into connected
+   components → drop any below `data.settings.minWaterBodyAreaM2`
+   (default 1 hectare). The contiguous-merge happens BEFORE the
+   threshold, so a tiny puddle abutting a big lake stays (they merged
+   first) but two tiny abutting puddles both go (their merged area
+   still doesn't clear the bar). Matches the user-requested rule.
+6. **Persist.** `data.waterCache = { fetchedAt, bbox, waterGeometry,
+   bodyCount }`. Cache survives save/reload via the standard
+   `EMPTY_DATA` shape in `persistence.js` + `core.js`.
+
+### Settings UI
+
+`renderSettings` grew a "Land / water split" card:
+- Enable checkbox (auto-triggers first fetch on first enable).
+- Minimum water body area input (m², default 10000 = 1 ha).
+- Fetch button + last-cache summary.
+- "Show fetched water on map (debug)" toggle — when on, the cached
+  geometry renders as a translucent blue fill UNDER the plot layer
+  on the main map, so geometry can be eyeballed for correctness.
+
+### Map: debug water overlay
+
+`_mapWaterDebugLayer` added to `redrawMap`, inserted at the bottom
+of the layer stack (under plots, boundaries, settlements). Reads
+`data.waterCache.waterGeometry` (GeoJSON `[lng,lat]` per turf
+convention) and translates each polygon to Leaflet `[lat,lng]`.
+
+### v1 limitations (acknowledged for follow-up)
+
+- Open coastline chains entirely INSIDE the bbox (no bbox-edge
+  endpoints) are skipped — flagged as incomplete OGF data.
+- Coastline-to-bbox-corner edge cases use a 1e-7 tolerance.
+- Reverse-attaching ways during chain stitching is skipped so the
+  land-on-left direction stays intact; malformed coastline ways
+  that need reversal will be left as separate chains.
+
+## 0.7.4 — Brick 11 follow-up: draggable ghosts, hover preview, ends-aware append
+
+Three cut-editor polish items from review:
+
+### Draggable ghost midpoints
+
+v0.7.3's ghost dots inserted a vertex on click. To then move it the
+user had to click-then-grab, which felt clumsy. Ghosts are now
+`draggable: true` — dragging one inserts a vertex at the ghost's
+position on `dragstart` and the same icon trails the cursor until
+release, so insert + position happen in one gesture. A plain click
+(no drag) still inserts at the midpoint; Leaflet's marker drag
+threshold disambiguates the two, so there's no need to detect a
+"drag distance" manually.
+
+### Ghosts follow during real-vertex drag
+
+Real cut vertices and ghost midpoints now live in separate Leaflet
+layers (`_splitVertexLayer` and `_splitGhostLayer`). `_refreshSplitMap`
+decides per layer whether to freeze or redraw on each tick:
+
+- **real-vertex drag**: freeze the real-vertex layer (rebuilding it
+  would destroy the marker mid-drag) but **redraw the ghost layer**
+  so midpoint dots track the moving vertex's adjacent segments.
+- **ghost drag**: freeze both — the dragged ghost is also the live
+  position indicator, and other ghosts/real vertices haven't moved.
+- **no drag**: redraw both.
+
+### Cursor preview line
+
+`mousemove` / `mouseout` are wired through `ensureSplitMap` to a new
+`_splitHoverLayer`. While the cursor is over the map in cut phase and
+no drag is in progress, a thin dashed line connects the cut's
+**nearest endpoint** (start or end) to the cursor. Clicking empty
+map now extends from that nearest endpoint too — so the preview line
+matches the click result. `start`-end appends become `unshift`s
+when the user is closer to the start; trivial cases (≤1 vertex)
+always append.
+
+Status hint text in `plot_split.edit_hint` updated to mention the
+nearest-endpoint behaviour and the ghost-drag shortcut.
+
+## 0.7.3 — Brick 11 follow-up: cut-end crash, ghost dots, override phase
+
+### Crash fix
+
+v0.7.2's `_onSplitVertexDragEnd` accessed `e.latlng.lat`. Leaflet
+fires `dragend` with no `latlng` field on the event (only `drag`
+events have it); accessing `e.latlng.lat` therefore threw
+`TypeError: e.latlng is undefined`. The throw left
+`_splitDraggingVertex` set, which made `_refreshSplitMap` skip
+`drawSplitVertices` forever — so subsequent vertices added via map
+click silently failed to render (the "added node doesn't appear"
+bug). Fix: read the marker's position from `e.target.getLatLng()`
+instead. Same fix applied defensively to `_onSplitVertexDrag` (it
+worked before, but the consistency matters).
+
+### Ghost midpoint markers
+
+Real cut vertices get a draggable accent dot. Now there's a smaller,
+half-transparent "ghost" dot at the midpoint of every segment between
+consecutive real vertices. Clicking a ghost inserts a real vertex at
+that midpoint position — a more discoverable way to add nodes than
+clicking the cut polyline itself (which still works). Implemented as
+extra `L.marker`s in the same `_splitVertexLayer`; the ghost's class
+is `.split-vertex-ghost`. `zIndexOffset: -100` keeps real markers on
+top when the two visually overlap.
+
+### Property overrides on their own screen
+
+The redistribution table cells were unusably narrow at 360-px panel
+width (input boxes too small to fit values like "6577"). Reworked
+the flow into two phases:
+
+- **Cut phase** (Phase 1): the panel shows the pieces list (names +
+  areas) plus a *read-only* "Proposed values" table — plain text
+  cells, comfortably fits the 360-wide panel. Header's primary
+  button reads "Continue →" and is enabled once the cut is valid.
+
+- **Override phase** (Phase 2): the cut is locked (no vertex markers,
+  no map-click append, no ghost dots). The panel now shows a vertical
+  stack of per-piece cards. Each card has a header (swatch + name
+  input + area readout) and a body listing every applicable property
+  as a labeled, full-width input. Header's primary button reads
+  "Confirm split". A `← Back to cut` link at the top of the panel
+  returns to phase 1; the manual-override Set preserves any cells the
+  user has already edited if they go back, tweak the cut, and continue
+  again.
+
+The phase is part of `_splitState`. `onSplitPrimaryAction()` dispatches
+the header button — Continue → onSplitContinue (phase: 'override'),
+Confirm → onSplitConfirm (executes the split). Status bar at the
+bottom-left of the map gets a new override-phase message
+("Cut locked · adjusting per-piece property values").
+
+### Out of scope (filed for a future brick)
+
+- **Multi-cut.** Drawing more than one cut on a single plot and
+  grouping cut pieces together to produce more than 2 result plots.
+  Needs a state model with an array of cuts and a region-grouping UI.
+- **Cut on a non-contiguous plot.** Currently a non-contig plot is
+  forced into component mode (each island becomes its own piece).
+  Letting the user draw a cut across one or more islands without
+  splitting the rest needs `computeCutLineSplit` reworked to handle
+  multiple outer rings.
+
+## 0.7.2 — Brick 11 polish: takeover view, editable cut, live preview
+
+The split editor moves out of the 820-px modal into a full-viewport
+takeover (`#split-overlay`). Header bar with Cancel / title /
+Confirm; below it a 2-column grid with the map on the left and an
+info panel on the right. Esc closes.
+
+### Live preview (one screen instead of two)
+
+The step 1 / step 2 modal flow is gone. Every cut change triggers
+`_recomputeSplit` immediately:
+- runs the geometry engine (cut-line or component),
+- re-seeds non-overridden cells in the redistribution table with the
+  area-proportional proposal,
+- redraws map layers + repaints the panel.
+
+When the cut isn't valid yet (< 2 vertices, doesn't cross, crosses
+> 2 times, degenerate), the panel shows a yellow / red status block
+explaining what's wrong and Confirm stays disabled.
+
+For non-contiguous plots, the pieces draw immediately on open — no
+drawing needed.
+
+### Editable cut polyline
+
+The cut is now interactive:
+- **click empty map** → append a vertex (today's behaviour)
+- **click on the cut polyline** → insert a vertex at the closest
+  segment (point-segment-distance ranking)
+- **drag a vertex marker** → reposition live; pieces update each
+  drag tick
+- **right-click a vertex** → remove
+
+Vertex markers use `L.divIcon` (`.split-vertex`) so they look like
+solid accent-coloured dots with a white border. Bubbling to the map
+is suppressed so a drag-end at empty space doesn't ALSO append a new
+vertex.
+
+During a drag, the vertex layer is NOT re-rendered (the marker being
+dragged would be destroyed mid-gesture). Only the cut polyline and
+pieces preview update. On dragend, a full refresh restores the marker
+layer with the new vertex order.
+
+### User-override stability
+
+When the geometry shifts under a live drag, recomputed area-
+proportional proposals would normally overwrite anything the user
+typed into the redistribution table. `manualOverrides` tracks every
+`pieceIdx:schemaId` cell the user has touched; the recompute skips
+those cells. Same for `manualNames` on piece-name inputs.
+
+### Map layering (`js/map.js`)
+
+Four feature groups instead of three:
+- `_splitPlotLayer`   — baseline polygon (faded once pieces draw)
+- `_splitPiecesLayer` — proposed pieces (interactive: false so
+  clicks pass through to the cut polyline / map)
+- `_splitCutLayer`    — cut polyline (dashed full + solid in-polygon
+  overlay; both clickable for vertex insertion)
+- `_splitVertexLayer` — draggable vertex markers
+
+`_splitMapBoundsSet` ensures `fitBounds` runs exactly once per open
+so the map doesn't re-centre on every cut tweak. Reset in
+`destroySplitMap`.
+
+### Out of scope (for now)
+
+- Midpoint "ghost" markers à la Leaflet.Editable. Click-on-segment
+  insertion covers the same use case with one fewer marker per
+  segment.
+- Multi-vertex selection / box-drag.
+- Snap-to-existing-vertex when inserting.
+
+## 0.7.1 — Sliver fix at cut-line intersection points
+
+Cutting a plot then viewing a parent boundary that contains both new
+pieces left a hairline sliver visible along the cut. Root cause:
+`turf.lineSliceAlong` rebuilds each slice endpoint independently from
+the line's parameterisation, so the arc's endpoint at the q crossing
+and the cut's endpoint at q disagreed by ~1e-12. piece1's ring side
+landed at q-via-ring while its cut side landed at q-via-cut — a tiny
+triangle either retained or removed depending on orientation. Leaflet
+rendering and `plotArea` tolerated the mismatch fine, but
+`turf.union` (run by `resolveBoundaryGeometry` when a parent
+boundary dissolves its members) latched onto it and produced a
+visible artefact along the seam.
+
+Fix in `computeCutLineSplit`: after slicing, force both arcs' AND
+the cut's endpoints to the SAME canonical `p.pt` / `q.pt` values
+(the original intersection coordinates from `turf.lineIntersect`).
+The two pieces now share pixel-identical coords along the cut, and
+the parent boundary dissolves cleanly.
+
+## 0.7.0 — Brick 11: manual plot split editor (Phase 4 opens)
+
+Phase 4 (plot operations) kicks off. A new `Split…` button on the plot
+detail modal opens a two-step wizard for cutting one plot into many.
+
+### Two split flavours
+
+- **Cut-line** (contiguous plots) — user clicks vertices on an inset
+  Leaflet map; the cut polyline must enter and exit the outer ring
+  exactly twice. The plot becomes two new plots joined along the cut.
+- **Component** (non-contiguous plots) — each polygon in
+  `resolvePlotGeometry().polygons` becomes its own new plot. No
+  drawing needed; the modal opens in this mode automatically when the
+  plot has more than one ring. (Cut-line on non-contiguous plots is
+  out of scope for v1 — split into pieces first, then cut individual
+  pieces.)
+
+### Geometry engine — `js/split.js` (new)
+
+- `computeCutLineSplit(plot, latLngs)` — Turf-powered. Uses
+  `lineIntersect` to find ring crossings (deduped for vertex-coincident
+  hits), `nearestPointOnLine` to project both intersections onto the
+  ring AND the cut line, then `lineSliceAlong` to extract the two ring
+  arcs plus the in-polygon cut segment. Two output polygons are built
+  by joining each arc with the cut (in either orientation). Holes ride
+  along with whichever piece contains their first vertex.
+- `computeComponentSplit(plot)` — splits `resolvePlotGeometry`'s
+  pre-computed polygons array.
+- `executeSplit(plot, pieces, names, propertyValuesPerPiece)` — writes
+  new geometry via the existing `storeSubdivisionGeometry` (Brick 5),
+  creates new plots, copies redistributed property values onto them,
+  rewrites every boundary's `members` to swap the old plot for the new
+  ids, and calls `invalidateBoundaryGeometry()` (which transitively
+  re-anchors settlements via `reconcileSettlementParents()`).
+
+Local OSM ids for the new geometry use the existing negative-id pool
+(`nextLocalOsmId`). New plots get `ogfRelationId = null` — the split
+breaks the round-trip mapping until Brick 16's re-sync.
+
+### Property redistribution — `proposePlotSplitValues` (in `properties.js`)
+
+Seeds the redistribution table with sensible defaults per kind:
+
+- **numeric** (sum AND weighted_average) — area-proportional split.
+  Phase 7 will add density-aware nuance via the population estimator;
+  the design assumes calculated properties (Brick 19) will carry
+  densities, so splitting raw numerics linearly is the right v1.
+- **categorical** — every piece inherits the parent value verbatim.
+- **percentage** — `mode: 'percent'` is inherited as-is on every piece
+  (the linked raw side re-derives from the smaller effective
+  denominator at read time). `mode: 'raw'` is split area-proportionally.
+
+The function skips schemas not applicable at `'plot'` level, the
+virtual Area schema, and any schema the parent doesn't have a stored
+value for. Output: `{ [schemaId]: [valueForPiece0, ...] }`.
+
+### Modal UI — `js/views.js`
+
+Two-step flow inside a single 820px modal:
+
+- **Step 1 — Input.** Inset map shows the plot. Cut mode: each map
+  click adds a vertex (cross-hair cursor, accent-coloured polyline
+  with dashed style + small dot markers). Component mode is a
+  no-drawing confirmation step. `Preview →` is disabled until the cut
+  has ≥2 vertices.
+- **Step 2 — Preview + redistribute.** Pieces drawn in distinct
+  rotating colours (`_SPLIT_PIECE_COLORS`); seam from the cut overlaid
+  in dark dashed line so users can see what got joined where. Below
+  the map: per-piece name input + area read-out. Then the
+  redistribution table — one row per applicable schema with a parent-
+  value reference column and an editable cell per piece. Percentage
+  cells include the right unit suffix (`%` or the denominator's unit
+  for raw mode). `← Back` preserves the cut.
+
+### Plumbing
+
+- `js/map.js` gains `ensureSplitMap` / `drawSplitPlot` / `drawSplitCut`
+  / `drawSplitPieces` / `destroySplitMap` (mirroring the existing
+  detail-map helpers). Three feature-group layers stack: plot baseline,
+  cut overlay, pieces.
+- `js/split.js` is registered after `subdivide.js` in
+  `appymanager.html` so it can reuse `storeSubdivisionGeometry`.
+- `Split…` button on the plot detail modal sits between `Delete plot`
+  and `Close`.
+- L10n strings live under `plot_split.*`. Error messages cover every
+  guard the geometry engine raises (`cut_does_not_cross`,
+  `cut_crosses_too_many_times`, `degenerate_split`, …).
+- Styling in `styles.css` under `.split-*`.
+
+### Out of scope for Brick 11
+
+- Cut-line on non-contiguous plots (rejected with a translated toast).
+- Holes crossed by the cut don't sub-split — they ride along with the
+  first-vertex's containing piece. Real-world OGF plots rarely have
+  holes that the user wants to cut through.
+- Population estimator integration (Brick 17) — areas are shown per
+  piece, but no density-aware redistribution yet.
+- Weighted-average redistribution gets the same area-proportional
+  treatment as `sum` per the agreed Phase 7 plan; densities will live
+  as calculated properties (Brick 19) so this works out.
+
 ## 0.6.1 — Rollup hint visual weight matches input
 v0.6.0's `.plot-property-rollup-hint` was 11px / `--text-dim` — read
 too muted next to the 13px / `--text` input. Bumped to 13px / `--text`

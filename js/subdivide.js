@@ -345,10 +345,10 @@ function executeSubdivisionPlan(plan, nodes, ways, target) {
     candidateToPlotIds.get(candidate).push(plotId);
   };
 
-  // 2. Free candidates → normal plots
+  // 2. Free candidates → normal plots (clipped to project mode)
   for (const c of plan.free) {
-    const p = createPlot({ name: c.name, ogfRelationId: c.ogfRelationId, outers: c.outers, inners: c.inners });
-    trackPlot(c, p.id);
+    const p = createPlotMaybeClipped({ name: c.name, ogfRelationId: c.ogfRelationId, outers: c.outers, inners: c.inners });
+    if (p) trackPlot(c, p.id);  // null = clip dropped it; warning toasted by helper
   }
 
   // 3. Splits: store clipped geometry, create sub-plots, queue parent for removal.
@@ -364,18 +364,19 @@ function executeSubdivisionPlan(plan, nodes, ways, target) {
     for (const piece of pieces) {
       const polys = _normalizeFeature(piece.feature);
       const { outers, inners } = storeSubdivisionGeometry(polys);
-      const p = createPlot({ name: piece.name, ogfRelationId: piece.ogfRelationId, outers, inners });
+      const p = createPlotMaybeClipped({ name: piece.name, ogfRelationId: piece.ogfRelationId, outers, inners });
+      if (!p) continue;  // dropped by clip
       trackPlot(piece.candidate, p.id);
       ownReplacements.push(p.id);
     }
     if (remainder) {
       const polys = _normalizeFeature(remainder.feature);
       const { outers, inners } = storeSubdivisionGeometry(polys);
-      const remP = createPlot({ name: remainder.name, ogfRelationId: null, outers, inners, flags: ['subdivision_remainder'] });
+      const remP = createPlotMaybeClipped({ name: remainder.name, ogfRelationId: null, outers, inners, flags: ['subdivision_remainder'] });
       // Remainders aren't tied to any incoming candidate (so the boundary
       // wrap step skips them) but they ARE part of the parent's coverage,
       // so they belong in the replacement list for the parent's old members.
-      ownReplacements.push(remP.id);
+      if (remP) ownReplacements.push(remP.id);
     }
 
     parentReplacements.set(parentPlot.id, ownReplacements);
@@ -394,8 +395,8 @@ function executeSubdivisionPlan(plan, nodes, ways, target) {
       const { outers, inners } = storeSubdivisionGeometry(polys);
       const baseName = w.candidate.name || '';
       const gapName  = baseName ? baseName + ' ' + t('import.remainder') : t('import.remainder');
-      const p = createPlot({ name: gapName, ogfRelationId: null, outers, inners, flags: ['subdivision_remainder'] });
-      trackPlot(w.candidate, p.id);
+      const p = createPlotMaybeClipped({ name: gapName, ogfRelationId: null, outers, inners, flags: ['subdivision_remainder'] });
+      if (p) trackPlot(w.candidate, p.id);
     }
   }
 

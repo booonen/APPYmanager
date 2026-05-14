@@ -424,6 +424,31 @@ input[type="checkbox"]:checked::after {
   font-size: 10px; color: var(--text-muted); background: var(--bg-input);
   padding: 1px 6px; border-radius: 10px; flex-shrink: 0; font-family: var(--font-mono);
 }
+/* Brick 12c: portion chip on plot-property rows. Two color variants so
+   the eye distinguishes Land from Water at a glance when both rows
+   render for the same schema (appliesTo='both'). */
+.property-portion-chip {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 1px 6px;
+  border-radius: 4px;
+  margin-left: 6px;
+  flex-shrink: 0;
+}
+.property-portion-chip.portion-land  { background: rgba(146,169,86,0.18); color: #a3c267; }
+.property-portion-chip.portion-water { background: rgba(59,130,198,0.18); color: #5fa5e0; }
+
+/* Brick 12c v0.8.6: percentage hint sits next to the area readout on
+   the per-portion Area rows ("4.2 km² 67%"). Dimmer than the value
+   itself so the eye reads the area first. */
+.plot-property-pct {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-left: 6px;
+}
 /* Properties-tab Behaviour column chip — surfaces a non-default root level
    (e.g. "Defined at: Province"). Tinted with the accent so the eye picks it
    out from the unit chip above. */
@@ -859,3 +884,401 @@ summary.map-toolbar-control:hover {
   background: var(--bg-input); border: 1px solid var(--border);
   border-radius: 10px; padding: 1px 7px; flex-shrink: 0;
 }
+
+/* ============================================================
+   PLOT SPLIT OVERLAY (Brick 11)
+   ============================================================
+   Full-viewport takeover for the split editor. Header bar on top,
+   then a 2-column grid with the map on the left and the info panel
+   on the right. Hidden by default; .open switches it to grid.
+*/
+.split-overlay {
+  position: fixed; inset: 0; z-index: 1500;
+  background: var(--bg);
+  display: none;
+  grid-template-rows: auto 1fr;
+}
+.split-overlay.open { display: grid; }
+.split-overlay-header {
+  display: flex; align-items: center; gap: 16px;
+  padding: 12px 20px; border-bottom: 1px solid var(--border);
+  background: var(--bg-raised);
+  flex-shrink: 0;
+}
+.split-overlay-title {
+  flex: 1; text-align: center; font-weight: 600; font-size: 15px;
+  font-family: var(--font-display); color: var(--text);
+}
+.split-overlay-body {
+  display: grid; grid-template-columns: 1fr 360px;
+  min-height: 0; overflow: hidden;
+}
+.split-overlay-map-wrap {
+  position: relative; min-width: 0; height: 100%;
+}
+#split-map { width: 100%; height: 100%; cursor: crosshair; }
+.split-overlay-status {
+  position: absolute; bottom: 16px; left: 16px; z-index: 500;
+  background: rgba(15,17,23,0.94);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 12px;
+  font-size: 12px; color: var(--text);
+  display: flex; align-items: center; gap: 12px;
+  max-width: calc(100% - 32px);
+  pointer-events: none;
+}
+.split-overlay-status-warn  { border-color: var(--warning); color: var(--warning); }
+.split-overlay-status-error { border-color: var(--accent);  color: var(--accent); }
+.split-overlay-panel {
+  border-left: 1px solid var(--border);
+  background: var(--bg);
+  overflow-y: auto; overflow-x: hidden;
+  padding: 16px;
+  display: flex; flex-direction: column; gap: 16px;
+}
+.split-overlay-section {
+  display: flex; flex-direction: column; gap: 8px;
+}
+.split-overlay-section-label {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+.split-overlay-pieces-list { display: flex; flex-direction: column; gap: 6px; }
+.split-overlay-piece-row {
+  display: flex; align-items: center; gap: 8px;
+}
+.split-overlay-piece-swatch {
+  width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0;
+  border: 1px solid rgba(0,0,0,0.4);
+}
+.split-overlay-piece-name { flex: 1; min-width: 0; }
+.split-overlay-piece-area {
+  font-size: 12px; color: var(--text-muted); min-width: 70px; text-align: right;
+  white-space: nowrap;
+}
+.split-overlay-warn {
+  font-size: 13px; line-height: 1.5;
+  border: 1px solid var(--warning); color: var(--warning);
+  background: rgba(229,180,52,0.08);
+  border-radius: var(--radius); padding: 8px 12px;
+}
+.split-overlay-error {
+  font-size: 13px; line-height: 1.5;
+  border: 1px solid var(--accent); color: var(--accent);
+  background: rgba(193,39,45,0.08);
+  border-radius: var(--radius); padding: 8px 12px;
+}
+.split-overlay-cut-controls {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  font-size: 13px; color: var(--text-muted);
+}
+.split-overlay-hint-edit {
+  font-size: 11px; line-height: 1.5;
+  color: var(--text-muted);
+  border-top: 1px dashed var(--border); padding-top: 12px;
+}
+.split-overlay-hint-edit code {
+  font-family: var(--font-mono); font-size: 10px;
+  background: var(--bg-input); padding: 0 4px; border-radius: 3px;
+}
+
+/* Redistribution table — reused inside the overlay's panel */
+.split-redist-table {
+  width: 100%; border-collapse: collapse; font-size: 13px;
+}
+.split-redist-table th, .split-redist-table td {
+  padding: 6px 8px; border-bottom: 1px solid var(--border); text-align: left;
+  vertical-align: middle;
+}
+.split-redist-table th {
+  font-weight: 500; font-size: 11px; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--text-muted);
+}
+.split-prop-name { white-space: nowrap; }
+.split-unit-chip {
+  font-size: 11px; color: var(--text-muted); margin-left: 4px;
+}
+.split-parent-cell { color: var(--text-muted); white-space: nowrap; }
+.split-cell-input {
+  width: 100%; min-width: 0; padding: 4px 8px;
+  font-family: var(--font-mono); font-size: 13px;
+}
+.split-cell-pct { position: relative; display: block; }
+.split-cell-pct .split-cell-input { padding-right: 26px; }
+.split-cell-suffix {
+  position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+  font-size: 11px; color: var(--text-muted); pointer-events: none;
+}
+
+/* Override phase: per-piece cards (each piece gets a full-width card
+   with name, area, and all property inputs vertically — avoids the
+   cramped 4-column table layout). */
+.split-override-pieces { display: flex; flex-direction: column; gap: 14px; }
+.split-override-piece {
+  background: rgba(255,255,255,0.025);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.split-override-piece-header {
+  display: flex; align-items: center; gap: 8px;
+  padding-bottom: 8px; border-bottom: 1px solid var(--border);
+}
+.split-override-piece-name { flex: 1; min-width: 0; }
+.split-override-piece-area {
+  font-size: 12px; color: var(--text-muted); white-space: nowrap;
+}
+.split-override-piece-properties {
+  display: flex; flex-direction: column; gap: 10px;
+}
+.split-override-prop-row {
+  display: flex; flex-direction: column; gap: 4px;
+}
+.split-override-prop-row > label {
+  font-size: 12px; color: var(--text-muted); font-weight: 500;
+}
+.split-override-prop-row .split-cell-input { width: 100%; }
+.split-override-prop-row .split-cell-pct { display: block; }
+.split-override-back {
+  background: none; border: none; color: var(--accent);
+  padding: 0; font-size: 13px; cursor: pointer;
+  text-align: left; align-self: flex-start;
+}
+.split-override-back:hover { text-decoration: underline; }
+
+/* Read-only redist table (cut phase, compact text). Slightly tighter
+   padding than the editable variant since cells are plain text. */
+.split-redist-table-readonly th,
+.split-redist-table-readonly td { padding: 4px 6px; }
+
+/* Vertex markers — editable cut polyline (Leaflet DivIcons) */
+.split-vertex {
+  background: var(--accent);
+  border: 2px solid #fff;
+  border-radius: 50%;
+  width: 12px !important; height: 12px !important;
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.5), 0 1px 3px rgba(0,0,0,0.4);
+  cursor: grab;
+}
+.split-vertex:hover { background: #e93b41; }
+.split-vertex.dragging { cursor: grabbing; }
+
+/* Ghost (midpoint) markers — show that you can insert a vertex between
+   two existing ones. Click inserts at the midpoint; drag inserts at
+   dragstart and the same icon trails the cursor until release. */
+.split-vertex-ghost {
+  background: rgba(193,39,45,0.45);
+  border: 1.5px solid rgba(255,255,255,0.7);
+  border-radius: 50%;
+  width: 10px !important; height: 10px !important;
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.35);
+  cursor: grab;
+}
+.split-vertex-ghost:hover {
+  background: var(--accent);
+  border-color: #fff;
+}
+.split-vertex-ghost.dragging { cursor: grabbing; }
+
+/* Per-map tile-toggle button (v0.9.2). Sits in the top-right of every
+   Leaflet map. Click hides / shows the OGF basemap tiles so the user
+   can read polygon outlines without the basemap competing. State is
+   per-map and in-memory only — toggling one map doesn't affect others. */
+.map-tile-toggle a {
+  font-size: 16px;
+  line-height: 26px;
+  width: 26px;
+  height: 26px;
+  text-align: center;
+  text-decoration: none;
+  color: #333;
+  display: block;
+}
+.map-tile-toggle.off a {
+  opacity: 0.45;
+  text-decoration: line-through;
+}
+
+/* Cuts list (Brick 11b #1). Each row is one cut polyline. Click the
+   row to make it active; the active row gets an accent border + bold
+   name. Hover triggers a map-side highlight via onSplitHoverCut. */
+.split-cuts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.split-cuts-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm, 4px);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  background: var(--bg);
+}
+.split-cuts-row:hover {
+  background: var(--bg-elev, rgba(255,255,255,0.04));
+}
+.split-cuts-row.active {
+  border-color: var(--accent);
+  background: var(--accent-glow, rgba(193,39,45,0.10));
+}
+.split-cuts-row.active .split-cuts-name {
+  font-weight: 600;
+}
+.split-cuts-name {
+  flex: 1;
+  font-size: 13px;
+}
+.split-cuts-vcount {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.split-cuts-del {
+  width: 22px; height: 22px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 22px;
+  padding: 0;
+  border-radius: var(--radius-sm, 4px);
+}
+.split-cuts-del:hover:not(:disabled) {
+  background: var(--danger-glow, rgba(193,39,45,0.15));
+  color: var(--accent);
+}
+.split-cuts-del:disabled { opacity: 0.3; cursor: not-allowed; }
+.split-cuts-add { margin-bottom: 6px; }
+.btn.btn-xs {
+  padding: 2px 6px;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+/* Plots multi-select (Brick 11c) ---------------------------- */
+.plots-select-col {
+  width: 32px;
+  text-align: center;
+  padding: 0 4px;
+}
+.plots-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 4px);
+  background: var(--bg-elev, rgba(255,255,255,0.04));
+}
+.plots-toolbar-count {
+  font-size: 13px;
+  color: var(--text);
+  flex: 1;
+}
+.data-table tr.row-selected {
+  background: var(--accent-glow, rgba(193,39,45,0.08));
+}
+.map-merge-floater {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 4px);
+  background: var(--bg-elev, rgba(255,255,255,0.04));
+  font-size: 12px;
+}
+.map-merge-floater-disabled { opacity: 0.7; }
+
+/* Merge modal ----------------------------------------------- */
+.merge-modal-section {
+  margin-bottom: 14px;
+}
+.merge-modal-section-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+  display: block;
+}
+.merge-modal-section input[type="text"],
+.merge-modal-section textarea {
+  width: 100%;
+  max-width: 100%;
+}
+.merge-sources-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 160px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 4px);
+  padding: 6px;
+  background: var(--bg);
+}
+.merge-source-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+}
+.merge-source-name { flex: 1; }
+.merge-source-area { color: var(--text-muted); font-size: 12px; }
+.merge-warn {
+  margin-top: 6px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm, 4px);
+  background: var(--warn-glow, rgba(217,165,30,0.10));
+  color: var(--warn, #b08020);
+  font-size: 12px;
+}
+.merge-boundaries-auto {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+.merge-boundary-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.merge-boundary-row label {
+  min-width: 120px;
+  font-size: 13px;
+}
+.merge-props {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.merge-prop-row {
+  display: grid;
+  grid-template-columns: 1fr 1.2fr 1fr;
+  gap: 10px;
+  align-items: center;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 4px);
+  background: var(--bg);
+}
+.merge-prop-name { font-size: 13px; }
+.merge-prop-unit { color: var(--text-muted); font-size: 11px; }
+.merge-prop-sources { font-size: 11px; color: var(--text-muted); }
+.merge-prop-input { display: flex; align-items: center; }
+.merge-cell-input { width: 100%; }
+.merge-percent-cell {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+}
+.merge-percent-suffix { font-size: 11px; color: var(--text-muted); }

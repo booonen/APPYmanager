@@ -37,7 +37,7 @@
       <div class="nav-item" data-tab="settings" onclick="switchTab('settings')"><span class="nav-icon">⚙</span> <span data-t="nav.settings">Settings</span></div>
       <div class="nav-item" data-tab="import-export" onclick="switchTab('import-export')"><span class="nav-icon">⇅</span> <span data-t="nav.import_export">Import / Export</span></div>
       <div class="spacer"></div>
-      <div style="padding:8px 16px;font-size:10px;color:var(--text-muted);font-family:var(--font-mono);opacity:0.6">v0.6.1</div>
+      <div style="padding:8px 16px;font-size:10px;color:var(--text-muted);font-family:var(--font-mono);opacity:0.6">v0.11.2</div>
     </nav>
     <div class="content">
 
@@ -112,6 +112,21 @@
   </div>
 </div>
 
+<div class="split-overlay" id="split-overlay">
+  <div class="split-overlay-header">
+    <button class="btn" id="split-cancel-btn" onclick="closeSplitOverlay()" data-t="plot_split.cancel_btn">← Cancel</button>
+    <div class="split-overlay-title" id="split-title"></div>
+    <button class="btn btn-primary" id="split-confirm-btn" onclick="onSplitPrimaryAction()" disabled data-t="plot_split.continue_btn">Continue →</button>
+  </div>
+  <div class="split-overlay-body">
+    <div class="split-overlay-map-wrap">
+      <div id="split-map"></div>
+      <div class="split-overlay-status" id="split-status"></div>
+    </div>
+    <div class="split-overlay-panel" id="split-panel"></div>
+  </div>
+</div>
+
 <div class="toast-container" id="toast-container"></div>
 <input type="file" id="file-input" accept=".json" style="display:none" onchange="handleImport(event)">
 
@@ -125,6 +140,9 @@
 <script src="js/properties.js"></script>
 <script src="js/overpass.js"></script>
 <script src="js/subdivide.js"></script>
+<script src="js/split.js"></script>
+<script src="js/merge.js"></script>
+<script src="js/landwater.js"></script>
 <script src="js/persistence.js"></script>
 <script src="js/ui.js"></script>
 <script src="js/map.js"></script>

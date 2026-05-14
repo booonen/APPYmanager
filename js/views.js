@@ -38,6 +38,34 @@ function renderDashboard() {
 
 let _plotsSort = { column: 'name', direction: 'asc' };
 let _plotsSearch = '';
+// Brick 11c: multi-selection for the merge gesture. Set is shared by
+// the Plots table (checkbox column) and the map (shift+click). The
+// helpers below keep both views in sync.
+let _plotsSelection = new Set();
+
+function isPlotSelected(id) { return _plotsSelection.has(id); }
+function selectedPlotIds()   { return Array.from(_plotsSelection); }
+function togglePlotSelection(id) {
+  if (_plotsSelection.has(id)) _plotsSelection.delete(id);
+  else                          _plotsSelection.add(id);
+  _refreshPlotSelectionVisuals();
+}
+function setPlotSelection(ids) {
+  _plotsSelection = new Set(ids || []);
+  _refreshPlotSelectionVisuals();
+}
+function clearPlotSelection() { setPlotSelection([]); }
+
+// Repaints the Plots table body (so checkboxes + toolbar stay in sync)
+// and the map (so highlight rings update). Used by both views and the
+// map-side multi-select handlers.
+function _refreshPlotSelectionVisuals() {
+  if (typeof renderPlotsToolbar === 'function') renderPlotsToolbar();
+  if (typeof renderPlotsBody === 'function')    renderPlotsBody();
+  // redrawMap pulls in renderMapToolbar (where the merge floater lives)
+  // AND re-strokes the plot polygons with the new multi-select state.
+  if (typeof redrawMap === 'function')          redrawMap();
+}
 
 function renderPlots() {
   const el = document.getElementById('plots-content');
@@ -70,9 +98,15 @@ function renderPlots() {
         autocomplete="off"
         style="max-width:320px">
     </div>
+    <div id="plots-toolbar"></div>
     <table class="data-table">
       <thead>
         <tr>
+          <th class="plots-select-col">
+            <input type="checkbox" id="plots-select-all"
+              onchange="onPlotsSelectAllToggle(this.checked)"
+              title="${esc(t('plots.select_all'))}">
+          </th>
           ${plotsSortHeader('name', t('plots.col_name'))}
           ${plotsSortHeader('area', t('plots.col_area'))}
           ${plotsSortHeader('ogfId', t('plots.col_ogf_id'))}
@@ -81,7 +115,36 @@ function renderPlots() {
       <tbody id="plots-tbody"></tbody>
     </table>
     <div id="plots-empty-result"></div>`;
+  renderPlotsToolbar();
   renderPlotsBody();
+}
+
+// Compact toolbar above the Plots table: selection count + Merge / Clear.
+function renderPlotsToolbar() {
+  const el = document.getElementById('plots-toolbar');
+  if (!el) return;
+  const n = _plotsSelection.size;
+  if (n === 0) { el.innerHTML = ''; return; }
+  el.innerHTML = `
+    <div class="plots-toolbar">
+      <span class="plots-toolbar-count">${t('plots.selected_count', { n })}</span>
+      <button class="btn btn-sm btn-primary"
+        onclick="openMergeModal()"
+        ${n < 2 ? 'disabled' : ''}>${t('plots.merge_btn')}</button>
+      <button class="btn btn-sm"
+        onclick="clearPlotSelection()">${t('plots.clear_selection')}</button>
+    </div>
+  `;
+}
+
+function onPlotsSelectAllToggle(checked) {
+  if (!checked) { clearPlotSelection(); return; }
+  // Select all in current filtered view.
+  const q = _plotsSearch.trim().toLowerCase();
+  const ids = (data.plots || [])
+    .filter(p => !q || (p.name || '').toLowerCase().includes(q))
+    .map(p => p.id);
+  setPlotSelection(ids);
 }
 
 function plotsSortHeader(col, label) {
@@ -119,12 +182,28 @@ function renderPlotsBody() {
     const hasFlags = p.flags && p.flags.length > 0;
     const flagBadge = hasFlags ? ` <span class="plot-flag-badge" title="${p.flags.map(f => t('plot_detail.flag_' + f)).join('; ')}">⚠</span>` : '';
     const nameCell = (p.name ? esc(p.name) : `<span class="text-muted">${t('plots.unnamed')}</span>`) + flagBadge;
-    return `<tr class="row-click" onclick="openPlotDetail('${esc(p.id)}')">
+    const checked = isPlotSelected(p.id) ? 'checked' : '';
+    const rowCls  = 'row-click' + (isPlotSelected(p.id) ? ' row-selected' : '');
+    return `<tr class="${rowCls}" onclick="openPlotDetail('${esc(p.id)}')">
+      <td class="plots-select-col" onclick="event.stopPropagation()">
+        <input type="checkbox" ${checked}
+          onchange="togglePlotSelection('${esc(p.id)}')">
+      </td>
       <td>${nameCell}</td>
       <td class="mono">${formatArea(plotArea(p))}</td>
       <td class="mono">${p.ogfRelationId != null ? p.ogfRelationId : '<span class="text-muted">—</span>'}</td>
     </tr>`;
   }).join('');
+
+  // Header "select all" tri-state: tick if every visible row is
+  // selected, unchecked if none, indeterminate if partial.
+  const selAll = document.getElementById('plots-select-all');
+  if (selAll) {
+    const visIds = list.map(p => p.id);
+    const selectedHere = visIds.filter(id => _plotsSelection.has(id)).length;
+    selAll.checked = visIds.length > 0 && selectedHere === visIds.length;
+    selAll.indeterminate = selectedHere > 0 && selectedHere < visIds.length;
+  }
 
   if (emptyEl) {
     emptyEl.innerHTML = (q && list.length === 0)
@@ -146,6 +225,255 @@ function onPlotsSort(col) {
     _plotsSort.direction = 'asc';
   }
   renderPlots();
+}
+
+// ============================================================
+// MERGE MODAL (Brick 11c)
+// ============================================================
+// Opened from either the Plots table toolbar or the map's merge
+// floater. Shows source plots, merged-plot name/notes inputs, a
+// boundary-membership reconciler (per-type dropdowns for conflicts),
+// and an editable property-reconciliation row per applicable schema.
+// Confirm calls `executePlotMerge`.
+
+let _mergeState = null;
+
+function openMergeModal() {
+  const ids = selectedPlotIds();
+  if (ids.length < 2) { toast(t('plots.merge_need_two'), 'warning'); return; }
+  if (typeof computePlotMerge !== 'function') { toast(t('plots.merge_no_engine'), 'error'); return; }
+  const pre = computePlotMerge(ids);
+  if (pre.error) { toast(t('plot_merge.error_' + pre.error) || pre.error, 'error'); return; }
+
+  _mergeState = {
+    ids,
+    name:  pre.proposedName,
+    notes: pre.proposedNotes,
+    propertyValues:     { ...pre.proposedValues },
+    boundarySelections: {},
+    sourcePlots:        pre.sourcePlots,
+    sourceAreas:        pre.sourceAreas,
+    isAdjacent:         pre.isAdjacent,
+    conflicts:          pre.conflicts,
+    autoMemberships:    pre.autoMemberships,
+  };
+  // Default each conflict's selection to the boundary holding the most
+  // source-area, so the modal opens with a reasonable pre-pick.
+  for (const c of (_mergeState.conflicts || [])) {
+    _mergeState.boundarySelections[c.typeId] = _defaultBoundaryForConflict(c);
+  }
+
+  _renderMergeModal();
+}
+
+function _defaultBoundaryForConflict(conflict) {
+  // Pick the boundary in the conflict whose member-overlap with the
+  // source plots covers the largest total source area.
+  const sourceIds = new Set(_mergeState.ids);
+  let best = conflict.boundaryIds[0] || '';
+  let bestArea = -1;
+  for (const bId of conflict.boundaryIds) {
+    const b = (data.boundaries || []).find(x => x.id === bId);
+    if (!b) continue;
+    let area = 0;
+    for (const m of (b.members || [])) {
+      if (m.kind !== 'plot' || !sourceIds.has(m.id)) continue;
+      const idx = _mergeState.ids.indexOf(m.id);
+      if (idx >= 0) area += (_mergeState.sourceAreas[idx] || 0);
+    }
+    if (area > bestArea) { best = bId; bestArea = area; }
+  }
+  return best;
+}
+
+function _renderMergeModal() {
+  if (!_mergeState) return;
+  const s = _mergeState;
+  const n = s.ids.length;
+
+  // Source plots list.
+  const sourcesHtml = s.sourcePlots.map((p, i) => `
+    <div class="merge-source-row">
+      <span class="merge-source-name">${p.name ? esc(p.name) : `<span class="text-muted">${t('plots.unnamed')}</span>`}</span>
+      <span class="merge-source-area mono">${esc(formatArea(s.sourceAreas[i] || 0))}</span>
+    </div>
+  `).join('');
+
+  const adjacencyHint = s.isAdjacent
+    ? ''
+    : `<div class="merge-warn">${t('plot_merge.non_adjacent_hint')}</div>`;
+
+  // Boundary memberships.
+  let boundariesHtml = '';
+  const autoNames = (s.autoMemberships || [])
+    .map(bId => (data.boundaries || []).find(b => b.id === bId))
+    .filter(Boolean)
+    .map(b => esc(b.name || `(${getBoundaryTypeName(b.typeId)})`));
+  if (autoNames.length > 0) {
+    boundariesHtml += `<div class="merge-boundaries-auto">${t('plot_merge.boundaries_auto')}: ${autoNames.join(', ')}</div>`;
+  }
+  for (const c of (s.conflicts || [])) {
+    const typeName = getBoundaryTypeName(c.typeId) || c.typeId;
+    const opts = c.boundaryIds.map(bId => {
+      const b = (data.boundaries || []).find(x => x.id === bId);
+      const label = b ? (b.name || `(${typeName})`) : bId;
+      const sel = s.boundarySelections[c.typeId] === bId ? ' selected' : '';
+      return `<option value="${esc(bId)}"${sel}>${esc(label)}</option>`;
+    }).join('');
+    const noneSel = !s.boundarySelections[c.typeId] ? ' selected' : '';
+    boundariesHtml += `
+      <div class="merge-boundary-row">
+        <label>${esc(typeName)}:</label>
+        <select onchange="onMergeBoundaryChange('${esc(c.typeId)}', this.value)">
+          <option value=""${noneSel}>${t('plot_merge.boundary_none')}</option>
+          ${opts}
+        </select>
+      </div>
+    `;
+  }
+  if (!boundariesHtml) {
+    boundariesHtml = `<div class="text-dim" style="font-size:12px">${t('plot_merge.boundaries_none')}</div>`;
+  }
+
+  // Property reconciliation rows.
+  const schemas = (data.propertySchemas || [])
+    .filter(sc => appliesAtLevel(sc, 'plot') && !isVirtualPropertyId(sc.id))
+    .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  const propRows = schemas.map(schema => {
+    const sources = s.sourcePlots.map(p => getPlotPropertyValue(p, schema.id));
+    const hasAny = sources.some(v => v !== undefined && v !== null && v !== '');
+    if (!hasAny) return '';
+    const sourcesDisplay = sources.map((v, i) =>
+      v === undefined || v === null || v === ''
+        ? '—'
+        : esc(_splitFormatParentValue(schema, v))
+    ).join(' · ');
+    const merged = s.propertyValues[schema.id];
+    const inputHtml = _renderMergeInputCell(schema, merged);
+    return `
+      <div class="merge-prop-row">
+        <div class="merge-prop-name">${esc(schema.name)}${schema.unit ? ` <span class="merge-prop-unit">${esc(schema.unit)}</span>` : ''}</div>
+        <div class="merge-prop-sources mono">${sourcesDisplay}</div>
+        <div class="merge-prop-input">${inputHtml}</div>
+      </div>
+    `;
+  }).filter(Boolean).join('');
+  const propSection = propRows
+    ? `<div class="merge-props">${propRows}</div>`
+    : `<div class="text-dim" style="font-size:12px">${t('plot_merge.no_props')}</div>`;
+
+  const body = `
+    <div class="merge-modal-section">
+      <div class="merge-modal-section-label">${t('plot_merge.sources_label')}</div>
+      <div class="merge-sources-list">${sourcesHtml}</div>
+      ${adjacencyHint}
+    </div>
+    <div class="merge-modal-section">
+      <label class="merge-modal-section-label">${t('plot_merge.name_label')}</label>
+      <input type="text" id="merge-name" value="${esc(s.name)}"
+        oninput="_mergeState && (_mergeState.name = this.value)">
+    </div>
+    <div class="merge-modal-section">
+      <label class="merge-modal-section-label">${t('plot_merge.notes_label')}</label>
+      <textarea id="merge-notes" rows="2"
+        oninput="_mergeState && (_mergeState.notes = this.value)">${esc(s.notes)}</textarea>
+    </div>
+    <div class="merge-modal-section">
+      <div class="merge-modal-section-label">${t('plot_merge.boundaries_label')}</div>
+      ${boundariesHtml}
+    </div>
+    <div class="merge-modal-section">
+      <div class="merge-modal-section-label">${t('plot_merge.properties_label')}</div>
+      ${propSection}
+    </div>
+  `;
+  const footer = `
+    <button class="btn" onclick="closeMergeModal()">${t('btn.cancel')}</button>
+    <button class="btn btn-primary" onclick="onMergeConfirm()">${t('plot_merge.confirm_btn', { n })}</button>
+  `;
+  openModal(t('plot_merge.title', { n }), body, footer);
+}
+
+function _renderMergeInputCell(schema, val) {
+  const base = `data-schema-id="${esc(schema.id)}" data-kind="${schema.kind}"`;
+  if (schema.kind === 'numeric') {
+    const n = Number(val);
+    const display = Number.isFinite(n) ? formatPropertyNumber(n) : '';
+    return `<input type="number" step="any" class="merge-cell-input" value="${esc(display)}" ${base} oninput="onMergePropertyInput(this)">`;
+  }
+  if (schema.kind === 'categorical') {
+    return `<input type="text" class="merge-cell-input" value="${esc(val || '')}" ${base} oninput="onMergePropertyInput(this)">`;
+  }
+  if (schema.kind === 'percentage') {
+    const obj = (val && typeof val === 'object') ? val : { mode: 'percent', value: '' };
+    const mode = obj.mode === 'raw' ? 'raw' : 'percent';
+    const n = Number(obj.value);
+    const display = Number.isFinite(n) ? formatPropertyNumber(n) : '';
+    const suffix = mode === 'percent' ? '%' : (findPropertySchema(schema.denominatorPropertyId)?.unit || '');
+    return `
+      <span class="merge-percent-cell">
+        <input type="number" step="any" class="merge-cell-input"
+          value="${esc(display)}" ${base} data-mode="${mode}"
+          oninput="onMergePropertyInput(this)">
+        <span class="merge-percent-suffix">${esc(suffix || '')}</span>
+      </span>
+    `;
+  }
+  return '';
+}
+
+function onMergeBoundaryChange(typeId, value) {
+  if (!_mergeState) return;
+  _mergeState.boundarySelections[typeId] = value || '';
+}
+
+function onMergePropertyInput(inputEl) {
+  if (!_mergeState) return;
+  const schemaId = inputEl.dataset.schemaId;
+  const kind     = inputEl.dataset.kind;
+  const raw      = inputEl.value;
+  if (raw === '' || raw == null) { delete _mergeState.propertyValues[schemaId]; return; }
+  if (kind === 'numeric') {
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return;
+    const schema = findPropertySchema(schemaId);
+    _mergeState.propertyValues[schemaId] = schema?.autoRound ? Math.round(n) : n;
+    return;
+  }
+  if (kind === 'categorical') {
+    _mergeState.propertyValues[schemaId] = raw;
+    return;
+  }
+  if (kind === 'percentage') {
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return;
+    const mode = inputEl.dataset.mode === 'raw' ? 'raw' : 'percent';
+    _mergeState.propertyValues[schemaId] = { mode, value: n };
+    return;
+  }
+}
+
+function onMergeConfirm() {
+  if (!_mergeState) return;
+  const s = _mergeState;
+  if (typeof executePlotMerge !== 'function') {
+    toast(t('plots.merge_no_engine'), 'error');
+    return;
+  }
+  const newId = executePlotMerge(
+    s.ids, s.name, s.notes, s.propertyValues, s.boundarySelections
+  );
+  if (!newId) { toast(t('plot_merge.error_execute'), 'error'); return; }
+  closeMergeModal();
+  clearPlotSelection();
+  refreshAll();
+  redrawMapPlots();
+  toast(t('plot_merge.success_toast', { n: s.ids.length }), 'success');
+}
+
+function closeMergeModal() {
+  _mergeState = null;
+  closeModal();
 }
 
 // ============================================================
@@ -1602,6 +1930,12 @@ function renderSettings() {
     `<option value="${l.code}"${l.code === _lang ? ' selected' : ''}>${esc(l.name)}</option>`
   ).join('');
   const snapVal = getSetting('snapToleranceM', 10);
+  const lwMode    = getSetting('landWaterMode', 'land_only_sea_water');
+  const lwMinArea = Number(getSetting('minWaterBodyAreaM2', 10000)) || 0;
+  const lwOverlay = !!getSetting('showWaterOverlay', true);
+  const lwSummary = (typeof getWaterCacheSummary === 'function') ? getWaterCacheSummary() : null;
+  const lwBusy    = (typeof isLandWaterFetchInFlight === 'function') && isLandWaterFetchInFlight();
+  const lwClips   = lwMode !== 'combined';
 
   const defaultArea = getSetting('defaultSearchArea', []);
   const areaRows = defaultArea.map((r, i) => `
@@ -1634,6 +1968,34 @@ function renderSettings() {
       <div id="settings-dsa-rows" class="import-rows" style="margin-bottom:8px">${areaRows}</div>
       <button class="btn btn-sm" onclick="addDefaultSearchAreaRow()">+ ${t('import.add_row')}</button>
     </div>
+    <div class="ie-card">
+      <h3>${t('settings.landwater_title')}</h3>
+      <p>${t('settings.landwater_desc')}</p>
+      <div style="margin-top:10px">
+        <div class="text-dim" style="font-size:12px;margin-bottom:2px">${t('settings.landwater_mode_label')}</div>
+        <div class="mono">${esc(t('save_mgr.new_mode_' + lwMode))}</div>
+      </div>
+      <div class="flex" style="align-items:center;gap:8px;margin-top:14px">
+        <span>${t('settings.landwater_min_area')}:</span>
+        <input type="number" min="0" step="1000"
+          value="${esc(lwMinArea)}"
+          onchange="onMinWaterBodyAreaChange(this.value)"
+          style="max-width:140px">
+        <span class="text-dim">${t('settings.landwater_min_area_unit')}</span>
+      </div>
+      <div class="flex" style="align-items:center;gap:8px;margin-top:10px;flex-wrap:wrap">
+        <button class="btn btn-sm" onclick="onFetchWaterClick()"${lwBusy ? ' disabled' : ''}>${lwBusy ? t('settings.landwater_fetching_btn') : t('settings.landwater_fetch_btn')}</button>
+        ${lwClips ? `<button class="btn btn-sm" onclick="onReclipPlotsClick()" ${lwSummary ? '' : 'disabled'} title="${esc(t('settings.landwater_reclip_help'))}">${t('settings.landwater_reclip_btn')}</button>` : ''}
+        ${lwSummary ? `<span class="text-dim" style="font-size:12px">${t('settings.landwater_cache_summary', {
+          when: new Date(lwSummary.fetchedAt).toLocaleString(),
+          n: lwSummary.bodyCount
+        })}</span>` : `<span class="text-dim" style="font-size:12px">${t('settings.landwater_no_cache')}</span>`}
+      </div>
+      <label class="flex" style="align-items:center;gap:8px;margin-top:10px">
+        <input type="checkbox" ${lwOverlay ? 'checked' : ''} onchange="onShowWaterOverlayChange(this.checked)">
+        <span>${t('settings.landwater_overlay_label')}</span>
+      </label>
+    </div>
     <div class="ie-card" style="border-color:var(--danger,#7a1a1a)">
       <h3 style="color:var(--accent)">${t('settings.flush_title')}</h3>
       <p>${t('settings.flush_desc')}</p>
@@ -1647,6 +2009,33 @@ function onSnapToleranceChange(val) {
   data.settings = data.settings || {};
   data.settings.snapToleranceM = n;
   save();
+}
+
+// Land/water settings handlers (v0.9.0)
+function onMinWaterBodyAreaChange(val) {
+  setMinWaterBodyAreaM2(val);
+}
+
+function onFetchWaterClick() {
+  fetchAndCacheWater();
+}
+
+function onShowWaterOverlayChange(checked) {
+  setShowWaterOverlay(!!checked);
+}
+
+function onReclipPlotsClick() {
+  if (typeof reclipAllPlotsToMode !== 'function') return;
+  if (!data.waterCache || !data.waterCache.waterGeometry) {
+    toast(t('landwater.toast_reclip_no_cache'), 'warning');
+    return;
+  }
+  const mode = getSetting('landWaterMode', 'land_only_sea_water');
+  const res = reclipAllPlotsToMode(mode);
+  save();
+  toast(t('landwater.toast_reclipped', { kept: res.kept, dropped: res.dropped }), 'success');
+  if (typeof redrawMap === 'function') redrawMap();
+  renderSettings();
 }
 
 function _readDefaultSearchAreaRows() {
@@ -2141,8 +2530,9 @@ function openPlotDetail(plotId) {
     </div>` : ''}
     <div id="plot-detail-map" style="height:240px;margin-top:12px;border-radius:var(--radius);border:1px solid var(--border);overflow:hidden"></div>
   `, `
-    <button class="btn btn-danger" style="margin-right:auto" onclick="onPlotDetailDelete()">${t('plot_detail.delete_btn')}</button>
-    <button class="btn" onclick="closePlotDetail()">${t('btn.close')}</button>
+    <button class="btn btn-danger" onclick="onPlotDetailDelete()">${t('plot_detail.delete_btn')}</button>
+    <button class="btn" onclick="onPlotDetailSplit()">${t('plot_detail.split_btn')}</button>
+    <button class="btn" style="margin-left:auto" onclick="closePlotDetail()">${t('btn.close')}</button>
   `);
 
   const modalEl = document.getElementById('modal');
@@ -2250,9 +2640,6 @@ function _renderPlotPropertyRows(plot) {
   }
 
   // Recursively render a parent's percentage children, grandchildren, etc.
-  // All nested rows share one indent — visual chain comes from ordering
-  // (each descendant renders directly after its parent). The ancestors
-  // set guards against any cycle that schema validation might have missed.
   const renderChildren = (parentId, ancestors) => {
     if (ancestors.has(parentId)) return '';
     const next = new Set(ancestors);
@@ -2288,17 +2675,21 @@ function _renderPlotPropertyRows(plot) {
 }
 
 function _renderPlotAreaRow(plot) {
-  const a = (typeof plotArea === 'function') ? plotArea(plot) : 0;
-  const formatted = (typeof formatArea === 'function') ? formatArea(a) : '—';
-  return `<div class="plot-property-row plot-property-row-readonly" data-area-row="1">
-    <div class="plot-property-label">
-      <span class="plot-property-name">${t('plot_detail.area_label')}</span>
-      <span class="property-unit-chip">${t('plot_detail.computed_chip')}</span>
-    </div>
-    <div class="plot-property-input">
-      <span class="plot-property-readonly-value mono">${esc(formatted)}</span>
-    </div>
-  </div>`;
+  const total = (typeof plotArea === 'function') ? plotArea(plot) : 0;
+  const fmt = (typeof formatArea === 'function')
+    ? (n) => formatArea(n) : (n) => String(n);
+  const baseRow = (labelChip, value) => `
+    <div class="plot-property-row plot-property-row-readonly" data-area-row="1">
+      <div class="plot-property-label">
+        <span class="plot-property-name">${t('plot_detail.area_label')}</span>
+        ${labelChip}
+      </div>
+      <div class="plot-property-input">
+        <span class="plot-property-readonly-value mono">${esc(value)}</span>
+      </div>
+    </div>`;
+
+  return baseRow(`<span class="property-unit-chip">${t('plot_detail.computed_chip')}</span>`, fmt(total));
 }
 
 // Wrap an <input>'s HTML in a `.input-with-suffix` frame. The suffix
@@ -2312,9 +2703,6 @@ function _inputWithSuffix(inputHtml, suffix) {
 
 function _renderPlotPropertyRow(plot, schema, isNested) {
   const stored = getPlotPropertyValue(plot, schema.id);
-  // No more label-side unit chip — the unit lives inside the input as a
-  // suffix (see _inputWithSuffix). Read-only system rows (Plot area)
-  // still carry a label chip for "computed" — handled in _renderPlotAreaRow.
   const label = `<div class="plot-property-label">
     <span class="plot-property-name">${esc(schema.name)}</span>
   </div>`;
@@ -2482,15 +2870,17 @@ function _renderBoundaryPropertyRows(boundary) {
 }
 
 function _renderBoundaryAreaRow(boundary) {
-  const a = (typeof boundaryArea === 'function') ? boundaryArea(boundary) : 0;
-  const formatted = (typeof formatArea === 'function') ? formatArea(a) : '—';
+  const total = (typeof boundaryArea === 'function') ? boundaryArea(boundary) : 0;
+  const fmt = (typeof formatArea === 'function')
+    ? (n) => formatArea(n) : (n) => String(n);
+
   return `<div class="plot-property-row plot-property-row-readonly" data-area-row="1">
     <div class="plot-property-label">
       <span class="plot-property-name">${t('plot_detail.area_label')}</span>
       <span class="property-unit-chip">${t('plot_detail.computed_chip')}</span>
     </div>
     <div class="plot-property-input">
-      <span class="plot-property-readonly-value mono">${esc(formatted)}</span>
+      <span class="plot-property-readonly-value mono">${esc(fmt(total))}</span>
     </div>
   </div>`;
 }
@@ -2686,19 +3076,17 @@ function _refreshAllBoundaryRollups() {
 // order.
 function _collectCategoricalValues(schemaId, currentVal) {
   const counts = new Map(); // canonicalised value → count
-  for (const plot of (data.plots || [])) {
-    const v = plot.propertyValues?.[schemaId];
+  const tally = (v) => {
     if (typeof v === 'string' && v.trim()) {
       const key = v.trim();
       counts.set(key, (counts.get(key) || 0) + 1);
     }
+  };
+  for (const plot of (data.plots || [])) {
+    tally(plot.propertyValues?.[schemaId]);
   }
   for (const b of (data.boundaries || [])) {
-    const v = b.propertyValues?.[schemaId];
-    if (typeof v === 'string' && v.trim()) {
-      const key = v.trim();
-      counts.set(key, (counts.get(key) || 0) + 1);
-    }
+    tally(b.propertyValues?.[schemaId]);
   }
   if (typeof currentVal === 'string' && currentVal.trim()) {
     const key = currentVal.trim();
@@ -2786,11 +3174,8 @@ function onPlotPropertyBlur(inputEl) {
     save();
     _refreshDependentPercentageRows(schemaId);
   } else if (kind === 'categorical') {
-    if (raw === '' || raw == null) {
-      clearPlotPropertyValue(plot, schemaId);
-    } else {
-      setPlotPropertyValue(plot, schemaId, raw);
-    }
+    if (raw === '' || raw == null) clearPlotPropertyValue(plot, schemaId);
+    else                            setPlotPropertyValue(plot, schemaId, raw);
     save();
   }
 }
@@ -3470,4 +3855,1074 @@ function deleteProperty(id) {
     renderProperties();
     renderDashboard();
   });
+}
+
+// ============================================================
+// PLOT SPLIT OVERLAY (Brick 11)
+// ============================================================
+// Full-viewport takeover (#split-overlay in appymanager.html) — NOT a
+// modal — so the map fills the screen. Layout: header bar on top with
+// Cancel / title / Confirm; below it a 2-column grid (map on the
+// left, info panel on the right). All cut edits trigger an immediate
+// recompute; the panel updates live. No separate preview step.
+//
+// Cut editing (cut mode, contiguous plots):
+//   • click empty map        → append a vertex
+//   • click on cut polyline  → insert a vertex at the click position
+//   • drag a vertex marker   → reposition live
+//   • right-click a vertex   → remove
+//   • clear-cut button       → wipes the cut
+//   • Esc                    → close overlay (same as Cancel)
+//
+// Mode is auto-picked by plot geometry: contiguous → 'cut' (needs
+// drawing); non-contiguous → 'component' (each polygon becomes its
+// own piece; no drawing needed, preview shows immediately).
+//
+// User overrides on names + redistribution cells are tracked in
+// `manualOverrides` so subsequent recomputes don't blow them away
+// when the geometry changes slightly under a live drag.
+
+let _splitState = null;
+let _splitDraggingVertex = null; // truthy while a real vertex marker is being dragged
+let _splitDraggingGhost = null;  // { vertexIdx } while a ghost marker is being dragged
+let _splitHoverLatLng   = null;  // last cursor position on the split map (for the hover-preview line)
+const _SPLIT_HOVER_PREVIEW_PX = 60; // hover-preview shows only this close to an endpoint (Brick 11b H.iii)
+
+// Pixel distance between two [lat, lng] points on the split map.
+function _latLngToContainerDistance(a, b) {
+  if (!_splitMap) return Infinity;
+  const pa = _splitMap.latLngToContainerPoint(L.latLng(a[0], a[1]));
+  const pb = _splitMap.latLngToContainerPoint(L.latLng(b[0], b[1]));
+  return Math.hypot(pa.x - pb.x, pa.y - pb.y);
+}
+
+function onPlotDetailSplit() {
+  if (!_detailPlotId) return;
+  const plot = data.plots.find(p => p.id === _detailPlotId);
+  if (!plot) return;
+  // closePlotDetail captures pending edits, nulls _detailPlotId,
+  // tears down the detail map, and closes the modal — exactly what
+  // we want before opening the takeover overlay.
+  closePlotDetail();
+  _initSplitState(plot);
+  _openSplitOverlay();
+}
+
+function _initSplitState(plot) {
+  _splitState = {
+    plotId:          plot.id,
+    // Brick 11b A.ii / #1: cuts is an array of polylines. The editor
+    // targets cuts[activeCutIdx]; only the active cut's vertices,
+    // ghosts and hover-preview are interactive (decision B.i).
+    cuts:            [[]],
+    activeCutIdx:    0,
+    // Optional per-cut hover highlight (driven by the cuts list).
+    hoverCutIdx:     null,
+    // Piece indices currently being hovered in the panel — applied as
+    // a thicker stroke on the map. Set by hovering a piece row (one
+    // entry) or an output card (every piece in that bucket).
+    hoverPieceIdxs:  null,
+    // Phase 1: 'cut' — user draws / edits cut(s) and groups pieces.
+    // Phase 2: 'override' — groupings locked, user edits per-output
+    // names + property values.
+    phase:           'cut',
+    pieces:          null,
+    cutInside:       null,
+    // Brick 11b B.i: piece → output assignment. outputs[pieceIdx] is the
+    // (zero-based) output bucket the piece belongs to. Default seeded in
+    // _recomputeSplit when pieces are first computed (one output per piece).
+    outputs:         [],
+    // names + propertyValues + manualOverrides are keyed by OUTPUT index
+    // (not piece index). manualOverrides keys are "outputIdx:schemaId".
+    names:           [],
+    propertyValues:  [],
+    manualOverrides: new Set(),
+    manualNames:     new Set(),
+    status:          null,
+    error:           null,
+  };
+}
+
+function _splitPlot() {
+  return _splitState ? data.plots.find(p => p.id === _splitState.plotId) : null;
+}
+
+// ----- Overlay open / close --------------------------------------------
+
+function _openSplitOverlay() {
+  const plot = _splitPlot();
+  if (!plot) return;
+  const overlay = document.getElementById('split-overlay');
+  if (!overlay) return;
+
+  document.getElementById('split-title').textContent = t('plot_split.title', {
+    name: plot.name || t('plots.unnamed')
+  });
+  document.getElementById('split-panel').innerHTML = '';
+  document.getElementById('split-status').textContent = '';
+  document.getElementById('split-status').className = 'split-overlay-status';
+
+  overlay.classList.add('open');
+  document.body.style.overflow = 'hidden';
+
+  ensureSplitMap('split-map', {
+    onMapClick:      _onSplitMapClick,
+    onCutLineClick:  _onSplitCutLineClick,
+    onMapMouseMove:  _onSplitMapMouseMove,
+    onMapMouseOut:   _onSplitMapMouseOut,
+  });
+  // Initial paint — also kicks off component mode's pieces immediately.
+  _recomputeSplit();
+
+  document.addEventListener('keydown', _onSplitKeyDown);
+}
+
+function closeSplitOverlay() {
+  const overlay = document.getElementById('split-overlay');
+  if (overlay) overlay.classList.remove('open');
+  document.body.style.overflow = '';
+  document.removeEventListener('keydown', _onSplitKeyDown);
+  destroySplitMap();
+  _splitState = null;
+  _splitDraggingVertex = null;
+  _splitDraggingGhost = null;
+  _splitHoverLatLng = null;
+}
+
+function _onSplitKeyDown(e) {
+  if (e.key === 'Escape') closeSplitOverlay();
+}
+
+// ----- Cut editing handlers --------------------------------------------
+
+function _onSplitMapClick(e) {
+  if (!_splitState || _splitState.phase !== 'cut') return;
+  if (_splitDraggingVertex || _splitDraggingGhost) return;
+  const verts = _splitState.cuts[_splitState.activeCutIdx];
+  const click = [e.latlng.lat, e.latlng.lng];
+  // Extend from whichever endpoint is closer. Trivial cases (≤ 1 vertex)
+  // always append. This matches the hover-line preview, which always
+  // points at the nearest endpoint.
+  if (verts.length <= 1) {
+    verts.push(click);
+  } else {
+    const dStart = _pointDistance(click, verts[0]);
+    const dEnd   = _pointDistance(click, verts[verts.length - 1]);
+    if (dStart < dEnd) verts.unshift(click);
+    else               verts.push(click);
+  }
+  _recomputeSplit();
+}
+
+function _onSplitCutLineClick(e) {
+  // Click on the cut polyline → insert a vertex at the closest segment.
+  if (!_splitState || _splitState.phase !== 'cut') return;
+  const verts = _splitState.cuts[_splitState.activeCutIdx];
+  if (verts.length < 2) return;
+  const click = [e.latlng.lat, e.latlng.lng];
+  const idx = _findClosestSegment(click, verts);
+  if (idx < 0) return;
+  verts.splice(idx + 1, 0, click);
+  L.DomEvent.stopPropagation(e);
+  _recomputeSplit();
+}
+
+// Ghost (midpoint) markers — three callbacks. A *click* without drag
+// inserts a vertex at the midpoint position. A *drag* inserts a vertex
+// at dragstart and the same ghost icon serves as the live position
+// indicator until release, so insert + position happen in one gesture.
+
+function _onSplitGhostClick(segIdx, e) {
+  if (!_splitState || _splitState.phase !== 'cut') return;
+  const verts = _splitState.cuts[_splitState.activeCutIdx];
+  if (segIdx < 0 || segIdx >= verts.length - 1) return;
+  const a = verts[segIdx], b = verts[segIdx + 1];
+  const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+  verts.splice(segIdx + 1, 0, mid);
+  L.DomEvent.stopPropagation(e);
+  _recomputeSplit();
+}
+
+function _onSplitGhostDragStart(segIdx, e) {
+  if (!_splitState || _splitState.phase !== 'cut') return;
+  const verts = _splitState.cuts[_splitState.activeCutIdx];
+  if (segIdx < 0 || segIdx >= verts.length - 1) return;
+  // Insert at the ghost's initial midpoint position. dragstart fires
+  // before any latlng update, so e.target.getLatLng() === midpoint.
+  const ll = e.target.getLatLng();
+  const insertedAt = segIdx + 1;
+  verts.splice(insertedAt, 0, [ll.lat, ll.lng]);
+  _splitDraggingGhost = { vertexIdx: insertedAt };
+  if (e.target._icon) e.target._icon.classList.add('dragging');
+  drawSplitHoverLine(null, null);
+}
+
+function _onSplitGhostDrag(segIdx, e) {
+  if (!_splitState || !_splitDraggingGhost) return;
+  const ll = e.target.getLatLng();
+  _splitState.cuts[_splitState.activeCutIdx][_splitDraggingGhost.vertexIdx] = [ll.lat, ll.lng];
+  _recomputeSplit();
+}
+
+function _onSplitGhostDragEnd(segIdx, e) {
+  if (!_splitState || !_splitDraggingGhost) return;
+  const ll = e.target.getLatLng();
+  _splitState.cuts[_splitState.activeCutIdx][_splitDraggingGhost.vertexIdx] = [ll.lat, ll.lng];
+  if (e.target._icon) e.target._icon.classList.remove('dragging');
+  _splitDraggingGhost = null;
+  _recomputeSplit();
+}
+
+function _onSplitMapMouseMove(e) {
+  if (!_splitState) return;
+  if (_splitState.phase !== 'cut') {
+    _splitHoverLatLng = null;
+    drawSplitHoverLine(null, null);
+    return;
+  }
+  if (_splitDraggingVertex || _splitDraggingGhost) {
+    // Dragging provides its own visual; hide the hover line so it
+    // doesn't double up.
+    _splitHoverLatLng = null;
+    drawSplitHoverLine(null, null);
+    return;
+  }
+  _splitHoverLatLng = [e.latlng.lat, e.latlng.lng];
+  _refreshSplitHoverLine();
+}
+
+function _onSplitMapMouseOut() {
+  _splitHoverLatLng = null;
+  drawSplitHoverLine(null, null);
+}
+
+function _refreshSplitHoverLine() {
+  if (!_splitState || !_splitHoverLatLng) {
+    drawSplitHoverLine(null, null);
+    return;
+  }
+  const verts = _splitState.cuts[_splitState.activeCutIdx];
+  if (!verts || verts.length === 0) {
+    drawSplitHoverLine(null, null);
+    return;
+  }
+  const start = verts[0];
+  const end   = verts[verts.length - 1];
+  let nearest = end;
+  let nearestDist = _pointDistance(_splitHoverLatLng, end);
+  if (verts.length > 1) {
+    const dStart = _pointDistance(_splitHoverLatLng, start);
+    if (dStart < nearestDist) { nearest = start; nearestDist = dStart; }
+  }
+  // Brick 11b H.iii: only show the preview when the cursor is actually
+  // close to a cut endpoint, so the line doesn't drag across the whole
+  // map every time the mouse moves.
+  const px = _splitMap ? _latLngToContainerDistance(nearest, _splitHoverLatLng) : Infinity;
+  if (px > _SPLIT_HOVER_PREVIEW_PX) {
+    drawSplitHoverLine(null, null);
+    return;
+  }
+  drawSplitHoverLine(nearest, _splitHoverLatLng);
+}
+
+function _onSplitVertexDragStart(i, e) {
+  _splitDraggingVertex = e.target;
+  if (e.target._icon) e.target._icon.classList.add('dragging');
+}
+
+function _onSplitVertexDrag(i, e) {
+  if (!_splitState) return;
+  // Use the marker's current position rather than e.latlng so this stays
+  // consistent with _onSplitVertexDragEnd. Leaflet's `dragend` event has
+  // no `latlng` field — accessing e.latlng there throws TypeError, which
+  // would leave `_splitDraggingVertex` set and silently skip future vertex
+  // renders (this was v0.7.2's "added node doesn't appear" bug).
+  const ll = e.target.getLatLng();
+  _splitState.cuts[_splitState.activeCutIdx][i] = [ll.lat, ll.lng];
+  _recomputeSplit();
+}
+
+function _onSplitVertexDragEnd(i, e) {
+  if (!_splitState) return;
+  const ll = e.target.getLatLng();
+  _splitState.cuts[_splitState.activeCutIdx][i] = [ll.lat, ll.lng];
+  if (e.target._icon) e.target._icon.classList.remove('dragging');
+  _splitDraggingVertex = null;
+  _recomputeSplit();
+}
+
+function _onSplitVertexRemove(i, e) {
+  if (!_splitState) return;
+  L.DomEvent.stopPropagation(e);
+  L.DomEvent.preventDefault(e);
+  if (i < 0 || i >= _splitState.cuts[_splitState.activeCutIdx].length) return;
+  _splitState.cuts[_splitState.activeCutIdx].splice(i, 1);
+  _recomputeSplit();
+}
+
+function onSplitClearCut() {
+  if (!_splitState) return;
+  _splitState.cuts[_splitState.activeCutIdx] = [];
+  _recomputeSplit();
+}
+
+// Append a new empty cut and make it active. Triggered by the "+ Cut"
+// button in the cuts list.
+function onSplitAddCut() {
+  if (!_splitState) return;
+  _splitState.cuts.push([]);
+  _splitState.activeCutIdx = _splitState.cuts.length - 1;
+  _splitDraggingVertex = null;
+  _splitDraggingGhost = null;
+  _splitHoverLatLng = null;
+  _recomputeSplit();
+}
+
+// Switch the active cut. If the previously-active cut is empty
+// (decision D), drop it on the way out so we don't accumulate ghosts.
+function onSplitSetActiveCut(idx) {
+  if (!_splitState) return;
+  if (idx < 0 || idx >= _splitState.cuts.length) return;
+  const cur = _splitState.activeCutIdx;
+  if (cur !== idx && (_splitState.cuts[cur] || []).length === 0) {
+    _splitState.cuts.splice(cur, 1);
+    if (cur < idx) idx -= 1;
+  }
+  _splitState.activeCutIdx = idx;
+  _splitState.hoverCutIdx = null;
+  _splitDraggingVertex = null;
+  _splitDraggingGhost = null;
+  _splitHoverLatLng = null;
+  _recomputeSplit();
+}
+
+// Delete a cut outright. Triggered by the per-cut "✕" in the list.
+function onSplitDeleteCut(idx) {
+  if (!_splitState) return;
+  if (idx < 0 || idx >= _splitState.cuts.length) return;
+  _splitState.cuts.splice(idx, 1);
+  if (_splitState.cuts.length === 0) _splitState.cuts.push([]);
+  if (_splitState.activeCutIdx >= _splitState.cuts.length) {
+    _splitState.activeCutIdx = _splitState.cuts.length - 1;
+  } else if (_splitState.activeCutIdx > idx) {
+    _splitState.activeCutIdx -= 1;
+  }
+  _splitState.hoverCutIdx = null;
+  _recomputeSplit();
+}
+
+// Highlight a cut on the map when the user hovers its row in the list.
+function onSplitHoverCut(idx) {
+  if (!_splitState) return;
+  _splitState.hoverCutIdx = (idx === null || idx === undefined) ? null : idx;
+  _refreshSplitMap();
+}
+
+// Highlight a single piece when the user hovers its row in the panel.
+function onSplitHoverPiece(idx) {
+  if (!_splitState) return;
+  _splitState.hoverPieceIdxs = (idx === null || idx === undefined) ? null : [idx];
+  _refreshSplitMap();
+}
+
+// Highlight every piece assigned to an output bucket when the user
+// hovers that output's card (in either the cut or override phase).
+function onSplitHoverOutput(outputIdx) {
+  if (!_splitState) return;
+  if (outputIdx === null || outputIdx === undefined) {
+    _splitState.hoverPieceIdxs = null;
+  } else {
+    const idxs = [];
+    for (let i = 0; i < (_splitState.outputs || []).length; i++) {
+      if (_splitState.outputs[i] === outputIdx) idxs.push(i);
+    }
+    _splitState.hoverPieceIdxs = idxs.length ? idxs : null;
+  }
+  _refreshSplitMap();
+}
+
+// ----- Geometry helpers ------------------------------------------------
+
+function _findClosestSegment(pt, vertices) {
+  let bestIdx = -1, bestDist = Infinity;
+  for (let i = 0; i < vertices.length - 1; i++) {
+    const d = _pointSegmentDistance(pt, vertices[i], vertices[i + 1]);
+    if (d < bestDist) { bestDist = d; bestIdx = i; }
+  }
+  return bestIdx;
+}
+
+function _pointDistance(a, b) {
+  const dx = a[1] - b[1], dy = a[0] - b[0];
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+function _pointSegmentDistance(pt, a, b) {
+  // Euclidean in lat/lon — good enough for picking which segment
+  // a click is closest to. (Real distance not needed; ranking is.)
+  const dx = b[1] - a[1], dy = b[0] - a[0];
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq < 1e-20) {
+    const dx0 = pt[1] - a[1], dy0 = pt[0] - a[0];
+    return Math.sqrt(dx0 * dx0 + dy0 * dy0);
+  }
+  const t = Math.max(0, Math.min(1, ((pt[1] - a[1]) * dx + (pt[0] - a[0]) * dy) / lenSq));
+  const cx = a[1] + t * dx, cy = a[0] + t * dy;
+  const ddx = pt[1] - cx, ddy = pt[0] - cy;
+  return Math.sqrt(ddx * ddx + ddy * ddy);
+}
+
+// ----- Core update loop -------------------------------------------------
+
+function _recomputeSplit() {
+  const plot = _splitPlot();
+  if (!plot) return;
+
+  const result = computePlotSplit(plot, _splitState.cuts);
+
+  if (!result.pieces || result.pieces.length === 0) {
+    _splitState.pieces    = null;
+    _splitState.cutInside = null;
+    _splitState.status    = 'invalid';
+    _splitState.error     = result.error || 'unknown';
+    _refreshSplitMap();
+    _refreshSplitPanel();
+    _refreshSplitConfirmBtn();
+    return;
+  }
+
+  const oldPieceCount = _splitState.pieces ? _splitState.pieces.length : 0;
+  _splitState.pieces    = result.pieces;
+  _splitState.cutInside = result.cutInside || null;
+  _splitState.error     = null;
+  // 'pending' = computed cleanly but only 1 piece → no actual split to
+  // confirm. Single-piece contig + empty cut lands here; the panel
+  // prompts to draw a cut. 'valid' = 2+ pieces and ready to commit.
+  _splitState.status = result.pieces.length >= 2 ? 'valid' : 'pending';
+
+  // Piece count changed → reset output assignments + names + values.
+  // v0.11.2: pieces from rings the cut(s) didn't touch stay GROUPED
+  // in one default output. Pieces from cut-affected rings each get
+  // their own output, so the cut actually divides things. Without a
+  // cut, every piece is untouched → all in one output.
+  if (oldPieceCount !== result.pieces.length) {
+    let nextOut = 1;
+    const raw = result.pieces.map(p =>
+      p.cutAffected ? nextOut++ : 0
+    );
+    _splitState.outputs         = _normalizeOutputs(raw);
+    _splitState.names           = _defaultOutputNames(plot, _outputCount());
+    _splitState.propertyValues  = result.pieces.map(() => ({}));
+    _splitState.manualOverrides = new Set();
+    _splitState.manualNames     = new Set();
+  }
+  _reseedProposedValues(plot);
+
+  _refreshSplitMap();
+  _refreshSplitPanel();
+  _refreshSplitConfirmBtn();
+}
+
+// Number of distinct output buckets currently in use (== rendered cards
+// / dropdown options).
+function _outputCount() {
+  if (!_splitState || !Array.isArray(_splitState.outputs)) return 0;
+  return new Set(_splitState.outputs).size;
+}
+
+// Re-seeds proposed property values per output. Each output's seed
+// area is the sum of its constituent pieces' land-areas (so the
+// redistribution suggestion follows the user's grouping).
+function _reseedProposedValues(plot) {
+  if (!_splitState || !_splitState.pieces) return;
+  const pieceAreas = _splitPieceLandAreas(_splitState.pieces);
+  const outputs = _splitState.outputs;
+  const nOutputs = _outputCount();
+  if (nOutputs === 0) return;
+
+  const outputAreas = new Array(nOutputs).fill(0);
+  for (let i = 0; i < outputs.length; i++) {
+    const k = outputs[i];
+    outputAreas[k] = (outputAreas[k] || 0) + (pieceAreas[i] || 0);
+  }
+  const proposed = proposePlotSplitValues(plot, outputAreas);
+
+  // Ensure propertyValues is sized to nOutputs.
+  while (_splitState.propertyValues.length < nOutputs) _splitState.propertyValues.push({});
+  _splitState.propertyValues.length = nOutputs;
+
+  for (let k = 0; k < nOutputs; k++) {
+    const obj = _splitState.propertyValues[k] || (_splitState.propertyValues[k] = {});
+    for (const schemaId of Object.keys(obj)) {
+      if (!_splitState.manualOverrides.has(`${k}:${schemaId}`) && !(schemaId in proposed)) {
+        delete obj[schemaId];
+      }
+    }
+    for (const [schemaId, vals] of Object.entries(proposed)) {
+      if (vals[k] === undefined) continue;
+      if (_splitState.manualOverrides.has(`${k}:${schemaId}`)) continue;
+      obj[schemaId] = vals[k];
+    }
+  }
+}
+
+// Re-key outputs to dense [0, K-1] in order of first appearance,
+// preserving the user's intent while keeping the storage indexed.
+function _normalizeOutputs(outputs) {
+  const seen = new Map();
+  let next = 0;
+  return outputs.map(k => {
+    if (!seen.has(k)) seen.set(k, next++);
+    return seen.get(k);
+  });
+}
+
+// User changed a piece's output assignment via the per-piece dropdown.
+// Value '__new__' creates a fresh output bucket.
+function onSplitPieceOutputChange(pieceIdx, valueStr) {
+  if (!_splitState || !_splitState.pieces) return;
+  if (pieceIdx < 0 || pieceIdx >= _splitState.outputs.length) return;
+  const plot = _splitPlot();
+  if (!plot) return;
+  let target;
+  if (valueStr === '__new__') {
+    target = _splitState.outputs.reduce((m, k) => Math.max(m, k), -1) + 1;
+  } else {
+    const n = Number(valueStr);
+    if (!Number.isFinite(n)) return;
+    target = n;
+  }
+  _splitState.outputs[pieceIdx] = target;
+  _splitState.outputs = _normalizeOutputs(_splitState.outputs);
+  // Re-grouping shifts what each output "is" — reset values + names,
+  // then re-seed. (v1 simplification: manual overrides don't survive
+  // a re-group; user can still rename freely afterwards.)
+  const nOutputs = _outputCount();
+  _splitState.names           = _defaultOutputNames(plot, nOutputs);
+  _splitState.propertyValues  = Array.from({ length: nOutputs }, () => ({}));
+  _splitState.manualOverrides = new Set();
+  _splitState.manualNames     = new Set();
+  _reseedProposedValues(plot);
+
+  _refreshSplitMap();
+  _refreshSplitPanel();
+  _refreshSplitConfirmBtn();
+}
+
+function _defaultOutputNames(plot, n) {
+  const base = plot.name || t('plots.unnamed');
+  return Array.from({ length: n }, (_, i) => `${base} (${i + 1})`);
+}
+
+// Returns each piece's effective land area (m²) for use as the
+// proportional-split basis in proposePlotSplitValues. Under any clipping
+// mode the piece geometry is already land-only, so we trust `p.area`.
+// Under 'combined' mode with a water cache we subtract the water
+// intersection so a piece that's mostly lake doesn't take a
+// disproportionate share of (e.g.) population. Falls back to p.area
+// when there's no cache.
+function _splitPieceLandAreas(pieces) {
+  const mode = getSetting('landWaterMode', 'land_only_sea_water');
+  const cache = data.waterCache;
+  if (mode !== 'combined' || !cache || !cache.waterGeometry) {
+    return pieces.map(p => p.area || 0);
+  }
+  return pieces.map(piece => {
+    const total = piece.area || 0;
+    if (total <= 0) return 0;
+    try {
+      const outer = piece.outer.slice();
+      if (outer.length && (outer[0][0] !== outer[outer.length - 1][0] ||
+                           outer[0][1] !== outer[outer.length - 1][1])) {
+        outer.push([outer[0][0], outer[0][1]]);
+      }
+      const lngLat = [outer.map(([lat, lng]) => [lng, lat])];
+      for (const h of (piece.holes || [])) {
+        const ring = h.slice();
+        if (ring.length && (ring[0][0] !== ring[ring.length - 1][0] ||
+                            ring[0][1] !== ring[ring.length - 1][1])) {
+          ring.push([ring[0][0], ring[0][1]]);
+        }
+        lngLat.push(ring.map(([lat, lng]) => [lng, lat]));
+      }
+      const tp = turf.polygon(lngLat);
+      const inter = turf.intersect(tp, cache.waterGeometry);
+      const waterArea = inter ? turf.area(inter) : 0;
+      return Math.max(0, total - waterArea);
+    } catch (_) {
+      return total;  // any turf hiccup → safe fallback to total area
+    }
+  });
+}
+
+// When a vertex is inserted at idx, override keys for pieces ≥ idx
+// don't need updating (there's only ever 2 pieces in cut mode, and
+// component mode doesn't insert). This is a placeholder for future
+// per-piece override stability; today it's a no-op.
+function _shiftManualOverrides(_atIdx, _delta) { /* reserved */ }
+
+// ----- Map refresh -----------------------------------------------------
+
+function _refreshSplitMap() {
+  const plot = _splitPlot();
+  if (!plot) return;
+  const haveValidPieces = !!_splitState.pieces;
+  drawSplitPlot(plot, haveValidPieces ? 'faded' : 'normal');
+  if (haveValidPieces) drawSplitPieces(_splitState.pieces, _splitState.outputs, _splitState.hoverPieceIdxs);
+  else clearSplitPieces();
+  drawSplitCutPath(_splitState.cuts, _splitState.activeCutIdx, _splitState.cutInside, _splitState.hoverCutIdx);
+
+  // Real vs ghost vertices live in separate layers (map.js) so we can
+  // freeze whichever marker is being dragged while the other still
+  // tracks the live geometry:
+  //   • real-vertex drag → freeze real layer; redraw ghosts so the
+  //     midpoint dots on adjacent segments follow the vertex live.
+  //   • ghost drag       → freeze BOTH; the dragged ghost is also the
+  //     live position indicator for the just-inserted vertex.
+  //   • no drag          → redraw both.
+  // Override phase has no editable cut, so both layers clear.
+  if (_splitState.phase === 'cut') {
+    if (!_splitDraggingVertex && !_splitDraggingGhost) {
+      drawSplitRealVertices(_splitState.cuts[_splitState.activeCutIdx], {
+        onDragStart: _onSplitVertexDragStart,
+        onDrag:      _onSplitVertexDrag,
+        onDragEnd:   _onSplitVertexDragEnd,
+        onRemove:    _onSplitVertexRemove,
+      });
+    }
+    if (!_splitDraggingGhost) {
+      drawSplitGhostVertices(_splitState.cuts[_splitState.activeCutIdx], {
+        onClick:     _onSplitGhostClick,
+        onDragStart: _onSplitGhostDragStart,
+        onDrag:      _onSplitGhostDrag,
+        onDragEnd:   _onSplitGhostDragEnd,
+      });
+    }
+    _refreshSplitHoverLine();
+  } else {
+    drawSplitRealVertices([], {});
+    drawSplitGhostVertices([], {});
+    drawSplitHoverLine(null, null);
+  }
+}
+
+// ----- Panel refresh ---------------------------------------------------
+
+function _refreshSplitPanel() {
+  const panel = document.getElementById('split-panel');
+  if (!panel) return;
+  const plot = _splitPlot();
+  if (!plot) return;
+
+  if (_splitState.phase === 'override' && _splitState.pieces) {
+    panel.innerHTML = _renderSplitPanelOverride(plot, _splitState);
+  } else {
+    panel.innerHTML = _renderSplitPanelCut(plot, _splitState);
+  }
+
+  _refreshSplitStatusBar();
+}
+
+function _renderSplitPanelCut(plot, state) {
+  const valid = state.status === 'valid';
+  let html = '';
+
+  if (valid || state.status === 'pending') {
+    // Pieces list with per-piece output dropdown (Brick 11b B.i).
+    // Multiple pieces sharing an output bucket = "merge these into one
+    // new plot". Each output gets its own colour so the map and panel
+    // agree on the grouping at a glance.
+    const nOutputs = _outputCount();
+    const outputOpts = (currentOut) => {
+      const opts = [];
+      for (let k = 0; k < nOutputs; k++) {
+        opts.push(`<option value="${k}"${k === currentOut ? ' selected' : ''}>${t('plot_split.output_n', { n: k + 1 })}</option>`);
+      }
+      opts.push(`<option value="__new__">${t('plot_split.output_new')}</option>`);
+      return opts.join('');
+    };
+    const piecesHtml = state.pieces.map((piece, i) => {
+      const outIdx = state.outputs[i] != null ? state.outputs[i] : 0;
+      const color  = _SPLIT_PIECE_COLORS[outIdx % _SPLIT_PIECE_COLORS.length];
+      const dropdown = nOutputs > 1 || state.pieces.length > 1
+        ? `<select class="split-overlay-piece-output" data-output-idx="${i}" onchange="onSplitPieceOutputChange(${i}, this.value)">${outputOpts(outIdx)}</select>`
+        : '';
+      return `
+        <div class="split-overlay-piece-row"
+             onmouseenter="onSplitHoverPiece(${i})"
+             onmouseleave="onSplitHoverPiece(null)">
+          <span class="split-overlay-piece-swatch" style="background:${color}"></span>
+          <span class="split-overlay-piece-area mono">${esc(formatArea(piece.area || 0))}</span>
+          ${dropdown}
+        </div>
+      `;
+    }).join('');
+    html += `
+      <div class="split-overlay-section">
+        <div class="split-overlay-section-label">${t('plot_split.pieces_label')}</div>
+        <div class="split-overlay-pieces-list">${piecesHtml}</div>
+      </div>
+    `;
+
+    // Per-output cards (name + read-only proposed values).
+    if (valid) {
+      const outputCardsHtml = _renderSplitOutputSummaries(plot, state);
+      html += `
+        <div class="split-overlay-section">
+          <div class="split-overlay-section-label">${t('plot_split.outputs_label')}</div>
+          ${outputCardsHtml}
+          <div class="split-overlay-hint-edit">${t('plot_split.proposed_hint')}</div>
+        </div>
+      `;
+    } else {
+      // Single-piece result = no actual split. Prompt the user.
+      html += `
+        <div class="split-overlay-section">
+          <div class="split-overlay-warn">${t('plot_split.no_split_yet')}</div>
+        </div>
+      `;
+    }
+  } else if (state.error) {
+    const code = state.error;
+    const kind = (code === 'cut_does_not_cross') ? 'warn' : 'error';
+    html += `
+      <div class="split-overlay-section">
+        <div class="split-overlay-${kind}">${t('plot_split.error_' + code)}</div>
+      </div>
+    `;
+  }
+
+  // Cuts list — click to switch active, hover to highlight, ✕ to delete.
+  // The active cut shows a "Clear" button at the end of its row.
+  const rows = state.cuts.map((c, i) => {
+    const isActive = i === state.activeCutIdx;
+    const color    = _SPLIT_CUT_COLORS[i % _SPLIT_CUT_COLORS.length];
+    const vn       = (c || []).length;
+    const cls      = 'split-cuts-row' + (isActive ? ' active' : '');
+    const clearBtn = isActive && vn > 0
+      ? `<button class="btn btn-xs" onclick="onSplitClearCut()" onmouseenter="event.stopPropagation()">${t('plot_split.clear_cut')}</button>`
+      : '';
+    return `
+      <div class="${cls}"
+           onclick="onSplitSetActiveCut(${i})"
+           onmouseenter="onSplitHoverCut(${i})"
+           onmouseleave="onSplitHoverCut(null)">
+        <span class="split-overlay-piece-swatch" style="background:${color}"></span>
+        <span class="split-cuts-name">${t('plot_split.cut_n', { n: i + 1 })}</span>
+        <span class="split-cuts-vcount mono">${t('plot_split.cut_vertices', { n: vn })}</span>
+        ${clearBtn}
+        <button class="split-cuts-del" title="${esc(t('plot_split.delete_cut'))}"
+                onclick="event.stopPropagation();onSplitDeleteCut(${i})"
+                ${state.cuts.length === 1 && vn === 0 ? 'disabled' : ''}>✕</button>
+      </div>
+    `;
+  }).join('');
+  html += `
+    <div class="split-overlay-section">
+      <div class="split-overlay-section-label">${t('plot_split.cuts_label')}</div>
+      <div class="split-cuts-list">${rows}</div>
+      <div class="split-cuts-add">
+        <button class="btn btn-sm" onclick="onSplitAddCut()">${t('plot_split.add_cut')}</button>
+      </div>
+      <div class="split-overlay-hint-edit">${t('plot_split.edit_hint')}</div>
+    </div>
+  `;
+
+  return html;
+}
+
+// Per-output summary: name input + area + compact list of proposed
+// stored values. Used in the cut phase below the pieces list.
+function _renderSplitOutputSummaries(plot, state) {
+  const nOutputs = _outputCount();
+  const outputAreas = new Array(nOutputs).fill(0);
+  for (let i = 0; i < state.pieces.length; i++) {
+    outputAreas[state.outputs[i]] += state.pieces[i].area || 0;
+  }
+  const schemas = (data.propertySchemas || []).filter(s => {
+    if (!appliesAtLevel(s, 'plot')) return false;
+    if (isVirtualPropertyId(s.id)) return false;
+    const v = getPlotPropertyValue(plot, s.id);
+    return v !== undefined && v !== null && v !== '';
+  });
+  let html = '';
+  for (let k = 0; k < nOutputs; k++) {
+    const color = _SPLIT_PIECE_COLORS[k % _SPLIT_PIECE_COLORS.length];
+    const propLines = schemas.map(schema => {
+      const v = state.propertyValues[k] ? state.propertyValues[k][schema.id] : undefined;
+      const txt = _renderSplitProposedValueText(schema, v);
+      if (!txt) return '';
+      return `<div class="split-output-prop"><span class="split-output-prop-name">${esc(schema.name)}</span><span class="split-output-prop-value mono">${txt}</span></div>`;
+    }).filter(Boolean).join('');
+    html += `
+      <div class="split-output-summary"
+           onmouseenter="onSplitHoverOutput(${k})"
+           onmouseleave="onSplitHoverOutput(null)">
+        <div class="split-output-summary-header">
+          <span class="split-overlay-piece-swatch" style="background:${color}"></span>
+          <input type="text" class="split-overlay-piece-name" value="${esc(state.names[k] || '')}" data-output-idx="${k}" oninput="onSplitNameInput(this)">
+          <span class="split-overlay-piece-area mono">${esc(formatArea(outputAreas[k]))}</span>
+        </div>
+        ${propLines ? `<div class="split-output-summary-props">${propLines}</div>` : ''}
+      </div>
+    `;
+  }
+  return html;
+}
+
+// Lightweight stringifier for a proposed value (numeric / categorical /
+// percentage) — read-only cut-phase display.
+function _renderSplitProposedValueText(schema, v) {
+  if (v === undefined || v === null || v === '') return '';
+  if (schema.kind === 'percentage' && typeof v === 'object') {
+    if (v.mode === 'raw')      return formatPropertyNumber(v.value);
+    if (v.mode === 'percent')  return formatPropertyNumber(v.value) + '%';
+    return '';
+  }
+  if (typeof v === 'number') return formatPropertyNumber(v);
+  return esc(String(v));
+}
+
+function _renderSplitPanelOverride(plot, state) {
+  // Per-output cards stacked vertically — one card per *output plot*,
+  // not per *piece*. Two pieces grouped into one output show as a
+  // single card whose area is their sum.
+  const nOutputs = _outputCount();
+  const outputAreas = new Array(nOutputs).fill(0);
+  for (let i = 0; i < state.pieces.length; i++) {
+    outputAreas[state.outputs[i]] += state.pieces[i].area || 0;
+  }
+  const schemas = (data.propertySchemas || []).filter(s => {
+    if (!appliesAtLevel(s, 'plot')) return false;
+    if (isVirtualPropertyId(s.id)) return false;
+    const v = getPlotPropertyValue(plot, s.id);
+    return v !== undefined && v !== null && v !== '';
+  });
+  const cards = [];
+  for (let k = 0; k < nOutputs; k++) {
+    const color = _SPLIT_PIECE_COLORS[k % _SPLIT_PIECE_COLORS.length];
+    const propRowsHtml = schemas.map(schema => {
+      const val = state.propertyValues[k] ? state.propertyValues[k][schema.id] : undefined;
+      const unitChip = schema.unit ? ` <span class="split-unit-chip">${esc(schema.unit)}</span>` : '';
+      return `
+        <div class="split-override-prop-row">
+          <label>${esc(schema.name)}${unitChip}</label>
+          ${_renderSplitInputCell(schema, val, k)}
+        </div>
+      `;
+    }).join('');
+    cards.push(`
+      <div class="split-override-piece"
+           onmouseenter="onSplitHoverOutput(${k})"
+           onmouseleave="onSplitHoverOutput(null)">
+        <div class="split-override-piece-header">
+          <span class="split-overlay-piece-swatch" style="background:${color}"></span>
+          <input type="text" class="split-override-piece-name" value="${esc(state.names[k] || '')}" data-output-idx="${k}" oninput="onSplitNameInput(this)">
+          <span class="split-override-piece-area mono">${esc(formatArea(outputAreas[k]))}</span>
+        </div>
+        ${propRowsHtml ? `<div class="split-override-piece-properties">${propRowsHtml}</div>` : ''}
+      </div>
+    `);
+  }
+
+  return `
+    <div class="split-overlay-section">
+      <button type="button" class="split-override-back" onclick="onSplitBack()">${t('plot_split.back_btn')}</button>
+      <div class="split-overlay-hint-edit">${t('plot_split.override_intro')}</div>
+    </div>
+    <div class="split-override-pieces">${cards.join('')}</div>
+  `;
+}
+
+function _refreshSplitStatusBar() {
+  const status = document.getElementById('split-status');
+  if (!status) return;
+  let txt, cls = 'split-overlay-status';
+  if (_splitState.phase === 'override') {
+    txt = t('plot_split.status_override');
+  } else if (_splitState.status === 'valid') {
+    txt = t('plot_split.status_outputs', { n: _outputCount() });
+  } else if (_splitState.status === 'pending') {
+    txt = t('plot_split.status_pending');
+    cls += ' split-overlay-status-warn';
+  } else {
+    const code = _splitState.error;
+    txt = code ? t('plot_split.error_' + code) : t('plot_split.status_pending');
+    cls += (code === 'cut_does_not_cross')
+      ? ' split-overlay-status-warn'
+      : ' split-overlay-status-error';
+  }
+  status.className = cls;
+  status.textContent = txt;
+}
+
+function _refreshSplitConfirmBtn() {
+  const btn = document.getElementById('split-confirm-btn');
+  if (!btn) return;
+  if (_splitState.phase === 'override') {
+    btn.textContent = t('plot_split.confirm_btn');
+    btn.disabled = false; // cut already validated to enter this phase
+  } else {
+    btn.textContent = t('plot_split.continue_btn');
+    btn.disabled = _splitState.status !== 'valid';
+  }
+}
+
+// ----- Phase transitions ------------------------------------------------
+
+function onSplitPrimaryAction() {
+  // Single header button — its meaning depends on phase.
+  if (!_splitState) return;
+  if (_splitState.phase === 'override') {
+    onSplitConfirm();
+  } else {
+    onSplitContinue();
+  }
+}
+
+function onSplitContinue() {
+  if (!_splitState || _splitState.status !== 'valid') return;
+  _splitState.phase = 'override';
+  _refreshSplitPanel();
+  _refreshSplitMap();
+  _refreshSplitConfirmBtn();
+}
+
+function onSplitBack() {
+  if (!_splitState) return;
+  _splitState.phase = 'cut';
+  _refreshSplitPanel();
+  _refreshSplitMap();
+  _refreshSplitConfirmBtn();
+}
+
+// Bundle the user's current grouping into one entry per output. Each
+// entry is `{ pieces: [piece, ...] }` — executeSplit unions them.
+function _splitOutputGroups() {
+  const nOutputs = _outputCount();
+  const groups = Array.from({ length: nOutputs }, () => ({ pieces: [] }));
+  for (let i = 0; i < _splitState.pieces.length; i++) {
+    const k = _splitState.outputs[i];
+    if (groups[k]) groups[k].pieces.push(_splitState.pieces[i]);
+  }
+  return groups;
+}
+
+// ----- Per-piece value rendering (used by override-phase cards) --------
+
+function _renderSplitInputCell(schema, val, outputIdx) {
+  const base = `data-output-idx="${outputIdx}" data-schema-id="${esc(schema.id)}" data-kind="${schema.kind}"`;
+  if (schema.kind === 'numeric') {
+    const n = Number(val);
+    const display = Number.isFinite(n) ? formatPropertyNumber(n) : '';
+    return `<input type="number" step="any" class="split-cell-input" value="${esc(display)}" ${base} oninput="onSplitPropertyInput(this)">`;
+  }
+  if (schema.kind === 'categorical') {
+    return `<input type="text" class="split-cell-input" value="${esc(val || '')}" ${base} oninput="onSplitPropertyInput(this)">`;
+  }
+  if (schema.kind === 'percentage') {
+    const obj = (val && typeof val === 'object') ? val : { mode: 'percent', value: '' };
+    const mode = obj.mode === 'raw' ? 'raw' : 'percent';
+    const n = Number(obj.value);
+    const display = Number.isFinite(n) ? formatPropertyNumber(n) : '';
+    const denomSchema = findPropertySchema(schema.denominatorPropertyId);
+    const suffix = mode === 'percent' ? '%' : (denomSchema?.unit || '');
+    return `
+      <span class="split-cell-pct">
+        <input type="number" step="any" class="split-cell-input" value="${esc(display)}" ${base} data-mode="${mode}" oninput="onSplitPropertyInput(this)">
+        ${suffix ? `<span class="split-cell-suffix">${esc(suffix)}</span>` : ''}
+      </span>
+    `;
+  }
+  return '';
+}
+
+function _splitFormatParentValue(schema, val) {
+  if (schema.kind === 'numeric') {
+    const n = Number(val);
+    if (!Number.isFinite(n)) return '—';
+    return formatPropertyNumber(n) + (schema.unit ? ' ' + schema.unit : '');
+  }
+  if (schema.kind === 'categorical') {
+    return val ? String(val) : '—';
+  }
+  if (schema.kind === 'percentage') {
+    if (typeof val !== 'object') return '—';
+    const n = Number(val.value);
+    if (!Number.isFinite(n)) return '—';
+    if (val.mode === 'percent') return formatPropertyNumber(n) + '%';
+    const denom = findPropertySchema(schema.denominatorPropertyId);
+    return formatPropertyNumber(n) + (denom?.unit ? ' ' + denom.unit : '');
+  }
+  return '—';
+}
+
+// ----- Panel input handlers -------------------------------------------
+
+function onSplitNameInput(inputEl) {
+  if (!_splitState) return;
+  const idx = parseInt(inputEl.dataset.outputIdx, 10);
+  if (!Number.isFinite(idx)) return;
+  _splitState.names[idx] = inputEl.value;
+  _splitState.manualNames.add(idx);
+}
+
+function onSplitPropertyInput(inputEl) {
+  if (!_splitState) return;
+  const idx      = parseInt(inputEl.dataset.outputIdx, 10);
+  const schemaId = inputEl.dataset.schemaId;
+  const kind     = inputEl.dataset.kind;
+  if (!Number.isFinite(idx) || !schemaId) return;
+  const obj = _splitState.propertyValues[idx];
+  if (!obj) return;
+  const raw = inputEl.value;
+  const overrideKey = `${idx}:${schemaId}`;
+  _splitState.manualOverrides.add(overrideKey);
+
+  if (raw === '' || raw == null) {
+    delete obj[schemaId];
+    return;
+  }
+  if (kind === 'numeric') {
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return;
+    const schema = findPropertySchema(schemaId);
+    obj[schemaId] = schema?.autoRound ? Math.round(n) : n;
+    return;
+  }
+  if (kind === 'categorical') {
+    obj[schemaId] = String(raw);
+    return;
+  }
+  if (kind === 'percentage') {
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return;
+    const mode = inputEl.dataset.mode === 'raw' ? 'raw' : 'percent';
+    obj[schemaId] = { mode, value: n };
+    return;
+  }
+}
+
+// ----- Commit ----------------------------------------------------------
+
+function onSplitConfirm() {
+  if (!_splitState || !_splitState.pieces) return;
+  const plot = _splitPlot();
+  if (!plot) { closeSplitOverlay(); return; }
+
+  const newIds = executeSplit(
+    plot,
+    _splitOutputGroups(),
+    _splitState.names,
+    _splitState.propertyValues
+  );
+  if (!newIds || newIds.length < 2) {
+    toast(t('plot_split.error_execute'), 'error');
+    return;
+  }
+  const n = newIds.length;
+  closeSplitOverlay();
+  refreshAll();
+  redrawMapPlots();
+  toast(t('plot_split.success_toast', { n }), 'success');
 }

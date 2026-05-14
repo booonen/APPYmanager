@@ -277,6 +277,186 @@ function clearPlotPropertyValue(plot, schemaId) {
 }
 
 // ============================================================
+// PLOT-SPLIT REDISTRIBUTION (Brick 11)
+// ============================================================
+// Given a plot and the areas of N proposed split pieces (m²), propose
+// a stored value for each piece per schema. The split modal seeds its
+// redistribution table with this; the user can override any cell.
+//
+// Rules per kind (per CLAUDE.md, Brick 11 scope):
+//   - numeric:     area-proportional split. Applies to both `sum` and
+//                  `weighted_average` aggregations — Phase 7 (population
+//                  estimator) will add nuance; densities live as
+//                  calculated properties (Brick 19) so a raw
+//                  weighted-average value can be split linearly without
+//                  hurting downstream resolves.
+//   - categorical: every piece inherits the parent's value verbatim.
+//   - percentage:  if parent stored mode='raw' value=v, split v area-
+//                  proportionally on each piece. If parent stored
+//                  mode='percent' value=p, every piece inherits p
+//                  verbatim — the linked raw side re-derives from the
+//                  piece's (smaller) effective denominator at read time.
+//
+// Schemas the function SKIPS:
+//   - schemas not applicable at the 'plot' level (rootLevelId above
+//     'plot' in the boundary chain),
+//   - the virtual Area schema (computed from geometry, never stored),
+//   - schemas with no stored value on the parent (the pieces stay
+//     unset too; no need to write zeros).
+//
+// Returns: { [schemaId]: [valueForPiece0, valueForPiece1, ...] }
+
+// ============================================================
+// PLOT-MERGE PROPERTY RECONCILIATION (Brick 11c)
+// ============================================================
+// Inverse of proposePlotSplitValues. Given N source plots and their
+// areas, proposes one merged value per schema. Per-kind rules:
+//
+//   • numeric / 'sum'               — sum source values.
+//   • numeric / 'weighted_average'  — area-weighted average across sources.
+//   • categorical                   — majority by area (the value held
+//                                     by plots whose combined area is
+//                                     largest). User-overridable.
+//   • percentage / mode='raw' all   — sum source raws.
+//   • percentage / mode='percent' all — area-weighted percent.
+//   • percentage / mixed modes      — best-effort area-weighted percent
+//                                     across the 'percent' sources; 'raw'
+//                                     sources skip (we can't blend modes
+//                                     reliably without resolving denom).
+//
+// Sources with no stored value for a given schema are skipped — they
+// don't contribute to sums, weighted averages, or the categorical
+// tally. If no source has a value, the schema isn't proposed at all.
+//
+// Returns: { [schemaId]: <mergedValue> }
+
+function proposePlotMergeValues(sourcePlots, sourceAreasM2) {
+  const out = {};
+  if (!Array.isArray(sourcePlots) || sourcePlots.length < 2) return out;
+  if (!Array.isArray(sourceAreasM2) || sourceAreasM2.length !== sourcePlots.length) return out;
+
+  for (const schema of (data.propertySchemas || [])) {
+    if (!appliesAtLevel(schema, 'plot')) continue;
+    if (isVirtualPropertyId(schema.id)) continue;
+
+    const values = sourcePlots.map(p => getPlotPropertyValue(p, schema.id));
+    const hasAny = values.some(v => v !== undefined && v !== null && v !== '');
+    if (!hasAny) continue;
+
+    if (schema.kind === 'numeric') {
+      if (schema.aggregation === 'weighted_average') {
+        let num = 0, denom = 0;
+        for (let i = 0; i < values.length; i++) {
+          const v = Number(values[i]);
+          if (!Number.isFinite(v)) continue;
+          const w = sourceAreasM2[i] > 0 ? sourceAreasM2[i] : 0;
+          num   += v * w;
+          denom += w;
+        }
+        if (denom > 0) out[schema.id] = _maybeRound(num / denom, schema);
+      } else {
+        let sum = 0, any = false;
+        for (let i = 0; i < values.length; i++) {
+          const v = Number(values[i]);
+          if (!Number.isFinite(v)) continue;
+          sum += v; any = true;
+        }
+        if (any) out[schema.id] = _maybeRound(sum, schema);
+      }
+    } else if (schema.kind === 'categorical') {
+      // Majority by area.
+      const tally = new Map();
+      for (let i = 0; i < values.length; i++) {
+        const v = values[i];
+        if (v === undefined || v === null || v === '') continue;
+        const key = String(v);
+        const w = sourceAreasM2[i] > 0 ? sourceAreasM2[i] : 0;
+        tally.set(key, (tally.get(key) || 0) + w);
+      }
+      let best = null, bestArea = -1;
+      for (const [v, area] of tally) {
+        if (area > bestArea) { best = v; bestArea = area; }
+      }
+      if (best !== null) out[schema.id] = best;
+    } else if (schema.kind === 'percentage') {
+      const objs = values.map(v => (v && typeof v === 'object') ? v : null);
+      const present = objs.filter(Boolean);
+      if (present.length === 0) continue;
+      const allRaw     = present.every(o => o.mode === 'raw');
+      const allPercent = present.every(o => o.mode === 'percent');
+      if (allRaw) {
+        let sum = 0;
+        for (const o of present) {
+          const v = Number(o.value);
+          if (Number.isFinite(v)) sum += v;
+        }
+        out[schema.id] = { mode: 'raw', value: _maybeRound(sum, schema) };
+      } else if (allPercent) {
+        let num = 0, denom = 0;
+        for (let i = 0; i < objs.length; i++) {
+          if (!objs[i]) continue;
+          const v = Number(objs[i].value);
+          if (!Number.isFinite(v)) continue;
+          const w = sourceAreasM2[i] > 0 ? sourceAreasM2[i] : 0;
+          num += v * w; denom += w;
+        }
+        if (denom > 0) out[schema.id] = { mode: 'percent', value: _maybeRound(num / denom, schema) };
+      } else {
+        // Mixed-mode: blend only the 'percent' entries (we don't have a
+        // resolved denom to convert 'raw' values into the same space).
+        let num = 0, denom = 0;
+        for (let i = 0; i < objs.length; i++) {
+          if (!objs[i] || objs[i].mode !== 'percent') continue;
+          const v = Number(objs[i].value);
+          if (!Number.isFinite(v)) continue;
+          const w = sourceAreasM2[i] > 0 ? sourceAreasM2[i] : 0;
+          num += v * w; denom += w;
+        }
+        if (denom > 0) out[schema.id] = { mode: 'percent', value: _maybeRound(num / denom, schema) };
+      }
+    }
+  }
+  return out;
+}
+
+function proposePlotSplitValues(plot, pieceAreasM2) {
+  const out = {};
+  if (!plot || !Array.isArray(pieceAreasM2) || pieceAreasM2.length < 2) return out;
+  const totalArea = pieceAreasM2.reduce((s, a) => s + (a > 0 ? a : 0), 0);
+  if (totalArea <= 0) return out;
+
+  for (const schema of (data.propertySchemas || [])) {
+    if (!appliesAtLevel(schema, 'plot')) continue;
+    if (isVirtualPropertyId(schema.id)) continue;
+
+    const stored = getPlotPropertyValue(plot, schema.id);
+    if (stored === undefined || stored === null || stored === '') continue;
+
+    if (schema.kind === 'numeric') {
+      const n = Number(stored);
+      if (!Number.isFinite(n)) continue;
+      out[schema.id] = pieceAreasM2.map(a => _maybeRound(n * (a / totalArea), schema));
+    } else if (schema.kind === 'categorical') {
+      const s = String(stored);
+      out[schema.id] = pieceAreasM2.map(() => s);
+    } else if (schema.kind === 'percentage') {
+      if (typeof stored !== 'object') continue;
+      const v = Number(stored.value);
+      if (!Number.isFinite(v)) continue;
+      if (stored.mode === 'raw') {
+        out[schema.id] = pieceAreasM2.map(a => ({
+          mode: 'raw',
+          value: _maybeRound(v * (a / totalArea), schema),
+        }));
+      } else if (stored.mode === 'percent') {
+        out[schema.id] = pieceAreasM2.map(() => ({ mode: 'percent', value: v }));
+      }
+    }
+  }
+  return out;
+}
+
+// ============================================================
 // BOUNDARY VALUES (Brick 10b)
 // ============================================================
 // Boundaries carry property values in the same shape as plots:
