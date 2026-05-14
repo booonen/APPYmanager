@@ -3577,7 +3577,7 @@ function _openPropertyModal(title, schema) {
       ${_definedAtSelect(rootLevelId)}
     </div>
     <div id="property-kind-fields">
-      ${_renderPropertyKindFields(kind, { aggregation, weightId, denominatorId, rollup, autoRound })}
+      ${_renderPropertyKindFields(kind, { aggregation, weightId, denominatorId, rollup, autoRound, schema })}
     </div>
     <div class="form-group">
       <label>${t('properties.notes_label')}</label>
@@ -3635,7 +3635,9 @@ function _renderPropertyKindFields(kind, opts) {
           <span>${t('properties.rollup_distribution_label')}</span>
         </label>
         <p class="text-dim" style="font-size:12px;margin-top:4px">${t('properties.rollup_distribution_help')}</p>
-      </div>`;
+      </div>
+      ${_renderCategoryColorsEditor(opts.schema)}
+    `;
   }
   if (kind === 'percentage') {
     return `
@@ -3646,6 +3648,62 @@ function _renderPropertyKindFields(kind, opts) {
       </div>`;
   }
   return '';
+}
+
+// Category-colours editor (v0.12.1). Surfaces only in EDIT mode for
+// a categorical schema — values are collected from existing plots +
+// boundaries. The colour picker per value writes through to
+// `schema.categoryColors`; the atlas renderer reads it for fills.
+function _renderCategoryColorsEditor(schema) {
+  if (!schema) {
+    return `<div class="form-group"><p class="text-dim" style="font-size:12px">${t('properties.category_colors_save_first')}</p></div>`;
+  }
+  // Collect distinct values for this schema across plots + boundaries.
+  const seen = new Map(); // value → count
+  for (const p of (data.plots || [])) {
+    const v = p.propertyValues?.[schema.id];
+    if (v != null && v !== '') seen.set(String(v), (seen.get(String(v)) || 0) + 1);
+  }
+  for (const b of (data.boundaries || [])) {
+    const v = b.propertyValues?.[schema.id];
+    if (v != null && v !== '') seen.set(String(v), (seen.get(String(v)) || 0) + 1);
+  }
+  const values = Array.from(seen.entries()).sort((a, b) => b[1] - a[1]).map(([v]) => v);
+  if (values.length === 0) {
+    return `<div class="form-group">
+      <label>${t('properties.category_colors_label')}</label>
+      <p class="text-dim" style="font-size:12px">${t('properties.category_colors_empty')}</p>
+    </div>`;
+  }
+  const colors = (schema.categoryColors && typeof schema.categoryColors === 'object')
+    ? schema.categoryColors : {};
+  const rows = values.map(v => {
+    const c = colors[v] || '#888888';
+    const safeId = encodeURIComponent(v);
+    return `
+      <div class="category-color-row">
+        <input type="color" value="${esc(c)}"
+          oninput="onCategoryColorChange('${esc(schema.id)}', decodeURIComponent('${safeId}'), this.value)">
+        <span class="category-color-value">${esc(v)}</span>
+        <span class="category-color-count text-dim">${seen.get(v)}</span>
+      </div>
+    `;
+  }).join('');
+  return `
+    <div class="form-group">
+      <label>${t('properties.category_colors_label')}</label>
+      <p class="text-dim" style="font-size:12px;margin-bottom:6px">${t('properties.category_colors_help')}</p>
+      <div class="category-colors-list">${rows}</div>
+    </div>
+  `;
+}
+
+function onCategoryColorChange(schemaId, value, color) {
+  const schema = (data.propertySchemas || []).find(s => s.id === schemaId);
+  if (!schema) return;
+  schema.categoryColors = schema.categoryColors || {};
+  schema.categoryColors[value] = color;
+  save();
 }
 
 // "Defined at" dropdown — single select of the boundary level where this
@@ -5378,14 +5436,49 @@ function _renderPbFillEditor(layer) {
           ${schemaOpts}
         </select>
       </label>
-      <label class="pb-row">
-        <span>${t('page_builder.fill_scale')}</span>
-        <select onchange="onPageBuilderEditScaleKind('${esc(layer.id)}', this.value)">
-          <option value="viridis"${(fill.scale?.kind || 'viridis') === 'viridis' ? ' selected' : ''}>${t('page_builder.scale_viridis')}</option>
-          <option value="sequential"${fill.scale?.kind === 'sequential' ? ' selected' : ''}>${t('page_builder.scale_sequential')}</option>
-        </select>
-      </label>
+      ${_renderPbScaleEditor(layer)}
     `}
+  `;
+}
+
+// Scale editor for property fills. Picks between viridis / sequential
+// presets or a "Custom" stops editor. Custom stops are persisted on
+// the layer's fill.scale as { kind: 'custom', stops: [{t, color}] }.
+function _renderPbScaleEditor(layer) {
+  const fill = layer.fill || {};
+  const scale = fill.scale || { kind: 'viridis' };
+  const kind = scale.kind || 'viridis';
+  let stopsHtml = '';
+  if (kind === 'custom') {
+    const stops = Array.isArray(scale.stops) ? scale.stops : [];
+    const rows = stops.map((s, i) => `
+      <div class="pb-scale-stop">
+        <input type="number" step="0.05" min="0" max="1" value="${s.t}"
+          class="pb-scale-stop-t"
+          oninput="onPageBuilderEditScaleStop('${esc(layer.id)}', ${i}, 't', this.value)">
+        <input type="color" value="${esc(s.color || '#888888')}"
+          oninput="onPageBuilderEditScaleStop('${esc(layer.id)}', ${i}, 'color', this.value)">
+        <button class="btn btn-xs btn-danger" ${stops.length <= 2 ? 'disabled' : ''}
+          onclick="onPageBuilderRemoveScaleStop('${esc(layer.id)}', ${i})">✕</button>
+      </div>
+    `).join('');
+    stopsHtml = `
+      <div class="pb-scale-stops">
+        ${rows}
+        <button class="btn btn-xs" onclick="onPageBuilderAddScaleStop('${esc(layer.id)}')">+ ${t('page_builder.scale_add_stop')}</button>
+      </div>
+    `;
+  }
+  return `
+    <label class="pb-row">
+      <span>${t('page_builder.fill_scale')}</span>
+      <select onchange="onPageBuilderEditScaleKind('${esc(layer.id)}', this.value)">
+        <option value="viridis"${kind === 'viridis' ? ' selected' : ''}>${t('page_builder.scale_viridis')}</option>
+        <option value="sequential"${kind === 'sequential' ? ' selected' : ''}>${t('page_builder.scale_sequential')}</option>
+        <option value="custom"${kind === 'custom' ? ' selected' : ''}>${t('page_builder.scale_custom')}</option>
+      </select>
+    </label>
+    ${stopsHtml}
   `;
 }
 
@@ -5555,9 +5648,72 @@ function onPageBuilderEditScaleKind(layerId, kind) {
   if (!page) return;
   const layer = (page.layers || []).find(l => l.id === layerId);
   if (!layer || !layer.fill) return;
-  layer.fill.scale = { kind: (kind === 'sequential') ? 'sequential' : 'viridis' };
+  if (kind === 'custom') {
+    // Initialise with a sensible 3-stop default so the user has
+    // something to nudge.
+    const prev = layer.fill.scale || {};
+    layer.fill.scale = (Array.isArray(prev.stops) && prev.stops.length >= 2)
+      ? { kind: 'custom', stops: prev.stops }
+      : { kind: 'custom', stops: [
+          { t: 0,    color: '#1f2937' },
+          { t: 0.5,  color: '#c1272d' },
+          { t: 1,    color: '#fdf6b2' },
+        ] };
+  } else {
+    layer.fill.scale = { kind: (kind === 'sequential') ? 'sequential' : 'viridis' };
+  }
+  save();
+  renderPageBuilder();
+}
+
+function onPageBuilderEditScaleStop(layerId, idx, field, value) {
+  const page = _currentPbPage();
+  if (!page) return;
+  const layer = (page.layers || []).find(l => l.id === layerId);
+  if (!layer || !layer.fill || !layer.fill.scale ||
+      !Array.isArray(layer.fill.scale.stops)) return;
+  const stop = layer.fill.scale.stops[idx];
+  if (!stop) return;
+  if (field === 't') {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return;
+    stop.t = Math.max(0, Math.min(1, n));
+  } else {
+    stop.color = String(value);
+  }
   save();
   _refreshPageBuilderPreview();
+}
+
+function onPageBuilderAddScaleStop(layerId) {
+  const page = _currentPbPage();
+  if (!page) return;
+  const layer = (page.layers || []).find(l => l.id === layerId);
+  if (!layer || !layer.fill || !layer.fill.scale ||
+      !Array.isArray(layer.fill.scale.stops)) return;
+  // Drop the new stop in the middle of the largest gap so it's useful
+  // by default rather than colliding with an existing stop.
+  const sorted = layer.fill.scale.stops.slice().sort((a, b) => a.t - b.t);
+  let bestGap = -1, gapStart = 0, gapEnd = 1;
+  for (let i = 0; i < sorted.length - 1; i++) {
+    const g = sorted[i + 1].t - sorted[i].t;
+    if (g > bestGap) { bestGap = g; gapStart = sorted[i].t; gapEnd = sorted[i + 1].t; }
+  }
+  layer.fill.scale.stops.push({ t: (gapStart + gapEnd) / 2, color: '#888888' });
+  save();
+  renderPageBuilder();
+}
+
+function onPageBuilderRemoveScaleStop(layerId, idx) {
+  const page = _currentPbPage();
+  if (!page) return;
+  const layer = (page.layers || []).find(l => l.id === layerId);
+  if (!layer || !layer.fill || !layer.fill.scale ||
+      !Array.isArray(layer.fill.scale.stops)) return;
+  if (layer.fill.scale.stops.length <= 2) return;  // need at least 2
+  layer.fill.scale.stops.splice(idx, 1);
+  save();
+  renderPageBuilder();
 }
 
 function onPageBuilderEditStroke(layerId, field, value) {

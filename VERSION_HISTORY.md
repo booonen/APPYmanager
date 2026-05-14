@@ -1,3 +1,69 @@
+## 0.12.1 — Atlas polish: Mercator, zoom/pan, custom scales, category colours
+
+Round one of post-v0.12.0 fixes:
+
+### Web Mercator projection (`js/atlas.js`)
+
+The v0.12.0 equirectangular projection didn't match OGF tiles and made
+country-scale shapes feel skewed. Replaced with Web Mercator:
+
+  y = ln(tan(π/4 + φ/2))   (φ in radians)
+
+Clamped to ±85.05° to avoid infinity at the poles. `viewBox` now lives
+in projected space; every path coordinate runs through
+`_projectLatLng(lat, lng)`.
+
+### SVG zoom / pan
+
+Both the Atlas viewer and the Page Builder preview use the same
+renderer, so wiring zoom + pan into `renderAtlasPage` lights them
+both up. Mouse wheel zooms toward the cursor (multiplicative factor
+per delta unit); click-drag on the empty SVG area pans. A small
+floating "⟲" button in the top-right resets to the initial auto-fit
+view. Implemented by mutating the SVG's `viewBox` attribute rather
+than transforming a group — keeps `non-scaling-stroke` honest.
+
+### Topology-preserving simplification
+
+`turf.simplify` (Douglas-Peucker per polygon) was creating gaps
+between adjacent polygons: each polygon's simplified edge picked
+different points to drop, so what was a shared boundary became two
+slightly-different polylines. Replaced with **coordinate
+quantization** — snap every (lat, lng) to a shared grid before
+rendering. Identical inputs → identical outputs; shared edges stay
+shared. The grid size is `bbox-diagonal × simplification%/100 × 1%`,
+matching the previous slider semantics.
+
+Not as visually smooth as mapshaper's TopoJSON-arc Visvalingam, but
+gap-free. A proper arc-based pass can come later if the staircase
+look becomes a problem.
+
+### User-definable colour scales
+
+Property fills now support `scale.kind === 'custom'` with an array of
+`{ t, color }` stops. The Page Builder layer editor exposes a stops
+list under the scale dropdown: per-stop position (0–1) + colour
+picker + remove. Adding a stop drops it in the middle of the largest
+existing gap. Minimum 2 stops. Viridis + Sequential remain as
+presets.
+
+### Per-category colours on categorical schemas
+
+Schemas with `kind === 'categorical'` now carry an optional
+`categoryColors: { [value]: hex }` map. The Properties tab editor
+shows it as a list of distinct values (collected across plots +
+boundaries) with one colour picker per value; counts shown for
+context. The atlas renderer reads these in `_buildCategoricalMap` —
+user-assigned colours win, unassigned values fall back to the
+12-hue palette, overflow → "Other" grey.
+
+### Filed for later
+
+- **Mass-set / edit properties via the property menu** — the user
+  flagged this; bigger UX work, will land as a dedicated brick.
+- **mapshaper-style arc-based simplification** — keep the
+  staircase-via-quantization for now; revisit if needed.
+
 ## 0.12.0 — Brick 13: Atlas + Page Builder (Phase 5 opens)
 
 Phase 5 — visualisation. The "Map" tab moves under a new **Visualization**

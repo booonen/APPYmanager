@@ -1413,3 +1413,59 @@ summary.map-toolbar-control:hover {
 .pb-add-layer select { flex: 1; }
 .pb-checks { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 8px; flex: 1; }
 .pb-check { display: flex; align-items: center; gap: 4px; font-size: 11px; }
+
+/* v0.12.1: zoom-pan UI + custom scale stops + category colours */
+.atlas-reset-zoom {
+  position: absolute;
+  top: 8px; right: 8px;
+  width: 30px; height: 30px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--bg-raised);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 14px;
+  display: flex; align-items: center; justify-content: center;
+  z-index: 5;
+  opacity: 0.85;
+}
+.atlas-reset-zoom:hover { opacity: 1; border-color: var(--accent); }
+.atlas-page-svg { cursor: grab; }
+.atlas-page-svg-panning { cursor: grabbing !important; }
+
+.pb-scale-stops {
+  margin: 4px 0 8px 110px;  /* aligns under the value column */
+  display: flex; flex-direction: column; gap: 4px;
+}
+.pb-scale-stop {
+  display: flex; align-items: center; gap: 6px;
+}
+.pb-scale-stop-t { width: 70px; font-size: 11px; }
+.pb-scale-stop input[type="color"] {
+  width: 36px; height: 24px; padding: 0;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.category-colors-list {
+  display: flex; flex-direction: column;
+  gap: 4px;
+  max-height: 260px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px;
+  background: var(--bg);
+}
+.category-color-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 2px 4px;
+  font-size: 13px;
+}
+.category-color-row input[type="color"] {
+  width: 36px; height: 24px; padding: 0;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.category-color-value { flex: 1; }
+.category-color-count { font-size: 11px; color: var(--text-muted); }
