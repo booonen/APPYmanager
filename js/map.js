@@ -10,6 +10,36 @@
 // import modal to preview to-be-imported shapes before commit.
 
 const OGF_TILE_URL = 'https://tile.opengeofiction.net/ogf-carto/{z}/{x}/{y}.png';
+
+// Per-map tile-toggle control. Hides / shows the tile layer so the user
+// can see polygon outlines without the basemap interfering. Each map
+// owns its own toggle state — independent across the main, preview,
+// detail, and split maps.
+function _addTileToggleControl(map, tileLayer) {
+  if (!map || !tileLayer) return;
+  const Toggle = L.Control.extend({
+    options: { position: 'topright' },
+    onAdd: function () {
+      const div = L.DomUtil.create('div', 'leaflet-bar leaflet-control map-tile-toggle');
+      const a = L.DomUtil.create('a', '', div);
+      a.href = '#';
+      a.title = 'Toggle map tiles';
+      a.setAttribute('role', 'button');
+      a.textContent = '▦';
+      let on = true;
+      L.DomEvent.on(a, 'click', (e) => {
+        L.DomEvent.preventDefault(e);
+        L.DomEvent.stopPropagation(e);
+        if (on) { map.removeLayer(tileLayer); div.classList.add('off'); }
+        else    { tileLayer.addTo(map);       div.classList.remove('off'); }
+        on = !on;
+      });
+      L.DomEvent.disableClickPropagation(div);
+      return div;
+    },
+  });
+  new Toggle().addTo(map);
+}
 const OGF_OVERPASS_URL = 'https://overpass.opengeofiction.net/api/interpreter';
 
 let _map = null;
@@ -79,6 +109,7 @@ function initMap() {
     maxZoom: 19,
     attribution: 'Tiles © <a href="https://opengeofiction.net">OpenGeofiction</a>'
   }).addTo(_map);
+  _addTileToggleControl(_map, _mapTileLayer);
 
   // Water debug overlay sits BELOW everything else so plots / boundaries
   // / settlements / hover hints all draw on top of it.
@@ -186,7 +217,8 @@ function ensurePreviewMap(containerId) {
     zoomControl: true, attributionControl: false,
   });
   _previewMap._appyContainer = el;
-  L.tileLayer(OGF_TILE_URL, { maxZoom: 19 }).addTo(_previewMap);
+  const _previewTile = L.tileLayer(OGF_TILE_URL, { maxZoom: 19 }).addTo(_previewMap);
+  _addTileToggleControl(_previewMap, _previewTile);
   _previewLayer = L.featureGroup().addTo(_previewMap);
   // Leaflet sizes against the container's bounding rect; modals layout
   // asynchronously, so refresh once the next frame settles.
@@ -273,7 +305,8 @@ function ensureDetailMap(containerId) {
     zoomControl: true, attributionControl: false,
   });
   _detailMap._appyContainer = el;
-  L.tileLayer(OGF_TILE_URL, { maxZoom: 19 }).addTo(_detailMap);
+  const _detailTile = L.tileLayer(OGF_TILE_URL, { maxZoom: 19 }).addTo(_detailMap);
+  _addTileToggleControl(_detailMap, _detailTile);
   _detailLayer = L.featureGroup().addTo(_detailMap);
   setTimeout(() => _detailMap && _detailMap.invalidateSize(), 50);
   return _detailMap;
@@ -338,7 +371,8 @@ function ensureSplitMap(containerId, callbacks) {
   });
   _splitMap._appyContainer = el;
   _splitMap._appyCallbacks = callbacks;
-  L.tileLayer(OGF_TILE_URL, { maxZoom: 19 }).addTo(_splitMap);
+  const _splitTile = L.tileLayer(OGF_TILE_URL, { maxZoom: 19 }).addTo(_splitMap);
+  _addTileToggleControl(_splitMap, _splitTile);
   _splitPlotLayer   = L.featureGroup().addTo(_splitMap);
   _splitPiecesLayer = L.featureGroup().addTo(_splitMap);
   _splitCutLayer    = L.featureGroup().addTo(_splitMap);

@@ -1,3 +1,17 @@
+## 0.9.2 — Tile-toggle on every Leaflet map
+
+Small ▦ button in the top-right corner of every Leaflet map (main map,
+preview map, plot-detail map, split-overlay map). Click to hide the
+OGF basemap tiles; click again to bring them back. State is per-map
+and in-memory only — toggling one map doesn't blank the others. Useful
+when the basemap is competing with plot outlines you're trying to
+read.
+
+Shared helper `_addTileToggleControl(map, tileLayer)` in `js/map.js`;
+each map-init call site captures its tile layer reference and passes
+both through. CSS pairs the dimmed/strikethrough state on `.off` so
+the toggle's current state is obvious at a glance.
+
 ## 0.9.1 — Brick 11b #2: cut non-contig plots + per-piece grouping
 
 The manual-split editor stops force-routing non-contiguous plots into a

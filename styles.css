@@ -1081,3 +1081,22 @@ summary.map-toolbar-control:hover {
   border-color: #fff;
 }
 .split-vertex-ghost.dragging { cursor: grabbing; }
+
+/* Per-map tile-toggle button (v0.9.2). Sits in the top-right of every
+   Leaflet map. Click hides / shows the OGF basemap tiles so the user
+   can read polygon outlines without the basemap competing. State is
+   per-map and in-memory only — toggling one map doesn't affect others. */
+.map-tile-toggle a {
+  font-size: 16px;
+  line-height: 26px;
+  width: 26px;
+  height: 26px;
+  text-align: center;
+  text-decoration: none;
+  color: #333;
+  display: block;
+}
+.map-tile-toggle.off a {
+  opacity: 0.45;
+  text-decoration: line-through;
+}
