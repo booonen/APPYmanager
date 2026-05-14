@@ -94,7 +94,9 @@ function switchTab(tab) {
       redrawMap();
     },
     settings: renderSettings,
-    'import-export': renderImportExport
+    'import-export': renderImportExport,
+    atlas: () => { if (typeof renderAtlas === 'function') renderAtlas(); },
+    'page-builder': () => { if (typeof renderPageBuilder === 'function') renderPageBuilder(); },
   };
   if (renders[tab]) renders[tab]();
 }

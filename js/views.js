@@ -4926,3 +4926,699 @@ function onSplitConfirm() {
   redrawMapPlots();
   toast(t('plot_split.success_toast', { n }), 'success');
 }
+
+// ============================================================
+// ATLAS BROWSER (Brick 13)
+// ============================================================
+// Browses pages organised into user-defined nested categories. The
+// tree is built implicitly from pages' `categoryPath: string[]`
+// arrays — renaming a category cascades to every page whose path
+// starts with that segment.
+
+let _atlasState = {
+  selectedPageId:     null,
+  expandedCategories: new Set(['__root__']),
+};
+
+function renderAtlas() {
+  const el = document.getElementById('atlas-content');
+  if (!el) return;
+  const pages = (data.dataAtlas && Array.isArray(data.dataAtlas.pages)) ? data.dataAtlas.pages : [];
+
+  if (pages.length === 0) {
+    el.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-icon">▦</div>
+        <h3>${t('atlas.empty_title')}</h3>
+        <p>${t('atlas.empty_body')}</p>
+        <button class="btn btn-primary" onclick="onAtlasNewPage()">+ ${t('atlas.new_page_btn')}</button>
+      </div>`;
+    return;
+  }
+
+  const tree = _buildAtlasTree(pages);
+  const selectedPage = pages.find(p => p.id === _atlasState.selectedPageId);
+
+  el.innerHTML = `
+    <div class="atlas-layout">
+      <aside class="atlas-tree">
+        <div class="atlas-tree-actions">
+          <button class="btn btn-sm btn-primary" onclick="onAtlasNewPage()">+ ${t('atlas.new_page_btn')}</button>
+        </div>
+        ${_renderAtlasTreeNode(tree, '__root__', 0)}
+      </aside>
+      <main class="atlas-viewer">
+        ${selectedPage
+          ? _renderAtlasPageView(selectedPage)
+          : `<div class="atlas-viewer-empty">${t('atlas.pick_page_hint')}</div>`}
+      </main>
+    </div>
+  `;
+
+  if (selectedPage) _refreshAtlasViewerSVG();
+}
+
+function _buildAtlasTree(pages) {
+  // Recursive structure: { name, children: Map<segment, node>, pages: page[] }
+  const root = { name: '', children: new Map(), pages: [] };
+  for (const page of pages) {
+    let node = root;
+    const path = Array.isArray(page.categoryPath) ? page.categoryPath : [];
+    for (const seg of path) {
+      const key = String(seg || '').trim();
+      if (!key) continue;
+      if (!node.children.has(key)) {
+        node.children.set(key, { name: key, children: new Map(), pages: [] });
+      }
+      node = node.children.get(key);
+    }
+    node.pages.push(page);
+  }
+  return root;
+}
+
+function _renderAtlasTreeNode(node, key, depth) {
+  // Sort categories alphabetically; pages by name.
+  const catEntries = Array.from(node.children.entries())
+    .sort((a, b) => a[0].localeCompare(b[0]));
+  const pages = node.pages.slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+
+  const expanded = _atlasState.expandedCategories.has(key);
+  const isRoot   = key === '__root__';
+
+  // Render the node header (only for non-root). Pages directly under
+  // this node + sub-category headers render inside the body when open.
+  const headerHtml = isRoot ? '' : `
+    <div class="atlas-tree-cat-header" style="padding-left:${depth * 14 + 4}px"
+         onclick="onAtlasToggleCategory('${esc(key)}')">
+      <span class="atlas-tree-caret">${expanded ? '▾' : '▸'}</span>
+      <span class="atlas-tree-cat-name">${esc(node.name)}</span>
+      <button class="atlas-tree-rename"
+        title="${esc(t('atlas.rename_category'))}"
+        onclick="event.stopPropagation();onAtlasRenameCategory('${esc(key)}')">✎</button>
+    </div>`;
+
+  let bodyHtml = '';
+  if (isRoot || expanded) {
+    for (const [k, sub] of catEntries) {
+      const childKey = isRoot ? k : `${key}/${k}`;
+      bodyHtml += _renderAtlasTreeNode(sub, childKey, isRoot ? 0 : depth + 1);
+    }
+    for (const p of pages) {
+      const sel = p.id === _atlasState.selectedPageId ? ' atlas-tree-page-active' : '';
+      bodyHtml += `
+        <div class="atlas-tree-page${sel}"
+             style="padding-left:${(depth + (isRoot ? 0 : 1)) * 14 + 14}px"
+             onclick="onAtlasSelectPage('${esc(p.id)}')">
+          ${esc(p.name || t('atlas.untitled_page'))}
+        </div>`;
+    }
+  }
+
+  return headerHtml + (bodyHtml ? `<div class="atlas-tree-children">${bodyHtml}</div>` : '');
+}
+
+function onAtlasToggleCategory(key) {
+  if (_atlasState.expandedCategories.has(key)) _atlasState.expandedCategories.delete(key);
+  else _atlasState.expandedCategories.add(key);
+  renderAtlas();
+}
+
+function onAtlasSelectPage(pageId) {
+  _atlasState.selectedPageId = pageId;
+  renderAtlas();
+}
+
+function onAtlasNewPage() {
+  if (typeof createBlankAtlasPage !== 'function') return;
+  const page = createBlankAtlasPage(t('atlas.new_page_default_name'));
+  data.dataAtlas = data.dataAtlas || { pages: [] };
+  data.dataAtlas.pages.push(page);
+  save();
+  // Send the user to the page builder to compose it.
+  _pageBuilderState.editingId = page.id;
+  switchTab('page-builder');
+}
+
+// Renames the rightmost segment of the path-key (e.g. 'Demographics/By Province'
+// renames 'By Province' on every page whose path starts with
+// ['Demographics', 'By Province']).
+function onAtlasRenameCategory(pathKey) {
+  if (!pathKey || pathKey === '__root__') return;
+  const segments = pathKey.split('/');
+  const last = segments[segments.length - 1];
+  const newName = (window.prompt && window.prompt(t('atlas.rename_category_prompt'), last));
+  if (newName == null) return;
+  const trimmed = String(newName).trim();
+  if (!trimmed || trimmed === last) return;
+
+  const prefix = segments.slice();
+  for (const page of (data.dataAtlas?.pages || [])) {
+    const cp = Array.isArray(page.categoryPath) ? page.categoryPath : [];
+    if (cp.length < prefix.length) continue;
+    let matches = true;
+    for (let i = 0; i < prefix.length; i++) {
+      if (cp[i] !== prefix[i]) { matches = false; break; }
+    }
+    if (!matches) continue;
+    page.categoryPath = cp.slice();
+    page.categoryPath[prefix.length - 1] = trimmed;
+  }
+  save();
+  // Refresh expanded set so the renamed category remains expanded.
+  const oldKey = pathKey;
+  const newKey = segments.slice(0, -1).concat([trimmed]).join('/');
+  if (_atlasState.expandedCategories.has(oldKey)) {
+    _atlasState.expandedCategories.delete(oldKey);
+    _atlasState.expandedCategories.add(newKey);
+  }
+  renderAtlas();
+}
+
+function _renderAtlasPageView(page) {
+  const path = (Array.isArray(page.categoryPath) ? page.categoryPath : []).join(' / ');
+  return `
+    <div class="atlas-viewer-header">
+      <div>
+        <h2 class="atlas-viewer-title">${esc(page.name || t('atlas.untitled_page'))}</h2>
+        ${path ? `<div class="atlas-viewer-path">${esc(path)}</div>` : ''}
+        ${page.description ? `<p class="atlas-viewer-desc">${esc(page.description)}</p>` : ''}
+      </div>
+      <div class="atlas-viewer-actions">
+        <button class="btn btn-sm" onclick="onAtlasEditPage('${esc(page.id)}')">${t('atlas.edit_btn')}</button>
+        <button class="btn btn-sm" onclick="onAtlasDuplicatePage('${esc(page.id)}')">${t('atlas.duplicate_btn')}</button>
+        <button class="btn btn-sm btn-danger" onclick="onAtlasDeletePage('${esc(page.id)}')">${t('atlas.delete_btn')}</button>
+      </div>
+    </div>
+    <div class="atlas-viewer-svg" id="atlas-viewer-svg"></div>
+  `;
+}
+
+function _refreshAtlasViewerSVG() {
+  const container = document.getElementById('atlas-viewer-svg');
+  if (!container) return;
+  const page = (data.dataAtlas?.pages || []).find(p => p.id === _atlasState.selectedPageId);
+  if (!page) { container.innerHTML = ''; return; }
+  if (typeof renderAtlasPage === 'function') renderAtlasPage(page, container);
+}
+
+function onAtlasEditPage(pageId) {
+  _pageBuilderState.editingId = pageId;
+  switchTab('page-builder');
+}
+
+function onAtlasDuplicatePage(pageId) {
+  const src = (data.dataAtlas?.pages || []).find(p => p.id === pageId);
+  if (!src) return;
+  const copy = JSON.parse(JSON.stringify(src));
+  copy.id = uid();
+  copy.name = (src.name || '') + ' ' + t('atlas.copy_suffix');
+  for (const layer of (copy.layers || [])) layer.id = uid();
+  data.dataAtlas.pages.push(copy);
+  save();
+  _atlasState.selectedPageId = copy.id;
+  renderAtlas();
+}
+
+function onAtlasDeletePage(pageId) {
+  const page = (data.dataAtlas?.pages || []).find(p => p.id === pageId);
+  if (!page) return;
+  appConfirm(t('atlas.confirm_delete', { name: page.name || t('atlas.untitled_page') }), () => {
+    data.dataAtlas.pages = data.dataAtlas.pages.filter(p => p.id !== pageId);
+    if (_atlasState.selectedPageId === pageId) _atlasState.selectedPageId = null;
+    if (_pageBuilderState.editingId === pageId) _pageBuilderState.editingId = null;
+    save();
+    renderAtlas();
+  });
+}
+
+// ============================================================
+// PAGE BUILDER (Brick 13)
+// ============================================================
+// Composes pages out of layer instructions. The page selector at the
+// top lets the user switch between pages; everything below edits the
+// currently-selected page. The SVG preview on the right re-renders on
+// any state change (debounced).
+
+let _pageBuilderState = {
+  editingId:       null,
+  selectedLayerId: null,
+  refreshDebounce: null,
+};
+
+function renderPageBuilder() {
+  const el = document.getElementById('page-builder-content');
+  if (!el) return;
+  const pages = (data.dataAtlas && Array.isArray(data.dataAtlas.pages)) ? data.dataAtlas.pages : [];
+
+  if (pages.length === 0) {
+    el.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-icon">✎</div>
+        <h3>${t('page_builder.empty_title')}</h3>
+        <p>${t('page_builder.empty_body')}</p>
+        <button class="btn btn-primary" onclick="onPageBuilderNewPage()">+ ${t('atlas.new_page_btn')}</button>
+      </div>`;
+    return;
+  }
+
+  if (!_pageBuilderState.editingId || !pages.find(p => p.id === _pageBuilderState.editingId)) {
+    _pageBuilderState.editingId = pages[0].id;
+    _pageBuilderState.selectedLayerId = null;
+  }
+  const page = pages.find(p => p.id === _pageBuilderState.editingId);
+
+  const pageOpts = pages.slice()
+    .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+    .map(p => `<option value="${esc(p.id)}"${p.id === page.id ? ' selected' : ''}>${esc(p.name || t('atlas.untitled_page'))}</option>`)
+    .join('');
+
+  el.innerHTML = `
+    <div class="page-builder-header">
+      <select class="page-builder-page-select"
+        onchange="onPageBuilderSelectPage(this.value)">${pageOpts}</select>
+      <button class="btn btn-sm" onclick="onPageBuilderNewPage()">+ ${t('atlas.new_page_btn')}</button>
+      <button class="btn btn-sm" onclick="onAtlasDuplicatePage('${esc(page.id)}')">${t('atlas.duplicate_btn')}</button>
+      <button class="btn btn-sm btn-danger" onclick="onAtlasDeletePage('${esc(page.id)}')">${t('atlas.delete_btn')}</button>
+    </div>
+    <div class="page-builder-layout">
+      <aside class="page-builder-sidebar">
+        ${_renderPageBuilderMetadata(page)}
+        ${_renderPageBuilderLayerList(page)}
+        ${_renderPageBuilderLayerEditor(page)}
+      </aside>
+      <main class="page-builder-preview" id="page-builder-preview"></main>
+    </div>
+  `;
+  _refreshPageBuilderPreview();
+}
+
+function _renderPageBuilderMetadata(page) {
+  const catPath = Array.isArray(page.categoryPath) ? page.categoryPath.join(' / ') : '';
+  const ext = page.extent && typeof page.extent === 'object' ? page.extent : null;
+  return `
+    <div class="pb-section">
+      <h4>${t('page_builder.section_meta')}</h4>
+      <label class="pb-row">
+        <span>${t('page_builder.name')}</span>
+        <input type="text" value="${esc(page.name || '')}"
+          oninput="onPageBuilderEditMeta('name', this.value)">
+      </label>
+      <label class="pb-row">
+        <span>${t('page_builder.category_path')}</span>
+        <input type="text" value="${esc(catPath)}"
+          placeholder="${t('page_builder.category_placeholder')}"
+          oninput="onPageBuilderEditCategoryPath(this.value)">
+      </label>
+      <label class="pb-row">
+        <span>${t('page_builder.description')}</span>
+        <textarea rows="2" oninput="onPageBuilderEditMeta('description', this.value)">${esc(page.description || '')}</textarea>
+      </label>
+      <label class="pb-row">
+        <span>${t('page_builder.extent')}</span>
+        <select onchange="onPageBuilderToggleExtent(this.value)">
+          <option value="auto"${page.extent === 'auto' ? ' selected' : ''}>${t('page_builder.extent_auto')}</option>
+          <option value="explicit"${ext ? ' selected' : ''}>${t('page_builder.extent_explicit')}</option>
+        </select>
+      </label>
+      ${ext ? `
+        <div class="pb-extent-grid">
+          ${['minLat','maxLat','minLng','maxLng'].map(k => `
+            <label>
+              <span>${k}</span>
+              <input type="number" step="any" value="${ext[k] != null ? ext[k] : ''}"
+                oninput="onPageBuilderEditExtent('${k}', this.value)">
+            </label>
+          `).join('')}
+        </div>
+      ` : ''}
+      <label class="pb-row">
+        <span>${t('page_builder.simplification')}</span>
+        <input type="range" min="0" max="100" step="1"
+          value="${Number(page.simplification) || 0}"
+          oninput="onPageBuilderEditMeta('simplification', this.value)">
+        <span class="mono">${Number(page.simplification) || 0}%</span>
+      </label>
+    </div>
+  `;
+}
+
+function _renderPageBuilderLayerList(page) {
+  const layers = Array.isArray(page.layers) ? page.layers : [];
+  const rows = layers.map((layer, i) => {
+    const sel = layer.id === _pageBuilderState.selectedLayerId ? ' pb-layer-row-active' : '';
+    const kindLabel = t('page_builder.layer_kind_' + layer.kind) || layer.kind;
+    const upDisabled   = i === 0 ? 'disabled' : '';
+    const downDisabled = i === layers.length - 1 ? 'disabled' : '';
+    return `
+      <div class="pb-layer-row${sel}"
+           onclick="onPageBuilderSelectLayer('${esc(layer.id)}')">
+        <input type="checkbox" ${layer.visible !== false ? 'checked' : ''}
+          onclick="event.stopPropagation()"
+          onchange="onPageBuilderEditLayer('${esc(layer.id)}', 'visible', this.checked)">
+        <span class="pb-layer-name">${esc(layer.name || kindLabel)}</span>
+        <span class="pb-layer-kind">${esc(kindLabel)}</span>
+        <button class="btn btn-xs" ${upDisabled}
+          onclick="event.stopPropagation();onPageBuilderMoveLayer('${esc(layer.id)}', -1)">↑</button>
+        <button class="btn btn-xs" ${downDisabled}
+          onclick="event.stopPropagation();onPageBuilderMoveLayer('${esc(layer.id)}', 1)">↓</button>
+        <button class="btn btn-xs btn-danger"
+          onclick="event.stopPropagation();onPageBuilderDeleteLayer('${esc(layer.id)}')">✕</button>
+      </div>
+    `;
+  }).join('');
+  const addOpts = ATLAS_LAYER_KINDS.map(k => `<option value="${k}">${esc(t('page_builder.layer_kind_' + k))}</option>`).join('');
+  return `
+    <div class="pb-section">
+      <h4>${t('page_builder.section_layers')}</h4>
+      <div class="pb-layer-list">${rows || `<div class="text-dim" style="font-size:12px">${t('page_builder.no_layers')}</div>`}</div>
+      <div class="pb-add-layer">
+        <select id="pb-add-layer-kind">${addOpts}</select>
+        <button class="btn btn-sm" onclick="onPageBuilderAddLayer()">+ ${t('page_builder.add_layer')}</button>
+      </div>
+    </div>
+  `;
+}
+
+function _renderPageBuilderLayerEditor(page) {
+  const layer = (page.layers || []).find(l => l.id === _pageBuilderState.selectedLayerId);
+  if (!layer) return '';
+  let kindFields = '';
+  if (layer.kind === 'boundary_fill' || layer.kind === 'boundary_outline') {
+    const typeOpts = (data.boundaryTypes || []).map(bt =>
+      `<option value="${esc(bt.id)}"${bt.id === layer.typeId ? ' selected' : ''}>${esc(bt.name)}</option>`
+    ).join('');
+    kindFields += `
+      <label class="pb-row">
+        <span>${t('page_builder.boundary_type')}</span>
+        <select onchange="onPageBuilderEditLayer('${esc(layer.id)}', 'typeId', this.value || null)">
+          <option value="">${t('page_builder.boundary_type_none')}</option>
+          ${typeOpts}
+        </select>
+      </label>
+    `;
+  }
+  if (layer.kind === 'boundary_fill' || layer.kind === 'plot_fill') {
+    kindFields += _renderPbFillEditor(layer);
+  }
+  if (layer.kind === 'boundary_fill' || layer.kind === 'boundary_outline' || layer.kind === 'plot_fill') {
+    kindFields += _renderPbStrokeEditor(layer);
+  }
+  if (layer.kind === 'settlements') {
+    kindFields += _renderPbSettlementsEditor(layer);
+  }
+  return `
+    <div class="pb-section">
+      <h4>${t('page_builder.section_layer_edit')}</h4>
+      <label class="pb-row">
+        <span>${t('page_builder.layer_name')}</span>
+        <input type="text" value="${esc(layer.name || '')}"
+          oninput="onPageBuilderEditLayer('${esc(layer.id)}', 'name', this.value)">
+      </label>
+      ${kindFields}
+    </div>
+  `;
+}
+
+function _renderPbFillEditor(layer) {
+  const fill = layer.fill || { mode: 'static', color: '#475569' };
+  const isProperty = fill.mode === 'property';
+  // Schemas applicable to the layer's level.
+  let schemaOpts = '';
+  let levelId = null;
+  if (layer.kind === 'plot_fill') levelId = 'plot';
+  else if (layer.typeId) levelId = layer.typeId;
+  if (levelId) {
+    const schemas = (data.propertySchemas || []).filter(s => appliesAtLevel(s, levelId));
+    // Add virtual Area too (it applies everywhere).
+    const all = [_virtualAreaSchema(), ...schemas];
+    schemaOpts = all.map(s =>
+      `<option value="${esc(s.id)}"${s.id === fill.schemaId ? ' selected' : ''}>${esc(s.name)}</option>`
+    ).join('');
+  }
+  return `
+    <label class="pb-row">
+      <span>${t('page_builder.fill_mode')}</span>
+      <select onchange="onPageBuilderEditFillMode('${esc(layer.id)}', this.value)">
+        <option value="static"${!isProperty ? ' selected' : ''}>${t('page_builder.fill_static')}</option>
+        <option value="property"${isProperty ? ' selected' : ''}>${t('page_builder.fill_property')}</option>
+      </select>
+    </label>
+    ${!isProperty ? `
+      <label class="pb-row">
+        <span>${t('page_builder.fill_color')}</span>
+        <input type="color" value="${esc(fill.color || '#475569')}"
+          oninput="onPageBuilderEditFillField('${esc(layer.id)}', 'color', this.value)">
+      </label>
+    ` : `
+      <label class="pb-row">
+        <span>${t('page_builder.fill_property_schema')}</span>
+        <select onchange="onPageBuilderEditFillField('${esc(layer.id)}', 'schemaId', this.value || null)">
+          <option value="">${t('page_builder.fill_property_none')}</option>
+          ${schemaOpts}
+        </select>
+      </label>
+      <label class="pb-row">
+        <span>${t('page_builder.fill_scale')}</span>
+        <select onchange="onPageBuilderEditScaleKind('${esc(layer.id)}', this.value)">
+          <option value="viridis"${(fill.scale?.kind || 'viridis') === 'viridis' ? ' selected' : ''}>${t('page_builder.scale_viridis')}</option>
+          <option value="sequential"${fill.scale?.kind === 'sequential' ? ' selected' : ''}>${t('page_builder.scale_sequential')}</option>
+        </select>
+      </label>
+    `}
+  `;
+}
+
+function _renderPbStrokeEditor(layer) {
+  const s = layer.stroke || { color: '#0f1117', width: 1, opacity: 0.85 };
+  return `
+    <label class="pb-row">
+      <span>${t('page_builder.stroke_color')}</span>
+      <input type="color" value="${esc(s.color || '#000000')}"
+        oninput="onPageBuilderEditStroke('${esc(layer.id)}', 'color', this.value)">
+    </label>
+    <label class="pb-row">
+      <span>${t('page_builder.stroke_width')}</span>
+      <input type="number" step="0.1" min="0" value="${s.width != null ? s.width : 1}"
+        oninput="onPageBuilderEditStroke('${esc(layer.id)}', 'width', this.value)">
+    </label>
+    <label class="pb-row">
+      <span>${t('page_builder.stroke_opacity')}</span>
+      <input type="range" min="0" max="1" step="0.05"
+        value="${s.opacity != null ? s.opacity : 0.85}"
+        oninput="onPageBuilderEditStroke('${esc(layer.id)}', 'opacity', this.value)">
+    </label>
+  `;
+}
+
+function _renderPbSettlementsEditor(layer) {
+  const filterTypes = (layer.filter && Array.isArray(layer.filter.placeTypes)) ? layer.filter.placeTypes : [];
+  const types = (typeof PLACE_TYPES !== 'undefined' && Array.isArray(PLACE_TYPES))
+    ? PLACE_TYPES
+    : ['city','town','village','suburb','hamlet','quarter','neighbourhood','isolated_dwelling','locality','borough'];
+  const checks = types.map(pt => `
+    <label class="pb-check">
+      <input type="checkbox" ${filterTypes.includes(pt) ? 'checked' : ''}
+        onchange="onPageBuilderTogglePlaceType('${esc(layer.id)}', '${esc(pt)}', this.checked)">
+      ${esc(pt)}
+    </label>
+  `).join('');
+  return `
+    <div class="pb-row">
+      <span>${t('page_builder.settlement_filter')}</span>
+      <div class="pb-checks">${checks}</div>
+      <div class="text-dim" style="font-size:11px;margin-top:4px">${t('page_builder.settlement_filter_hint')}</div>
+    </div>
+  `;
+}
+
+function onPageBuilderNewPage() {
+  if (typeof createBlankAtlasPage !== 'function') return;
+  const page = createBlankAtlasPage(t('atlas.new_page_default_name'));
+  data.dataAtlas = data.dataAtlas || { pages: [] };
+  data.dataAtlas.pages.push(page);
+  _pageBuilderState.editingId = page.id;
+  _pageBuilderState.selectedLayerId = null;
+  save();
+  renderPageBuilder();
+}
+
+function onPageBuilderSelectPage(pageId) {
+  _pageBuilderState.editingId = pageId;
+  _pageBuilderState.selectedLayerId = null;
+  renderPageBuilder();
+}
+
+function _currentPbPage() {
+  if (!_pageBuilderState.editingId) return null;
+  return (data.dataAtlas?.pages || []).find(p => p.id === _pageBuilderState.editingId) || null;
+}
+
+function onPageBuilderEditMeta(field, value) {
+  const page = _currentPbPage();
+  if (!page) return;
+  if (field === 'simplification') value = Math.max(0, Math.min(100, Number(value) || 0));
+  page[field] = value;
+  save();
+  _refreshPageBuilderPreview();
+}
+
+function onPageBuilderEditCategoryPath(value) {
+  const page = _currentPbPage();
+  if (!page) return;
+  page.categoryPath = String(value).split('/').map(s => s.trim()).filter(Boolean);
+  save();
+  // Don't re-render the whole panel (would steal focus); just save.
+}
+
+function onPageBuilderToggleExtent(value) {
+  const page = _currentPbPage();
+  if (!page) return;
+  if (value === 'explicit') {
+    const auto = (typeof _autoExtentForPage === 'function') ? _autoExtentForPage(page) : null;
+    page.extent = auto || { minLat: -1, maxLat: 1, minLng: -1, maxLng: 1 };
+  } else {
+    page.extent = 'auto';
+  }
+  save();
+  renderPageBuilder();
+}
+
+function onPageBuilderEditExtent(field, value) {
+  const page = _currentPbPage();
+  if (!page || typeof page.extent !== 'object') return;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return;
+  page.extent[field] = n;
+  save();
+  _refreshPageBuilderPreview();
+}
+
+function onPageBuilderAddLayer() {
+  const page = _currentPbPage();
+  if (!page) return;
+  const sel = document.getElementById('pb-add-layer-kind');
+  const kind = sel ? sel.value : 'boundary_fill';
+  if (!ATLAS_LAYER_KINDS.includes(kind)) return;
+  const layer = createBlankAtlasLayer(kind);
+  page.layers = page.layers || [];
+  page.layers.push(layer);
+  _pageBuilderState.selectedLayerId = layer.id;
+  save();
+  renderPageBuilder();
+}
+
+function onPageBuilderSelectLayer(layerId) {
+  _pageBuilderState.selectedLayerId = layerId;
+  renderPageBuilder();
+}
+
+function onPageBuilderEditLayer(layerId, field, value) {
+  const page = _currentPbPage();
+  if (!page) return;
+  const layer = (page.layers || []).find(l => l.id === layerId);
+  if (!layer) return;
+  if (field === 'visible') value = !!value;
+  layer[field] = value;
+  save();
+  // Some edits only affect the preview (visible, typeId) — rerendering the
+  // sidebar would steal focus. Only refresh preview.
+  if (field === 'name') { renderPageBuilder(); return; }
+  _refreshPageBuilderPreview();
+}
+
+function onPageBuilderEditFillMode(layerId, mode) {
+  const page = _currentPbPage();
+  if (!page) return;
+  const layer = (page.layers || []).find(l => l.id === layerId);
+  if (!layer) return;
+  layer.fill = layer.fill || {};
+  layer.fill.mode = (mode === 'property') ? 'property' : 'static';
+  if (layer.fill.mode === 'static' && !layer.fill.color) layer.fill.color = '#475569';
+  if (layer.fill.mode === 'property' && !layer.fill.scale) layer.fill.scale = { kind: 'viridis' };
+  save();
+  renderPageBuilder();
+}
+
+function onPageBuilderEditFillField(layerId, field, value) {
+  const page = _currentPbPage();
+  if (!page) return;
+  const layer = (page.layers || []).find(l => l.id === layerId);
+  if (!layer || !layer.fill) return;
+  layer.fill[field] = value;
+  save();
+  _refreshPageBuilderPreview();
+}
+
+function onPageBuilderEditScaleKind(layerId, kind) {
+  const page = _currentPbPage();
+  if (!page) return;
+  const layer = (page.layers || []).find(l => l.id === layerId);
+  if (!layer || !layer.fill) return;
+  layer.fill.scale = { kind: (kind === 'sequential') ? 'sequential' : 'viridis' };
+  save();
+  _refreshPageBuilderPreview();
+}
+
+function onPageBuilderEditStroke(layerId, field, value) {
+  const page = _currentPbPage();
+  if (!page) return;
+  const layer = (page.layers || []).find(l => l.id === layerId);
+  if (!layer) return;
+  layer.stroke = layer.stroke || {};
+  if (field === 'width' || field === 'opacity') value = Number(value);
+  layer.stroke[field] = value;
+  save();
+  _refreshPageBuilderPreview();
+}
+
+function onPageBuilderTogglePlaceType(layerId, pt, checked) {
+  const page = _currentPbPage();
+  if (!page) return;
+  const layer = (page.layers || []).find(l => l.id === layerId);
+  if (!layer) return;
+  layer.filter = layer.filter || { placeTypes: [] };
+  const set = new Set(layer.filter.placeTypes || []);
+  if (checked) set.add(pt); else set.delete(pt);
+  layer.filter.placeTypes = Array.from(set);
+  save();
+  _refreshPageBuilderPreview();
+}
+
+function onPageBuilderMoveLayer(layerId, delta) {
+  const page = _currentPbPage();
+  if (!page || !Array.isArray(page.layers)) return;
+  const i = page.layers.findIndex(l => l.id === layerId);
+  if (i < 0) return;
+  const j = i + delta;
+  if (j < 0 || j >= page.layers.length) return;
+  const [moved] = page.layers.splice(i, 1);
+  page.layers.splice(j, 0, moved);
+  save();
+  renderPageBuilder();
+}
+
+function onPageBuilderDeleteLayer(layerId) {
+  const page = _currentPbPage();
+  if (!page) return;
+  page.layers = (page.layers || []).filter(l => l.id !== layerId);
+  if (_pageBuilderState.selectedLayerId === layerId) _pageBuilderState.selectedLayerId = null;
+  save();
+  renderPageBuilder();
+}
+
+// Debounced SVG re-render of the page-builder preview pane. Cheap
+// because rendering is a small DOM swap; the debounce just smooths
+// rapid slider drags.
+function _refreshPageBuilderPreview() {
+  if (_pageBuilderState.refreshDebounce) {
+    clearTimeout(_pageBuilderState.refreshDebounce);
+    _pageBuilderState.refreshDebounce = null;
+  }
+  _pageBuilderState.refreshDebounce = setTimeout(() => {
+    const page = _currentPbPage();
+    const container = document.getElementById('page-builder-preview');
+    if (!page || !container) return;
+    if (typeof renderAtlasPage === 'function') renderAtlasPage(page, container);
+  }, 180);
+}

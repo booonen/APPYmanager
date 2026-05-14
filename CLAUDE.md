@@ -940,6 +940,27 @@ they come up; the plan is a living document.
   - Tradeoff: the land-on-left convention is trusted strictly (per
     the v0.8.7 simplification). Any coastline drawn water-on-left
     inverts its mode classification.
+- **Brick 13** ✓ (committed, v0.12.0) — Data Atlas (Phase 5 opens).
+  "Map" moves under a new **Visualization** sidebar category; joined
+  by **Atlas** (browse) and **Page Builder** (compose). Pages render
+  as **SVG**, not Leaflet — atlases are for authoring + reading; the
+  Map tab stays as the live explorer.
+  - Page = list of declarative layer instructions + page-level
+    settings (extent, simplification %, plain background). Stored at
+    `data.dataAtlas.pages` (schema v3).
+  - Layer kinds (v1): `boundary_fill`, `boundary_outline`,
+    `plot_fill`, `settlements`. Fill modes: static colour, or by
+    property (viridis / sequential ramps for numeric+percentage,
+    categorical palette capped at 12 with overflow → "Other").
+  - Equirectangular projection (lng → x, -lat → y); auto-fit to
+    project bbox or user-set extent. Simplification = bbox-diagonal
+    × 1% per slider percent (turf.simplify).
+  - Categories are implicit — each page has `categoryPath: string[]`.
+    Single-rename gesture cascades to every page whose path starts
+    with that segment.
+  - Hover tooltip on the SVG; no click-to-open (decision R).
+  - Out of scope for v1 (filed): SVG/PNG export, multi-property
+    spectra layouts, drag-reorganise of nested categories.
 - **Brick 11c** ✓ (committed, v0.11.0) — manual plot merge.
   Inverse of plot-split. `js/merge.js` exposes
   `computePlotMerge(plotIds)` (pure — turf.union fold, boundary-

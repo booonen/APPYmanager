@@ -32,12 +32,15 @@
       <div class="nav-item" data-tab="boundaries" onclick="switchTab('boundaries')"><span class="nav-icon">⬢</span> <span data-t="nav.boundaries">Boundaries</span></div>
       <div class="nav-item" data-tab="settlements" onclick="switchTab('settlements')"><span class="nav-icon">◉</span> <span data-t="nav.settlements">Settlements</span></div>
       <div class="nav-item" data-tab="properties" onclick="switchTab('properties')"><span class="nav-icon">◊</span> <span data-t="nav.properties">Properties</span></div>
+      <div class="nav-section" data-t="nav_section.visualization">Visualization</div>
       <div class="nav-item" data-tab="map" onclick="switchTab('map')"><span class="nav-icon">🗺</span> <span data-t="nav.map">Map</span></div>
+      <div class="nav-item" data-tab="atlas" onclick="switchTab('atlas')"><span class="nav-icon">▦</span> <span data-t="nav.atlas">Atlas</span></div>
+      <div class="nav-item" data-tab="page-builder" onclick="switchTab('page-builder')"><span class="nav-icon">✎</span> <span data-t="nav.page_builder">Page Builder</span></div>
       <div class="nav-section" data-t="nav_section.system">System</div>
       <div class="nav-item" data-tab="settings" onclick="switchTab('settings')"><span class="nav-icon">⚙</span> <span data-t="nav.settings">Settings</span></div>
       <div class="nav-item" data-tab="import-export" onclick="switchTab('import-export')"><span class="nav-icon">⇅</span> <span data-t="nav.import_export">Import / Export</span></div>
       <div class="spacer"></div>
-      <div style="padding:8px 16px;font-size:10px;color:var(--text-muted);font-family:var(--font-mono);opacity:0.6">v0.11.2</div>
+      <div style="padding:8px 16px;font-size:10px;color:var(--text-muted);font-family:var(--font-mono);opacity:0.6">v0.12.0</div>
     </nav>
     <div class="content">
 
@@ -86,6 +89,18 @@
           <div id="map" style="border-radius:var(--radius);overflow:hidden;border:1px solid var(--border)"></div>
           <div id="map-side-panel" class="map-side-panel" style="display:none"></div>
         </div>
+      </div>
+
+      <!-- ATLAS — Data-view browser (Brick 13) -->
+      <div class="tab-panel" id="panel-atlas">
+        <div class="page-header"><div><h1 data-t="page.atlas">Atlas</h1><div class="subtitle" data-t="subtitle.atlas">Browse data-driven maps</div></div></div>
+        <div id="atlas-content"></div>
+      </div>
+
+      <!-- PAGE BUILDER — Compose atlas pages (Brick 13) -->
+      <div class="tab-panel" id="panel-page-builder">
+        <div class="page-header"><div><h1 data-t="page.page_builder">Page Builder</h1><div class="subtitle" data-t="subtitle.page_builder">Compose pages out of layer instructions</div></div></div>
+        <div id="page-builder-content"></div>
       </div>
 
       <!-- SETTINGS -->
@@ -142,6 +157,7 @@
 <script src="js/subdivide.js"></script>
 <script src="js/split.js"></script>
 <script src="js/merge.js"></script>
+<script src="js/atlas.js"></script>
 <script src="js/landwater.js"></script>
 <script src="js/persistence.js"></script>
 <script src="js/ui.js"></script>

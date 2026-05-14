@@ -8,6 +8,7 @@ registerLanguage('en', 'English', {
   },
   "nav_section": {
     "geography": "Geography",
+    "visualization": "Visualization",
     "system": "System"
   },
   "nav": {
@@ -18,6 +19,8 @@ registerLanguage('en', 'English', {
     "settlements": "Settlements",
     "properties": "Properties",
     "map": "Map",
+    "atlas": "Atlas",
+    "page_builder": "Page Builder",
     "settings": "Settings",
     "import_export": "Import / Export"
   },
@@ -29,6 +32,8 @@ registerLanguage('en', 'English', {
     "settlements": "Settlements",
     "properties": "Properties",
     "map": "Map",
+    "atlas": "Atlas",
+    "page_builder": "Page Builder",
     "settings": "Settings",
     "import_export": "Import / Export"
   },
@@ -40,6 +45,8 @@ registerLanguage('en', 'English', {
     "settlements": "OGF place=* nodes attached to plots or boundaries",
     "properties": "Demographic data definitions for plots and boundaries",
     "map": "Geographic view of plots and boundaries",
+    "atlas": "Browse data-driven maps",
+    "page_builder": "Compose pages out of layer instructions",
     "settings": "Project configuration",
     "import_export": "Move project data in and out"
   },
@@ -526,5 +533,58 @@ registerLanguage('en', 'English', {
     "error_degenerate_split": "The cut grazes the boundary without dividing it. Try a cleaner crossing.",
     "error_execute": "Split failed — no changes made.",
     "error_unknown": "Could not compute the split."
+  },
+  "atlas": {
+    "empty_title": "No atlas pages yet",
+    "empty_body": "An atlas page is a custom data-driven map composed of layer instructions. Create one to get started.",
+    "new_page_btn": "New page",
+    "new_page_default_name": "Untitled page",
+    "untitled_page": "(untitled)",
+    "pick_page_hint": "Pick a page from the tree on the left.",
+    "edit_btn": "Edit",
+    "duplicate_btn": "Duplicate",
+    "delete_btn": "Delete",
+    "copy_suffix": "(copy)",
+    "rename_category": "Rename category",
+    "rename_category_prompt": "New name for this category:",
+    "confirm_delete": "Delete \"{name}\"? This can't be undone."
+  },
+  "page_builder": {
+    "empty_title": "No pages to edit yet",
+    "empty_body": "Create your first page to start composing layer instructions.",
+    "section_meta": "Page",
+    "section_layers": "Layers",
+    "section_layer_edit": "Selected layer",
+    "name": "Name",
+    "category_path": "Category path",
+    "category_placeholder": "Demographics / By Province",
+    "description": "Description",
+    "extent": "Extent",
+    "extent_auto": "Auto (fit to layers)",
+    "extent_explicit": "Explicit bbox",
+    "simplification": "Simplification",
+    "no_layers": "No layers yet — add one below.",
+    "add_layer": "Add layer",
+    "layer_name": "Layer name",
+    "layer_kind_boundary_fill": "Boundary fill",
+    "layer_kind_boundary_outline": "Boundary outline",
+    "layer_kind_plot_fill": "Plot fill",
+    "layer_kind_settlements": "Settlements",
+    "boundary_type": "Boundary type",
+    "boundary_type_none": "(pick one)",
+    "fill_mode": "Fill",
+    "fill_static": "Static colour",
+    "fill_property": "By property",
+    "fill_color": "Colour",
+    "fill_property_schema": "Property",
+    "fill_property_none": "(pick one)",
+    "fill_scale": "Scale",
+    "scale_viridis": "Viridis",
+    "scale_sequential": "Sequential (red)",
+    "stroke_color": "Stroke colour",
+    "stroke_width": "Stroke width (px)",
+    "stroke_opacity": "Stroke opacity",
+    "settlement_filter": "Place types",
+    "settlement_filter_hint": "Leave all unticked to include every place type."
   }
 });

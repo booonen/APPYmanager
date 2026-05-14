@@ -1,3 +1,98 @@
+## 0.12.0 — Brick 13: Atlas + Page Builder (Phase 5 opens)
+
+Phase 5 — visualisation. The "Map" tab moves under a new **Visualization**
+sidebar category; two new siblings join it:
+
+- **Atlas** — browses user-authored data-driven pages, organised by
+  implicit nested categories.
+- **Page Builder** — composes pages out of layer instructions.
+
+Pages render as **SVG** (not Leaflet — decision: data atlases are
+about authoring, not interaction). Equirectangular projection auto-fits
+the project bbox. Hover tooltip names + values; no click-to-open.
+
+### Data model
+
+`data.dataAtlas.pages: page[]` (added in schema v3 via `migrateData`).
+
+```
+page = {
+  id, name, description,
+  categoryPath: string[],         // implicit tree key (decision V.i —
+                                  // single user rename cascades)
+  extent: 'auto' | { minLat, maxLat, minLng, maxLng },
+  simplification: 0..100,         // % of bbox diagonal
+  background: 'plain',
+  layers: layer[]
+}
+
+layer kinds (Brick 13 v1):
+  boundary_fill    — { typeId, fill, stroke, visible }
+  boundary_outline — { typeId, stroke, visible }
+  plot_fill        — { fill, stroke, visible }
+  settlements      — { filter: { placeTypes }, style, visible }
+
+fill = { mode: 'static' | 'property', color?, schemaId?, scale?, range? }
+scale.kind = 'viridis' | 'sequential' (numeric/percentage)
+             | (categorical — derived from schema kind)
+```
+
+### SVG renderer (`js/atlas.js`)
+
+`renderAtlasPage(page, container)` reads the layer list, computes per-
+layer rendering context (numeric domains, categorical palettes), and
+emits SVG paths/circles. Polygons share `viewBox` set to the page's
+extent in `[lng, -lat]` space. Decisions implemented:
+
+- **N** equirectangular — `path d` uses `lng,-lat` directly.
+- **O** simplification (`turf.simplify`, tolerance = bbox-diagonal × 1%
+  per slider percent; 0 = off).
+- **W** no labels (hover handles names + values).
+- **X** plain dark background (no tile reference).
+- **Viridis + sequential ramps** + categorical palette with 12-hue
+  cap (overflow → "Other" grey). Missing values → mid-grey.
+- **Hover tooltip** — one floating div positioned near cursor; reads
+  `data-entity-name` / `data-entity-value` attributes on the SVG node.
+
+### Atlas browser (`views.js`)
+
+Two-pane layout: category tree on the left, page viewer on the right.
+The tree is constructed implicitly from every page's `categoryPath`.
+Each category header is renameable (single prompt; cascades to every
+page whose path starts with that segment — decision V.i). Pages
+support: open (click), edit (jumps to Page Builder), duplicate, delete.
+Empty state offers a "+ New page" CTA.
+
+### Page Builder (`views.js`)
+
+Left: stacked sections — page metadata (name, category path,
+description, extent, simplification slider) + layers list + selected
+layer editor. Right: live SVG preview, debounced ~180 ms.
+
+Layer editor adapts to `kind`:
+- Polygon layers expose fill (static/property) + stroke; property fill
+  exposes a schema picker filtered to applicable schemas, plus a scale
+  picker (viridis / sequential).
+- Settlement layer exposes a place-type checkbox grid.
+
+Move ↑/↓ buttons reorder (index 0 = bottom of SVG); ✕ deletes.
+
+### Migration
+
+`SCHEMA_VERSION` bumped 2 → 3. `migrateData` ensures `data.dataAtlas`
+exists with `pages: []` on older saves. No destructive ops; existing
+saves get an empty atlas they can populate.
+
+### Out of scope for 13 (filed for later)
+
+- **Export to SVG / PNG** — decision T noted; renderer is already
+  SVG-native, so this lands easily later.
+- **Multi-property "spectra" pages** — the layer model supports
+  layering today (one fill + one outline + a settlement layer), but
+  a true small-multiples view is bigger UX work.
+- **Nested category drag-reorganise** — currently the path string is
+  edited inline on each page.
+
 ## 0.11.2 — Split editor: per-ring sticky islands when a cut is drawn
 
 Follow-up on v0.11.1. The "no cut → all in one output" default was

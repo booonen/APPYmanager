@@ -14,7 +14,7 @@ let _saveDebounce = null;
 // load by migrateData(): the portion-aware property storage is folded
 // down, schema appliesTo is dropped, and the split-toggle settings are
 // replaced by a single project-level mode that's then read-only.
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 const VALID_LAND_WATER_MODES = [
   'land_only_sea_water',  // default — clip out sea AND inland water
@@ -35,7 +35,11 @@ const EMPTY_DATA = () => ({
     landWaterMode: 'land_only_sea_water',  // set at save creation; read-only after
     showWaterOverlay: true,                // visual water layer on the map
   },
-  waterCache: null  // Brick 12a — populated by fetchAndCacheWater()
+  waterCache: null,  // Brick 12a — populated by fetchAndCacheWater()
+  // Brick 13: collection of user-authored Atlas pages. Each page is a
+  // declarative list of layer instructions + page-level settings; the
+  // SVG renderer in js/atlas.js consumes the list to produce a page.
+  dataAtlas: { pages: [] },
 });
 
 // Migration: legacy saves → v2. Idempotent; runs after every load/import
@@ -101,6 +105,13 @@ function migrateData(d) {
   if (d.waterCache && d.waterCache.waterGeometry
       && d.settings.landWaterMode !== 'combined') {
     d.__needsReclipOnLoad = true;
+  }
+
+  // v3 (Brick 13): dataAtlas container.
+  if (!d.dataAtlas || typeof d.dataAtlas !== 'object') {
+    d.dataAtlas = { pages: [] };
+  } else if (!Array.isArray(d.dataAtlas.pages)) {
+    d.dataAtlas.pages = [];
   }
 
   d.schemaVersion = SCHEMA_VERSION;
