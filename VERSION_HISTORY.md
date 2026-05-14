@@ -1,3 +1,67 @@
+## 0.12.2 — Atlas polish: pan, layout, real simplification, custom picker
+
+Five fixes from the v0.12.1 testing round:
+
+### Pan fix
+
+`_attachAtlasZoomPan` was gating mousedown on `target === svg || target
+=== bg` — but SVG paths receive pointer events by default, so any
+mousedown over a polygon bypassed pan. Removed the gate; left-mouse
+mousedown anywhere on the SVG starts a pan. Pages don't bind click
+actions to features (hover only), so swallowing the down costs
+nothing.
+
+### Page Builder preview gets the full pane
+
+`.page-builder-layout` had `min-height: 70vh` — a minimum, so the
+grid row collapsed to content height, and the SVG inside (with
+`height: 100%`) had nothing to resolve against. Replaced with a real
+`height: calc(100vh - 200px)`. Same fix on `.atlas-layout`. The
+SVG now fills the pane.
+
+### Topology-aware Visvalingam simplification
+
+v0.12.1's coordinate-quantization simplification preserved topology
+but produced a blocky staircase. Replaced with proper Visvalingam-
+Whyatt with junction protection:
+
+1. Snap every coordinate to a fine grid (1e-8°) so identical-intended
+   points become bit-identical.
+2. Build a global adjacency map across every polygon in the page.
+3. A vertex is a **junction** iff its unique-neighbour count != 2.
+   Junctions are always kept.
+4. Per-ring Visvalingam-Whyatt drops vertices in order of smallest
+   effective-area, skipping junctions. Because a non-junction
+   vertex on a shared boundary has the same neighbours in both
+   polygons, its EA is identical in both — same threshold gives
+   identical drop decisions on both sides. Shared edges stay shared.
+
+Effective-area threshold scales as `(bbox-diagonal × pct/100 ×
+0.5%)²`. Curvature gets smoothed (no more axis-aligned staircase)
+while small slivers between adjacent polygons stay sealed.
+
+### Custom colour picker
+
+Replaces native `<input type="color">` everywhere with a popover:
+24-swatch curated palette + hex input. Lives in `js/colorpicker.js`;
+each generated button carries a `data-cp-id` referencing a registered
+callback. Used in: Page Builder fill / stroke / scale-stop colours,
+Properties tab category colours. Hex display on the button so the
+user sees the current value at a glance.
+
+### Category colours editable from the Page Builder
+
+The same per-category colour grid (Properties tab) now appears inline
+in the Page Builder layer editor whenever the fill is "by property"
+and the chosen property is categorical. Changes write through to
+`schema.categoryColors` — same source of truth, two edit surfaces.
+The scale picker (viridis / sequential / custom) is suppressed for
+categorical fills since it doesn't apply.
+
+### Filed for later (carried from v0.12.1)
+
+- Mass-set / edit properties via the property menu (separate brick).
+
 ## 0.12.1 — Atlas polish: Mercator, zoom/pan, custom scales, category colours
 
 Round one of post-v0.12.0 fixes:

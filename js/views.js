@@ -3531,6 +3531,7 @@ function openEditPropertyModal(id) {
 }
 
 function _openPropertyModal(title, schema) {
+  if (typeof resetColorPickers === 'function') resetColorPickers();
   const isEdit = !!schema;
   const name = schema?.name || '';
   const unit = schema?.unit || '';
@@ -3679,11 +3680,12 @@ function _renderCategoryColorsEditor(schema) {
     ? schema.categoryColors : {};
   const rows = values.map(v => {
     const c = colors[v] || '#888888';
-    const safeId = encodeURIComponent(v);
+    const pickerHtml = colorPickerHTML(c, (color) => {
+      onCategoryColorChange(schema.id, v, color);
+    });
     return `
       <div class="category-color-row">
-        <input type="color" value="${esc(c)}"
-          oninput="onCategoryColorChange('${esc(schema.id)}', decodeURIComponent('${safeId}'), this.value)">
+        ${pickerHtml}
         <span class="category-color-value">${esc(v)}</span>
         <span class="category-color-count text-dim">${seen.get(v)}</span>
       </div>
@@ -5227,6 +5229,7 @@ let _pageBuilderState = {
 function renderPageBuilder() {
   const el = document.getElementById('page-builder-content');
   if (!el) return;
+  if (typeof resetColorPickers === 'function') resetColorPickers();
   const pages = (data.dataAtlas && Array.isArray(data.dataAtlas.pages)) ? data.dataAtlas.pages : [];
 
   if (pages.length === 0) {
@@ -5425,8 +5428,7 @@ function _renderPbFillEditor(layer) {
     ${!isProperty ? `
       <label class="pb-row">
         <span>${t('page_builder.fill_color')}</span>
-        <input type="color" value="${esc(fill.color || '#475569')}"
-          oninput="onPageBuilderEditFillField('${esc(layer.id)}', 'color', this.value)">
+        ${colorPickerHTML(fill.color || '#475569', (c) => onPageBuilderEditFillField(layer.id, 'color', c))}
       </label>
     ` : `
       <label class="pb-row">
@@ -5437,7 +5439,58 @@ function _renderPbFillEditor(layer) {
         </select>
       </label>
       ${_renderPbScaleEditor(layer)}
+      ${_renderPbCategoryColorsEditor(layer)}
     `}
+  `;
+}
+
+// If the selected property is categorical, surface the same per-category
+// colour editor that lives in the Properties tab. Writes through to
+// `schema.categoryColors`, so changes propagate to every page that
+// fills by this schema.
+function _renderPbCategoryColorsEditor(layer) {
+  const fill = layer.fill || {};
+  if (fill.mode !== 'property' || !fill.schemaId) return '';
+  const schema = (typeof findPropertySchema === 'function') ? findPropertySchema(fill.schemaId) : null;
+  if (!schema || schema.kind !== 'categorical') return '';
+  // Collect distinct values for this schema across plots + boundaries
+  // (same logic as _renderCategoryColorsEditor).
+  const seen = new Map();
+  for (const p of (data.plots || [])) {
+    const v = p.propertyValues?.[schema.id];
+    if (v != null && v !== '') seen.set(String(v), (seen.get(String(v)) || 0) + 1);
+  }
+  for (const b of (data.boundaries || [])) {
+    const v = b.propertyValues?.[schema.id];
+    if (v != null && v !== '') seen.set(String(v), (seen.get(String(v)) || 0) + 1);
+  }
+  const values = Array.from(seen.entries()).sort((a, b) => b[1] - a[1]).map(([v]) => v);
+  if (values.length === 0) {
+    return `<div class="pb-row"><span>${t('properties.category_colors_label')}</span>
+      <div class="text-dim" style="font-size:11px">${t('properties.category_colors_empty')}</div>
+    </div>`;
+  }
+  const colors = (schema.categoryColors && typeof schema.categoryColors === 'object')
+    ? schema.categoryColors : {};
+  const rows = values.map(v => {
+    const c = colors[v] || '#888888';
+    const pickerHtml = colorPickerHTML(c, (color) => {
+      onCategoryColorChange(schema.id, v, color);
+      _refreshPageBuilderPreview();
+    });
+    return `
+      <div class="category-color-row">
+        ${pickerHtml}
+        <span class="category-color-value">${esc(v)}</span>
+        <span class="category-color-count text-dim">${seen.get(v)}</span>
+      </div>
+    `;
+  }).join('');
+  return `
+    <div class="pb-row" style="align-items:flex-start">
+      <span>${t('properties.category_colors_label')}</span>
+      <div class="category-colors-list" style="flex:1;max-height:200px">${rows}</div>
+    </div>
   `;
 }
 
@@ -5446,6 +5499,13 @@ function _renderPbFillEditor(layer) {
 // the layer's fill.scale as { kind: 'custom', stops: [{t, color}] }.
 function _renderPbScaleEditor(layer) {
   const fill = layer.fill || {};
+  // The scale only applies to numeric / percentage fills. Categorical
+  // properties paint by per-category colour (see
+  // _renderPbCategoryColorsEditor) so the scale picker is suppressed.
+  const schema = fill.schemaId
+    ? ((typeof findPropertySchema === 'function') ? findPropertySchema(fill.schemaId) : null)
+    : null;
+  if (schema && schema.kind === 'categorical') return '';
   const scale = fill.scale || { kind: 'viridis' };
   const kind = scale.kind || 'viridis';
   let stopsHtml = '';
@@ -5456,8 +5516,7 @@ function _renderPbScaleEditor(layer) {
         <input type="number" step="0.05" min="0" max="1" value="${s.t}"
           class="pb-scale-stop-t"
           oninput="onPageBuilderEditScaleStop('${esc(layer.id)}', ${i}, 't', this.value)">
-        <input type="color" value="${esc(s.color || '#888888')}"
-          oninput="onPageBuilderEditScaleStop('${esc(layer.id)}', ${i}, 'color', this.value)">
+        ${colorPickerHTML(s.color || '#888888', (c) => onPageBuilderEditScaleStop(layer.id, i, 'color', c))}
         <button class="btn btn-xs btn-danger" ${stops.length <= 2 ? 'disabled' : ''}
           onclick="onPageBuilderRemoveScaleStop('${esc(layer.id)}', ${i})">✕</button>
       </div>
@@ -5487,8 +5546,7 @@ function _renderPbStrokeEditor(layer) {
   return `
     <label class="pb-row">
       <span>${t('page_builder.stroke_color')}</span>
-      <input type="color" value="${esc(s.color || '#000000')}"
-        oninput="onPageBuilderEditStroke('${esc(layer.id)}', 'color', this.value)">
+      ${colorPickerHTML(s.color || '#000000', (c) => onPageBuilderEditStroke(layer.id, 'color', c))}
     </label>
     <label class="pb-row">
       <span>${t('page_builder.stroke_width')}</span>

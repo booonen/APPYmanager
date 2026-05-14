@@ -384,43 +384,164 @@ function _autoExtentForPage(page) {
   };
 }
 
-function _simplificationGridSizeDeg(extent, simplificationPercent) {
+// Visvalingam-Whyatt threshold from the simplification slider (0–100).
+// Threshold has units of degrees² (effective-area is a triangle area
+// in lat/lng degrees²). Scaling: at 100% the threshold is
+//   (bbox-diagonal × 0.5%)² ≈ a triangle ~0.5% of the page on a side.
+// Tunable — leave the diag × 0.005 scale exposed in code if we need
+// to crank it later.
+function _simplificationThreshold(extent, simplificationPercent) {
   const pct = Math.max(0, Math.min(100, Number(simplificationPercent) || 0));
   if (pct <= 0) return 0;
   const dLat = (extent.maxLat - extent.minLat) || 0;
   const dLng = (extent.maxLng - extent.minLng) || 0;
   const diag = Math.sqrt(dLat * dLat + dLng * dLng);
-  // 100% slider → grid = 1% of diagonal; 50% → 0.5%. Each cell collapses
-  // every coord inside it onto one point.
-  return diag * (pct / 100) * 0.01;
+  const side = diag * (pct / 100) * 0.005;
+  return side * side;
 }
 
-// Topology-preserving simplification via coordinate quantization.
-// Snapping all coordinates to a shared grid means adjacent polygons
-// that originally shared an edge still share it after simplification
-// (identical inputs → identical outputs), so no slivers / no gaps.
-// This is the same invariant mapshaper's TopoJSON-arc approach gives,
-// without the complexity of arc extraction. The trade-off: fine
-// curvature is replaced by an axis-aligned staircase rather than a
-// smooth simplified line. Acceptable for v1; we can replace with full
-// arc-based simplification later if the staircase reads poorly.
-function _simplifyPolygon(polygon, gridSize) {
-  if (!gridSize || gridSize <= 0) return polygon;
-  const out = polygon.map(ring => {
-    const simp = [];
-    let lastLat = null, lastLng = null;
-    for (let i = 0; i < ring.length; i++) {
-      const [lat, lng] = ring[i];
-      const qLat = Math.round(lat / gridSize) * gridSize;
-      const qLng = Math.round(lng / gridSize) * gridSize;
-      if (qLat !== lastLat || qLng !== lastLng) {
-        simp.push([qLat, qLng]);
-        lastLat = qLat; lastLng = qLng;
+// Coordinate-snap grid for topology detection. Fine enough that
+// "should-be-shared" vertices become bit-identical without losing
+// real detail (~1 mm at the equator).
+const _SNAP_GRID = 1e-8;
+function _snapLatLng(lat, lng) {
+  return [
+    Math.round(lat / _SNAP_GRID) * _SNAP_GRID,
+    Math.round(lng / _SNAP_GRID) * _SNAP_GRID,
+  ];
+}
+function _coordKey(coord) {
+  return coord[0].toFixed(9) + ',' + coord[1].toFixed(9);
+}
+
+// Topology-aware simplification across every polygon on the page. The
+// strategy mirrors mapshaper's TopoJSON-arc Visvalingam (without
+// explicit arc extraction):
+//
+//   1. Snap every coordinate to a fine grid so "same point in two
+//      polygons" is bit-identical.
+//   2. Build a global vertex-adjacency map: each vertex stores the
+//      set of UNIQUE neighbours seen across every polygon it appears
+//      in.
+//   3. Junctions = vertices whose neighbour-count != 2 (corners
+//      where 3+ polygons meet, or endpoints of arcs that split).
+//   4. Per-ring Visvalingam-Whyatt: drop vertices in order of
+//      smallest effective area, *unless* they're junctions.
+//      A non-junction vertex on a shared boundary has the same EA
+//      in both polygons (because EA is purely a function of the
+//      vertex + its two neighbours, which are identical in both),
+//      so both polygons drop it at the same threshold. Shared
+//      edges stay shared.
+//
+// Mutates each feature's `polygons` in-place (the features array is
+// freshly built per render call, so this doesn't leak into the
+// boundary-geometry cache).
+function _simplifyFeaturesTopologyAware(features, threshold) {
+  if (threshold <= 0) return;
+
+  // Pass 1: snap + collect adjacency.
+  const adj = new Map();              // key → Set<key>
+  const addEdge = (a, b) => {
+    if (a === b) return;
+    let s = adj.get(a);
+    if (!s) { s = new Set(); adj.set(a, s); }
+    s.add(b);
+  };
+  for (const feat of features) {
+    feat.polygons = feat.polygons.map(poly => poly.map(ring => {
+      // Snap, drop consecutive duplicates.
+      const snapped = [];
+      for (const [la, ln] of ring) {
+        const [qa, qn] = _snapLatLng(la, ln);
+        if (snapped.length === 0) { snapped.push([qa, qn]); continue; }
+        const last = snapped[snapped.length - 1];
+        if (last[0] !== qa || last[1] !== qn) snapped.push([qa, qn]);
       }
+      // Drop a trailing duplicate-of-start (closed-ring noise).
+      while (snapped.length > 1) {
+        const f = snapped[0], l = snapped[snapped.length - 1];
+        if (f[0] === l[0] && f[1] === l[1]) snapped.pop();
+        else break;
+      }
+      const n = snapped.length;
+      for (let i = 0; i < n; i++) {
+        const curK = _coordKey(snapped[i]);
+        const prevK = _coordKey(snapped[(i - 1 + n) % n]);
+        const nextK = _coordKey(snapped[(i + 1) % n]);
+        addEdge(curK, prevK);
+        addEdge(curK, nextK);
+      }
+      return snapped;
+    }));
+  }
+
+  // Junctions = vertices whose unique-neighbour count != 2.
+  const junctions = new Set();
+  for (const [k, neighbours] of adj) {
+    if (neighbours.size !== 2) junctions.add(k);
+  }
+
+  // Pass 2: per-ring Visvalingam-Whyatt with junction protection.
+  for (const feat of features) {
+    feat.polygons = feat.polygons.map(poly =>
+      poly.map(ring => _visvalingamRing(ring, threshold, junctions))
+    );
+  }
+}
+
+// Returns a simplified open ring (no duplicate closing vertex).
+function _visvalingamRing(ring, threshold, junctions) {
+  if (!ring || ring.length < 4) return ring || [];
+
+  const n = ring.length;
+  const prev = new Array(n);
+  const nxt  = new Array(n);
+  const alive = new Array(n).fill(true);
+  for (let i = 0; i < n; i++) {
+    prev[i] = (i - 1 + n) % n;
+    nxt[i]  = (i + 1) % n;
+  }
+
+  function ea(i) {
+    const k = _coordKey(ring[i]);
+    if (junctions.has(k)) return Infinity;
+    const p = ring[prev[i]];
+    const v = ring[i];
+    const x = ring[nxt[i]];
+    // Triangle area in [lat, lng] = [y, x] space; absolute cross-prod / 2.
+    return Math.abs((p[1] - v[1]) * (x[0] - v[0]) - (p[0] - v[0]) * (x[1] - v[1])) / 2;
+  }
+
+  const eas = new Array(n);
+  for (let i = 0; i < n; i++) eas[i] = ea(i);
+
+  // Simple O(n²) loop — fine for typical OGF polygon counts. Swap
+  // to a real heap if we hit a big-country bottleneck.
+  let aliveCount = n;
+  while (aliveCount > 3) {
+    let minEA = Infinity, minIdx = -1;
+    for (let i = 0; i < n; i++) {
+      if (alive[i] && eas[i] < minEA) { minEA = eas[i]; minIdx = i; }
     }
-    // A ring needs at least 3 distinct points to be drawable.
-    return simp.length >= 3 ? simp : ring;
-  });
+    if (minIdx < 0 || minEA >= threshold) break;
+    alive[minIdx] = false;
+    aliveCount--;
+    const p = prev[minIdx], x = nxt[minIdx];
+    nxt[p] = x;
+    prev[x] = p;
+    eas[p] = ea(p);
+    eas[x] = ea(x);
+  }
+
+  const out = [];
+  let start = -1;
+  for (let i = 0; i < n; i++) if (alive[i]) { start = i; break; }
+  if (start < 0) return ring;
+  let i = start;
+  do {
+    out.push(ring[i]);
+    i = nxt[i];
+  } while (i !== start && out.length < n);
   return out;
 }
 
@@ -476,7 +597,24 @@ function renderAtlasPage(page, container, opts) {
 
   const extent = _extentForPage(page);
   const vb = _projectedExtent(extent);
-  const gridSize = _simplificationGridSizeDeg(extent, page.simplification);
+  const threshold = _simplificationThreshold(extent, page.simplification);
+
+  // Pre-fetch features per polygon layer so we can simplify topology-
+  // aware across all of them before rendering.
+  const featuresByLayer = new Map(); // layer.id → features[]
+  for (const layer of (page.layers || [])) {
+    if (!layer || layer.visible === false) continue;
+    if (layer.kind === 'settlements') continue;
+    const features = (layer.kind === 'plot_fill')
+      ? _layerPlotFeatures(layer)
+      : _layerBoundaryFeatures(layer);
+    featuresByLayer.set(layer.id, features);
+  }
+  if (threshold > 0) {
+    const allFeatures = [];
+    for (const arr of featuresByLayer.values()) allFeatures.push(...arr);
+    _simplifyFeaturesTopologyAware(allFeatures, threshold);
+  }
 
   // Pre-compute per-layer rendering context (schema lookup, domains,
   // categorical maps) once so we don't recompute inside the loop.
@@ -492,9 +630,7 @@ function renderAtlasPage(page, container, opts) {
     const schema = (typeof findPropertySchema === 'function') ? findPropertySchema(fill.schemaId) : null;
     if (!schema) continue;
     ctx.schemaById.set(fill.schemaId, schema);
-    const entities = layer.kind === 'plot_fill'
-      ? _layerPlotFeatures(layer)
-      : _layerBoundaryFeatures(layer);
+    const entities = featuresByLayer.get(layer.id) || [];
     if (schema.kind === 'categorical') {
       ctx.categoricalMaps.set(layer.id, _buildCategoricalMap(entities, layer.kind === 'plot_fill' ? 'plot' : 'boundary', schema));
     } else {
@@ -520,12 +656,15 @@ function renderAtlasPage(page, container, opts) {
   bg.setAttribute('fill', getComputedStyle(document.documentElement).getPropertyValue('--bg') || '#0f1117');
   svg.appendChild(bg);
 
-  // Layer rendering — in order; index 0 = bottom.
+  // Layer rendering — in order; index 0 = bottom. Polygon features
+  // were already simplified topology-aware above; the renderers just
+  // emit paths from feat.polygons.
   for (const layer of (page.layers || [])) {
     if (!layer || layer.visible === false) continue;
-    if (layer.kind === 'boundary_fill') _renderPolygonLayer(svg, layer, _layerBoundaryFeatures(layer), 'boundary', ctx, gridSize);
-    else if (layer.kind === 'plot_fill') _renderPolygonLayer(svg, layer, _layerPlotFeatures(layer), 'plot', ctx, gridSize);
-    else if (layer.kind === 'boundary_outline') _renderOutlineLayer(svg, layer, _layerBoundaryFeatures(layer), gridSize);
+    const feats = featuresByLayer.get(layer.id) || [];
+    if (layer.kind === 'boundary_fill') _renderPolygonLayer(svg, layer, feats, 'boundary', ctx);
+    else if (layer.kind === 'plot_fill') _renderPolygonLayer(svg, layer, feats, 'plot', ctx);
+    else if (layer.kind === 'boundary_outline') _renderOutlineLayer(svg, layer, feats);
     else if (layer.kind === 'settlements') _renderSettlementLayer(svg, layer);
   }
   wrap.appendChild(svg);
@@ -613,9 +752,10 @@ function _attachAtlasZoomPan(svg, bg) {
   }, { passive: false });
 
   svg.addEventListener('mousedown', (e) => {
-    // Pan only on background or the SVG root itself — clicking a path
-    // (boundary, plot, settlement) shouldn't initiate a pan.
-    if (e.target !== svg && e.target !== bg) return;
+    // Any mousedown on the SVG (including over polygons) starts a pan.
+    // Atlas pages don't bind click actions to features (decision R —
+    // hover only), so swallowing the mousedown costs nothing.
+    if (e.button !== 0) return; // left mouse only
     panning = true;
     panStart = { x: e.clientX, y: e.clientY };
     panStartVB = readVB();
@@ -647,16 +787,14 @@ function _attachAtlasZoomPan(svg, bg) {
   // `panning` is true, and `panning` resets on mouseup.
 }
 
-function _renderPolygonLayer(svg, layer, features, kind, ctx, gridSize) {
+function _renderPolygonLayer(svg, layer, features, kind, ctx) {
   const stroke = layer.stroke || { color: '#0f1117', width: 0.4, opacity: 0.8 };
   const fill = layer.fill || { mode: 'static', color: '#475569' };
   const schema = fill.mode === 'property' ? ctx.schemaById.get(fill.schemaId) : null;
   const g = document.createElementNS(SVG_NS, 'g');
   g.setAttribute('class', 'atlas-layer atlas-layer-' + layer.kind);
   for (const feat of features) {
-    const polys = gridSize > 0
-      ? feat.polygons.map(p => _simplifyPolygon(p, gridSize))
-      : feat.polygons;
+    const polys = feat.polygons;
     const d = _polygonsToPathD(polys);
     if (!d) continue;
     const path = document.createElementNS(SVG_NS, 'path');
@@ -678,14 +816,12 @@ function _renderPolygonLayer(svg, layer, features, kind, ctx, gridSize) {
   svg.appendChild(g);
 }
 
-function _renderOutlineLayer(svg, layer, features, gridSize) {
+function _renderOutlineLayer(svg, layer, features) {
   const stroke = layer.stroke || { color: '#8b8fa4', width: 0.6, opacity: 0.8 };
   const g = document.createElementNS(SVG_NS, 'g');
   g.setAttribute('class', 'atlas-layer atlas-layer-' + layer.kind);
   for (const feat of features) {
-    const polys = gridSize > 0
-      ? feat.polygons.map(p => _simplifyPolygon(p, gridSize))
-      : feat.polygons;
+    const polys = feat.polygons;
     const d = _polygonsToPathD(polys);
     if (!d) continue;
     const path = document.createElementNS(SVG_NS, 'path');
