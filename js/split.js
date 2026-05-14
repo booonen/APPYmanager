@@ -145,15 +145,11 @@ function _multiCutOneRing(outer, holes, cuts) {
     }
   }
 
-  const hasRingCrossing = cutRingIxs.some(arr => arr.length > 0);
-  if (!hasRingCrossing) {
-    // No cut touches this ring → it passes through whole.
-    const piece = { outer, holes: holes || [] };
-    piece.area = _pieceArea(piece);
-    return { pieces: [piece], cutInside: null, crossedAny: false };
-  }
-
   // Slice each cut at (ringIxs ∪ cutCutIxs); label endpoint types.
+  // We don't early-return on "no ring crossings" because a closed loop
+  // formed by cuts crossing each other entirely inside the ring (no
+  // touching the ring at all) is a legitimate enclave — the planar
+  // subdivision should still find it.
   const slices = [];
   for (let i = 0; i < cutLines.length; i++) {
     slices.push(..._sliceCutAtPoints(cutLines[i], cutRingIxs[i], cutCutIxs[i]));
@@ -197,12 +193,16 @@ function _multiCutOneRing(outer, holes, cuts) {
     return { pieces: [], error: 'cut_slice_failed' };
   }
 
-  const pieces = [];
+  // Collect raw faces (with their turf features kept for the nesting
+  // pass below — we need point-in-polygon tests against the original
+  // face geometry).
+  const rawPieces = [];  // [{ piece, feature }]
   for (const face of faces.features) {
     if (!face.geometry || face.geometry.type !== 'Polygon') continue;
     if (!_faceInsidePlot(face, ringClosed, holes)) continue;
     const faceLatLng = face.geometry.coordinates[0].map(([lon, lat]) => [lat, lon]);
     const piece = { outer: faceLatLng, holes: [] };
+    // Original plot holes (from plot.inners) — assign by first-vertex PIP.
     for (const h of (holes || [])) {
       if (!h || h.length < 3) continue;
       const probe = turf.point([h[0][1], h[0][0]]);
@@ -210,8 +210,39 @@ function _multiCutOneRing(outer, holes, cuts) {
       catch (_) { /* skip degenerate */ }
     }
     piece.area = _pieceArea(piece);
-    if (piece.area > 1) pieces.push(piece);
+    if (piece.area > 1) rawPieces.push({ piece, feature: face });
   }
+
+  // Nesting fix-up (v0.10.1): polygonize emits each bounded face
+  // independently — for an enclave-style topology (a cut entering the
+  // plot once, looped back on itself by a second cut), polygonize
+  // returns BOTH the enclave AND the surrounding face uncorrected,
+  // leaving the enclave double-counted in the outer face. Detect each
+  // face's immediate enclosing face and convert the enclosed outer ring
+  // into a hole of the enclosing face.
+  if (rawPieces.length > 1) {
+    rawPieces.sort((a, b) => b.piece.area - a.piece.area);
+    for (let i = 0; i < rawPieces.length; i++) {
+      const { piece: child, feature: childFeat } = rawPieces[i];
+      let parentPiece = null;
+      let probe;
+      try { probe = turf.pointOnFeature(childFeat); }
+      catch (_) { continue; }
+      // Largest containing piece encountered first; the *smallest*
+      // container is the last one to test true → keep overwriting.
+      for (let j = 0; j < i; j++) {
+        try {
+          if (turf.booleanPointInPolygon(probe, rawPieces[j].feature)) {
+            parentPiece = rawPieces[j].piece;
+          }
+        } catch (_) { /* skip */ }
+      }
+      if (parentPiece) parentPiece.holes.push(child.outer);
+    }
+    // Re-compute area for any piece that gained holes.
+    for (const x of rawPieces) x.piece.area = _pieceArea(x.piece);
+  }
+  const pieces = rawPieces.map(x => x.piece).filter(p => p.area > 1);
   if (pieces.length === 0) {
     return { pieces: [], error: 'degenerate_split' };
   }

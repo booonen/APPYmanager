@@ -11,34 +11,59 @@
 
 const OGF_TILE_URL = 'https://tile.opengeofiction.net/ogf-carto/{z}/{x}/{y}.png';
 
-// Per-map tile-toggle control. Hides / shows the tile layer so the user
-// can see polygon outlines without the basemap interfering. Each map
-// owns its own toggle state — independent across the main, preview,
-// detail, and split maps.
+// Global tile-toggle (v0.10.1). One shared state across the main map,
+// preview map, plot-detail map, and split-editor map. Clicking the ▦
+// button on any of them flips every map at once.
+const _tileToggleRegistry = []; // { map, tileLayer, div }
+let _tilesVisible = true;
+
+function _setTilesVisible(visible) {
+  _tilesVisible = !!visible;
+  // Walk backwards so we can drop entries for unmounted maps.
+  for (let i = _tileToggleRegistry.length - 1; i >= 0; i--) {
+    const r = _tileToggleRegistry[i];
+    if (!r.map || !r.map._container || !document.contains(r.map._container)) {
+      _tileToggleRegistry.splice(i, 1);
+      continue;
+    }
+    if (_tilesVisible) {
+      if (!r.map.hasLayer(r.tileLayer)) r.tileLayer.addTo(r.map);
+      if (r.div) r.div.classList.remove('off');
+    } else {
+      if (r.map.hasLayer(r.tileLayer)) r.map.removeLayer(r.tileLayer);
+      if (r.div) r.div.classList.add('off');
+    }
+  }
+}
+
 function _addTileToggleControl(map, tileLayer) {
   if (!map || !tileLayer) return;
+  // Honour current global state on first add: if tiles are off, strip
+  // them from this newly-created map immediately.
+  if (!_tilesVisible && map.hasLayer(tileLayer)) map.removeLayer(tileLayer);
+
+  let div = null;
   const Toggle = L.Control.extend({
     options: { position: 'topright' },
     onAdd: function () {
-      const div = L.DomUtil.create('div', 'leaflet-bar leaflet-control map-tile-toggle');
+      div = L.DomUtil.create('div', 'leaflet-bar leaflet-control map-tile-toggle');
+      if (!_tilesVisible) div.classList.add('off');
       const a = L.DomUtil.create('a', '', div);
       a.href = '#';
       a.title = 'Toggle map tiles';
       a.setAttribute('role', 'button');
       a.textContent = '▦';
-      let on = true;
       L.DomEvent.on(a, 'click', (e) => {
         L.DomEvent.preventDefault(e);
         L.DomEvent.stopPropagation(e);
-        if (on) { map.removeLayer(tileLayer); div.classList.add('off'); }
-        else    { tileLayer.addTo(map);       div.classList.remove('off'); }
-        on = !on;
+        _setTilesVisible(!_tilesVisible);
       });
       L.DomEvent.disableClickPropagation(div);
       return div;
     },
   });
   new Toggle().addTo(map);
+  _tileToggleRegistry.push({ map, tileLayer, div });
 }
 const OGF_OVERPASS_URL = 'https://overpass.opengeofiction.net/api/interpreter';
 

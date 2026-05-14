@@ -1,3 +1,49 @@
+## 0.10.1 — Brick 11b #1 polish: enclave fix, global tile toggle, l10n
+
+Three follow-ups from v0.10.0 testing:
+
+### Enclave fix (`js/split.js`)
+
+User reported: a cut that crosses the ring once + a second cut that
+crosses the first cut twice should produce one enclosed piece (the
+enclave) and one surrounding piece. v0.10.0 instead produced the
+enclave AND a surrounding piece that still *included* the enclave's
+area — i.e. the enclave was double-counted.
+
+Root cause: `turf.polygonize` emits each bounded face independently,
+without honouring "this face is inside that face" relationships. The
+outer face's polygon was the full ring perimeter; the enclave was a
+separate small polygon overlapping with the outer.
+
+Fix: after polygonize, walk faces sorted by area DESC; for each face,
+the *smallest* face strictly containing it becomes its parent, and the
+child's outer ring is appended to the parent's `holes`. Net effect:
+the enclave stays as its own piece, and the outer piece is now a
+polygon-with-hole that excludes the enclave area.
+
+Also removed the `hasRingCrossing` early return — a closed loop formed
+by two cuts entirely inside the ring (no ring crossings at all) is a
+legitimate enclave; the engine should still run the planar
+subdivision. The dangling-trim already handles "cuts that do nothing"
+by discarding everything.
+
+### Tile-toggle is now global (`js/map.js`)
+
+The v0.9.2 per-map tile toggles are replaced by one shared state. A
+small `_tileToggleRegistry` tracks every (map, tileLayer, controlDiv);
+clicking the ▦ on any map calls `_setTilesVisible(!_tilesVisible)`,
+which walks the registry and flips every map at once. Unmounted maps
+(detail/preview/split overlays after close) drop out of the registry
+on the next flip.
+
+### l10n key fix
+
+`error_cut_self_intersects` was added to the engine but missed in
+`lang/en.js`, so the user saw the bare key string in the toast. Added.
+While there, simplified `error_cut_does_not_cross` (the old wording
+was redundant now that "the cut needs to enter AND exit" is enforced
+by the planar-subdivision invariant, not a hard ring-crossing rule).
+
 ## 0.10.0 — Brick 11b #1: multi-cut + planar-subdivision engine
 
 The plot-split editor admits multiple cuts on one plot. Cuts can cross
