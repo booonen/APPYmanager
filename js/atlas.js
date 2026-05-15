@@ -134,7 +134,6 @@ function createBlankAtlasLayer(kind) {
         ...base,
         typeId: null,
         fill:   { mode: 'static', color: '#48b287' },
-        stroke: { color: '#0f1117', width: 1, opacity: 0.9 },
       };
     case 'boundary_outline':
       return {
@@ -146,7 +145,6 @@ function createBlankAtlasLayer(kind) {
       return {
         ...base,
         fill:   { mode: 'static', color: '#475569' },
-        stroke: { color: '#0f1117', width: 0.4, opacity: 0.7 },
       };
     case 'settlements':
       return {
@@ -862,19 +860,10 @@ function _attachAtlasZoomPan(svg, bg) {
 }
 
 function _renderPolygonLayer(svg, layer, features, kind, ctx) {
-  const stroke = layer.stroke || { color: '#0f1117', width: 0.4, opacity: 0.8 };
   const fill = layer.fill || { mode: 'static', color: '#475569' };
   const schema = fill.mode === 'property' ? ctx.schemaById.get(fill.schemaId) : null;
   const g = document.createElementNS(SVG_NS, 'g');
   g.setAttribute('class', 'atlas-layer atlas-layer-' + layer.kind);
-  // If a water cache exists, render fill and stroke on SEPARATE paths so
-  // the stroke can drop coast/through-water segments while the fill stays
-  // closed (and so still clips itself correctly via fill-rule). Without
-  // a water cache, one path carries both.
-  const waterFeat = _waterCacheAsFeature();
-  const strokeColor   = stroke.color   || '#0f1117';
-  const strokeWidth   = _strokeWidthSVG(stroke.width || 1);
-  const strokeOpacity = stroke.opacity != null ? stroke.opacity : 0.85;
   for (const feat of features) {
     const polys = feat.polygons;
     const fillD = _polygonsToPathD(polys);
@@ -883,37 +872,14 @@ function _renderPolygonLayer(svg, layer, features, kind, ctx) {
     fillPath.setAttribute('d', fillD);
     fillPath.setAttribute('fill', _fillColorForEntity(feat.entity, kind, layer, ctx));
     fillPath.setAttribute('fill-rule', 'evenodd');
+    fillPath.setAttribute('stroke', 'none');
     fillPath.setAttribute('data-entity-name', feat.entity.name || (kind === 'plot' ? '(plot)' : '(boundary)'));
     if (schema) {
       const v = _resolveLayerValue(feat.entity, kind, fill.schemaId);
       const disp = _formatPropertyValueForTooltip(schema, v);
       if (disp) fillPath.setAttribute('data-entity-value', `${schema.name}: ${disp}`);
     }
-    if (waterFeat) {
-      // Fill: closed, no stroke. Stroke: coast-filtered, open, no fill.
-      fillPath.setAttribute('stroke', 'none');
-      g.appendChild(fillPath);
-      const strokeD = _polygonsToPathDSkipCoast(polys, waterFeat);
-      if (strokeD) {
-        const strokePath = document.createElementNS(SVG_NS, 'path');
-        strokePath.setAttribute('d', strokeD);
-        strokePath.setAttribute('fill', 'none');
-        strokePath.setAttribute('stroke', strokeColor);
-        strokePath.setAttribute('stroke-width', strokeWidth);
-        strokePath.setAttribute('stroke-opacity', strokeOpacity);
-        strokePath.setAttribute('vector-effect', 'non-scaling-stroke');
-        strokePath.setAttribute('stroke-linecap', 'round');
-        strokePath.setAttribute('stroke-linejoin', 'round');
-        strokePath.setAttribute('pointer-events', 'none');
-        g.appendChild(strokePath);
-      }
-    } else {
-      fillPath.setAttribute('stroke', strokeColor);
-      fillPath.setAttribute('stroke-width', strokeWidth);
-      fillPath.setAttribute('stroke-opacity', strokeOpacity);
-      fillPath.setAttribute('vector-effect', 'non-scaling-stroke');
-      g.appendChild(fillPath);
-    }
+    g.appendChild(fillPath);
   }
   svg.appendChild(g);
 }
@@ -922,12 +888,9 @@ function _renderOutlineLayer(svg, layer, features) {
   const stroke = layer.stroke || { color: '#8b8fa4', width: 0.6, opacity: 0.8 };
   const g = document.createElementNS(SVG_NS, 'g');
   g.setAttribute('class', 'atlas-layer atlas-layer-' + layer.kind);
-  const waterFeat = _waterCacheAsFeature();
   for (const feat of features) {
     const polys = feat.polygons;
-    const d = waterFeat
-      ? _polygonsToPathDSkipCoast(polys, waterFeat)
-      : _polygonsToPathD(polys);
+    const d = _polygonsToPathD(polys);
     if (!d) continue;
     const path = document.createElementNS(SVG_NS, 'path');
     path.setAttribute('d', d);
@@ -935,101 +898,11 @@ function _renderOutlineLayer(svg, layer, features) {
     path.setAttribute('stroke', stroke.color);
     path.setAttribute('stroke-width', _strokeWidthSVG(stroke.width));
     path.setAttribute('stroke-opacity', stroke.opacity);
-    path.setAttribute('vector-effect', 'non-scaling-stroke');
-    path.setAttribute('stroke-linecap', 'round');
     path.setAttribute('stroke-linejoin', 'round');
     path.setAttribute('data-entity-name', feat.entity.name || '(boundary)');
     g.appendChild(path);
   }
   svg.appendChild(g);
-}
-
-// Returns a turf Feature wrapping the project's water cache geometry, or
-// null if no cache is present. `data.waterCache.waterGeometry` is built
-// by `turf.multiPolygon(...)` which returns a Feature (not a raw
-// geometry), so we accept either shape and re-wrap as needed.
-function _waterCacheAsFeature() {
-  const cache = (typeof data !== 'undefined') ? data.waterCache : null;
-  const g = cache && cache.waterGeometry;
-  if (!g) return null;
-  if (typeof turf === 'undefined' || !turf.point || !turf.booleanPointInPolygon) return null;
-  if (g.type === 'Feature') {
-    const inner = g.geometry;
-    if (!inner || (inner.type !== 'Polygon' && inner.type !== 'MultiPolygon')) return null;
-    return g;
-  }
-  if (g.type === 'Polygon' || g.type === 'MultiPolygon') {
-    return { type: 'Feature', geometry: g, properties: {} };
-  }
-  return null;
-}
-
-// Builds a path-d that walks each ring as open M-L runs, breaking the
-// run whenever a coastal segment is hit. Coastal = perpendicular probe
-// on one side lands in water, the other in land. The result is an open
-// stroke (no Z) so SVG doesn't auto-close across the skipped gap.
-function _polygonsToPathDSkipCoast(polygons, waterFeat) {
-  const parts = [];
-  for (const poly of polygons) {
-    for (const ring of poly) {
-      const d = _ringToPathDSkipCoast(ring, waterFeat);
-      if (d) parts.push(d);
-    }
-  }
-  return parts.join('');
-}
-
-function _ringToPathDSkipCoast(ring, waterFeat) {
-  if (!ring || ring.length < 2) return '';
-  const n = ring.length;
-  const parts = [];
-  let inPath = false;
-  // Closed ring — walk n segments (wrapping last → first).
-  for (let i = 0; i < n; i++) {
-    const a = ring[i];
-    const b = ring[(i + 1) % n];
-    if (_segmentTouchesWater(a, b, waterFeat)) {
-      inPath = false;
-      continue;
-    }
-    if (!inPath) {
-      const [ax, ay] = _projectLatLng(a[0], a[1]);
-      parts.push('M' + ax + ',' + ay);
-      inPath = true;
-    }
-    const [bx, by] = _projectLatLng(b[0], b[1]);
-    parts.push('L' + bx + ',' + by);
-  }
-  return parts.join('');
-}
-
-// A segment "touches water" if either:
-//   • it runs along the coast (perpendicular probe lands water on one side,
-//     land on the other), or
-//   • it runs through water (the midpoint itself is inside a water body,
-//     so both perpendicular probes register as water).
-// Both cases are equivalent to "at least one of the two probes is in
-// water" — which is what we test. Probes sit ~5e-5° (≈ 5 m equator-
-// equivalent) either side of the segment midpoint: small enough not to
-// leap narrow channels, large enough to clear coordinate-snap noise
-// (snap grid is 1e-8°). Catching the through-water case is what makes
-// internal lakes inside a boundary stop carrying outline strokes
-// across them.
-function _segmentTouchesWater(a, b, waterFeat) {
-  const dLat = b[0] - a[0];
-  const dLng = b[1] - a[1];
-  const len = Math.hypot(dLat, dLng);
-  if (len === 0) return false;
-  const EPS = 5e-5;
-  const offLat = (-dLng / len) * EPS;
-  const offLng = ( dLat / len) * EPS;
-  const midLat = (a[0] + b[0]) / 2;
-  const midLng = (a[1] + b[1]) / 2;
-  const p1 = turf.point([midLng + offLng, midLat + offLat]);
-  const p2 = turf.point([midLng - offLng, midLat - offLat]);
-  if (turf.booleanPointInPolygon(p1, waterFeat)) return true;
-  if (turf.booleanPointInPolygon(p2, waterFeat)) return true;
-  return false;
 }
 
 function _renderSettlementLayer(svg, layer, vb) {

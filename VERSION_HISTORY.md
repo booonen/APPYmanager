@@ -1,3 +1,31 @@
+## 0.12.8 — Drop coast filter; fill layers are now stroke-less
+
+The coast-aware boundary outline work from v0.12.4–7 never fully
+worked — fill-layer strokes were still drawing across water in some
+cases — and the marginal value didn't justify another fix round.
+
+- Removed `_waterCacheAsFeature`, `_polygonsToPathDSkipCoast`,
+  `_ringToPathDSkipCoast`, `_segmentTouchesWater` from `atlas.js`.
+- `_renderPolygonLayer` is back to a single fill path per feature,
+  with `stroke: none` baked in. Fill layers no longer carry a stroke.
+- `_renderOutlineLayer` keeps its single-path render. No coast
+  filtering — outlines now trace the boundary polygon as-is,
+  including any coastal segments.
+- Defaults: `boundary_fill` and `plot_fill` no longer initialise a
+  `stroke` object. The Page Builder layer editor only shows the
+  stroke controls on `boundary_outline` layers; the editor for fill
+  layers has fill controls only.
+- Users who want boundary lines stack a separate `boundary_outline`
+  layer above their fill — same render path that existed before,
+  same stroke editor.
+
+Legacy saves with `stroke` fields on fill layers are harmless: the
+renderer no longer reads them. No migration was needed.
+
+Stroke-width zoom fix (v0.12.7) stays — the CSS rule on
+`.atlas-page-svg path, circle, text` continues to make
+`vector-effect: non-scaling-stroke` apply reliably.
+
 ## 0.12.7 — Two real fixes: water-cache feature shape + stroke zoom
 
 ### Coast filter actually activates now

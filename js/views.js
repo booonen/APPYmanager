@@ -5382,7 +5382,11 @@ function _renderPageBuilderLayerEditor(page) {
   if (layer.kind === 'boundary_fill' || layer.kind === 'plot_fill') {
     kindFields += _renderPbFillEditor(layer);
   }
-  if (layer.kind === 'boundary_fill' || layer.kind === 'boundary_outline' || layer.kind === 'plot_fill') {
+  // Stroke editor only on the dedicated outline layer. Fill layers
+  // (boundary_fill, plot_fill) are now stroke-less — coast-filtering
+  // them was unreliable, and the outline kind already covers the
+  // "draw the boundary lines" case.
+  if (layer.kind === 'boundary_outline') {
     kindFields += _renderPbStrokeEditor(layer);
   }
   if (layer.kind === 'settlements') {
