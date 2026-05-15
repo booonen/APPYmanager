@@ -951,7 +951,7 @@ function _ringToPathDSkipCoast(ring, waterFeat) {
   for (let i = 0; i < n; i++) {
     const a = ring[i];
     const b = ring[(i + 1) % n];
-    if (_isCoastalSegment(a, b, waterFeat)) {
+    if (_segmentTouchesWater(a, b, waterFeat)) {
       inPath = false;
       continue;
     }
@@ -966,11 +966,19 @@ function _ringToPathDSkipCoast(ring, waterFeat) {
   return parts.join('');
 }
 
-// A segment is "coastal" if a tiny perpendicular probe lands in water on
-// one side and on land on the other. Uses an offset of ~5e-5° (≈ 5 m
-// equator-equivalent) — small enough not to leap over narrow channels,
-// large enough to escape coordinate-snap noise (snap grid is 1e-8°).
-function _isCoastalSegment(a, b, waterFeat) {
+// A segment "touches water" if either:
+//   • it runs along the coast (perpendicular probe lands water on one side,
+//     land on the other), or
+//   • it runs through water (the midpoint itself is inside a water body,
+//     so both perpendicular probes register as water).
+// Both cases are equivalent to "at least one of the two probes is in
+// water" — which is what we test. Probes sit ~5e-5° (≈ 5 m equator-
+// equivalent) either side of the segment midpoint: small enough not to
+// leap narrow channels, large enough to clear coordinate-snap noise
+// (snap grid is 1e-8°). Catching the through-water case is what makes
+// internal lakes inside a boundary stop carrying outline strokes
+// across them.
+function _segmentTouchesWater(a, b, waterFeat) {
   const dLat = b[0] - a[0];
   const dLng = b[1] - a[1];
   const len = Math.hypot(dLat, dLng);
@@ -982,9 +990,9 @@ function _isCoastalSegment(a, b, waterFeat) {
   const midLng = (a[1] + b[1]) / 2;
   const p1 = turf.point([midLng + offLng, midLat + offLat]);
   const p2 = turf.point([midLng - offLng, midLat - offLat]);
-  const in1 = turf.booleanPointInPolygon(p1, waterFeat);
-  const in2 = turf.booleanPointInPolygon(p2, waterFeat);
-  return in1 !== in2;
+  if (turf.booleanPointInPolygon(p1, waterFeat)) return true;
+  if (turf.booleanPointInPolygon(p2, waterFeat)) return true;
+  return false;
 }
 
 function _renderSettlementLayer(svg, layer, vb) {

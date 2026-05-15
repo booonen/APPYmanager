@@ -1,3 +1,15 @@
+## 0.12.5 — Outlines also skip segments running through water
+
+v0.12.4's coast-skip test only caught segments with land on one side
+and water on the other (perpendicular probes returning different
+results). Segments running *through* a water body — both probes in
+water — fell through, so internal lakes inside boundary territory
+still had the boundary outline drawn straight across them. Renamed
+`_isCoastalSegment` → `_segmentTouchesWater` and changed the test
+from `in1 !== in2` to `in1 || in2`. One probe in water is now
+sufficient to drop the segment, which covers both the coastal case
+and the through-water case in a single check.
+
 ## 0.12.4 — Atlas polish round 6: label styling, coast-aware outlines, sticky viewport
 
 Four fixes from the v0.12.3 testing round:
