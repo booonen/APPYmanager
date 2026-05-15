@@ -867,25 +867,53 @@ function _renderPolygonLayer(svg, layer, features, kind, ctx) {
   const schema = fill.mode === 'property' ? ctx.schemaById.get(fill.schemaId) : null;
   const g = document.createElementNS(SVG_NS, 'g');
   g.setAttribute('class', 'atlas-layer atlas-layer-' + layer.kind);
+  // If a water cache exists, render fill and stroke on SEPARATE paths so
+  // the stroke can drop coast/through-water segments while the fill stays
+  // closed (and so still clips itself correctly via fill-rule). Without
+  // a water cache, one path carries both.
+  const waterFeat = _waterCacheAsFeature();
+  const strokeColor   = stroke.color   || '#0f1117';
+  const strokeWidth   = _strokeWidthSVG(stroke.width || 1);
+  const strokeOpacity = stroke.opacity != null ? stroke.opacity : 0.85;
   for (const feat of features) {
     const polys = feat.polygons;
-    const d = _polygonsToPathD(polys);
-    if (!d) continue;
-    const path = document.createElementNS(SVG_NS, 'path');
-    path.setAttribute('d', d);
-    path.setAttribute('fill', _fillColorForEntity(feat.entity, kind, layer, ctx));
-    path.setAttribute('fill-rule', 'evenodd');
-    path.setAttribute('stroke', stroke.color || '#0f1117');
-    path.setAttribute('stroke-width', _strokeWidthSVG(stroke.width || 1));
-    path.setAttribute('stroke-opacity', stroke.opacity != null ? stroke.opacity : 0.85);
-    path.setAttribute('vector-effect', 'non-scaling-stroke');
-    path.setAttribute('data-entity-name', feat.entity.name || (kind === 'plot' ? '(plot)' : '(boundary)'));
+    const fillD = _polygonsToPathD(polys);
+    if (!fillD) continue;
+    const fillPath = document.createElementNS(SVG_NS, 'path');
+    fillPath.setAttribute('d', fillD);
+    fillPath.setAttribute('fill', _fillColorForEntity(feat.entity, kind, layer, ctx));
+    fillPath.setAttribute('fill-rule', 'evenodd');
+    fillPath.setAttribute('data-entity-name', feat.entity.name || (kind === 'plot' ? '(plot)' : '(boundary)'));
     if (schema) {
       const v = _resolveLayerValue(feat.entity, kind, fill.schemaId);
       const disp = _formatPropertyValueForTooltip(schema, v);
-      if (disp) path.setAttribute('data-entity-value', `${schema.name}: ${disp}`);
+      if (disp) fillPath.setAttribute('data-entity-value', `${schema.name}: ${disp}`);
     }
-    g.appendChild(path);
+    if (waterFeat) {
+      // Fill: closed, no stroke. Stroke: coast-filtered, open, no fill.
+      fillPath.setAttribute('stroke', 'none');
+      g.appendChild(fillPath);
+      const strokeD = _polygonsToPathDSkipCoast(polys, waterFeat);
+      if (strokeD) {
+        const strokePath = document.createElementNS(SVG_NS, 'path');
+        strokePath.setAttribute('d', strokeD);
+        strokePath.setAttribute('fill', 'none');
+        strokePath.setAttribute('stroke', strokeColor);
+        strokePath.setAttribute('stroke-width', strokeWidth);
+        strokePath.setAttribute('stroke-opacity', strokeOpacity);
+        strokePath.setAttribute('vector-effect', 'non-scaling-stroke');
+        strokePath.setAttribute('stroke-linecap', 'round');
+        strokePath.setAttribute('stroke-linejoin', 'round');
+        strokePath.setAttribute('pointer-events', 'none');
+        g.appendChild(strokePath);
+      }
+    } else {
+      fillPath.setAttribute('stroke', strokeColor);
+      fillPath.setAttribute('stroke-width', strokeWidth);
+      fillPath.setAttribute('stroke-opacity', strokeOpacity);
+      fillPath.setAttribute('vector-effect', 'non-scaling-stroke');
+      g.appendChild(fillPath);
+    }
   }
   svg.appendChild(g);
 }

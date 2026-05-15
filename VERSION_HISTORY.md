@@ -1,3 +1,17 @@
+## 0.12.6 — Fill-layer strokes also coast-filtered
+
+v0.12.4/5 only routed `boundary_outline` paths through the coast-skip
+filter. `boundary_fill` and `plot_fill` layers paint fill and stroke
+on the same path, so their strokes traced the entire polygon — coast
+segments and through-water segments included.
+
+`_renderPolygonLayer` now splits each feature into two paths when a
+water cache exists: one closed fill path (`stroke: none`, keeps
+fill-rule clipping intact) and one open coast-filtered stroke path
+(`fill: none`, `stroke-linecap: round`, `pointer-events: none` so the
+tooltip still triggers off the fill). Without a water cache the old
+single-path render is preserved as a fallback.
+
 ## 0.12.5 — Outlines also skip segments running through water
 
 v0.12.4's coast-skip test only caught segments with land on one side
