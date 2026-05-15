@@ -157,6 +157,12 @@ function createBlankAtlasLayer(kind) {
           stroke:  '#0f1117',
           radius:  4,
           opacity: 0.95,
+          labels:        false,
+          labelSize:     11,
+          labelFont:     'Hammersmith One',
+          labelColor:    '#e6e8ef',
+          labelHalo:     '#0f1117',
+          labelHaloWidth: 0.25,
         },
       };
   }
@@ -888,9 +894,12 @@ function _renderOutlineLayer(svg, layer, features) {
   const stroke = layer.stroke || { color: '#8b8fa4', width: 0.6, opacity: 0.8 };
   const g = document.createElementNS(SVG_NS, 'g');
   g.setAttribute('class', 'atlas-layer atlas-layer-' + layer.kind);
+  const waterFeat = _waterCacheAsFeature();
   for (const feat of features) {
     const polys = feat.polygons;
-    const d = _polygonsToPathD(polys);
+    const d = waterFeat
+      ? _polygonsToPathDSkipCoast(polys, waterFeat)
+      : _polygonsToPathD(polys);
     if (!d) continue;
     const path = document.createElementNS(SVG_NS, 'path');
     path.setAttribute('d', d);
@@ -899,10 +908,83 @@ function _renderOutlineLayer(svg, layer, features) {
     path.setAttribute('stroke-width', _strokeWidthSVG(stroke.width));
     path.setAttribute('stroke-opacity', stroke.opacity);
     path.setAttribute('vector-effect', 'non-scaling-stroke');
+    path.setAttribute('stroke-linecap', 'round');
+    path.setAttribute('stroke-linejoin', 'round');
     path.setAttribute('data-entity-name', feat.entity.name || '(boundary)');
     g.appendChild(path);
   }
   svg.appendChild(g);
+}
+
+// Returns a turf Feature wrapping the project's water cache geometry, or
+// null if no cache is present. Used by outline rendering to drop coast
+// segments (those with water on exactly one side).
+function _waterCacheAsFeature() {
+  const cache = (typeof data !== 'undefined') ? data.waterCache : null;
+  const geom = cache && cache.waterGeometry;
+  if (!geom || (geom.type !== 'Polygon' && geom.type !== 'MultiPolygon')) return null;
+  if (typeof turf === 'undefined' || !turf.point || !turf.booleanPointInPolygon) return null;
+  return { type: 'Feature', geometry: geom, properties: {} };
+}
+
+// Builds a path-d that walks each ring as open M-L runs, breaking the
+// run whenever a coastal segment is hit. Coastal = perpendicular probe
+// on one side lands in water, the other in land. The result is an open
+// stroke (no Z) so SVG doesn't auto-close across the skipped gap.
+function _polygonsToPathDSkipCoast(polygons, waterFeat) {
+  const parts = [];
+  for (const poly of polygons) {
+    for (const ring of poly) {
+      const d = _ringToPathDSkipCoast(ring, waterFeat);
+      if (d) parts.push(d);
+    }
+  }
+  return parts.join('');
+}
+
+function _ringToPathDSkipCoast(ring, waterFeat) {
+  if (!ring || ring.length < 2) return '';
+  const n = ring.length;
+  const parts = [];
+  let inPath = false;
+  // Closed ring — walk n segments (wrapping last → first).
+  for (let i = 0; i < n; i++) {
+    const a = ring[i];
+    const b = ring[(i + 1) % n];
+    if (_isCoastalSegment(a, b, waterFeat)) {
+      inPath = false;
+      continue;
+    }
+    if (!inPath) {
+      const [ax, ay] = _projectLatLng(a[0], a[1]);
+      parts.push('M' + ax + ',' + ay);
+      inPath = true;
+    }
+    const [bx, by] = _projectLatLng(b[0], b[1]);
+    parts.push('L' + bx + ',' + by);
+  }
+  return parts.join('');
+}
+
+// A segment is "coastal" if a tiny perpendicular probe lands in water on
+// one side and on land on the other. Uses an offset of ~5e-5° (≈ 5 m
+// equator-equivalent) — small enough not to leap over narrow channels,
+// large enough to escape coordinate-snap noise (snap grid is 1e-8°).
+function _isCoastalSegment(a, b, waterFeat) {
+  const dLat = b[0] - a[0];
+  const dLng = b[1] - a[1];
+  const len = Math.hypot(dLat, dLng);
+  if (len === 0) return false;
+  const EPS = 5e-5;
+  const offLat = (-dLng / len) * EPS;
+  const offLng = ( dLat / len) * EPS;
+  const midLat = (a[0] + b[0]) / 2;
+  const midLng = (a[1] + b[1]) / 2;
+  const p1 = turf.point([midLng + offLng, midLat + offLat]);
+  const p2 = turf.point([midLng - offLng, midLat - offLat]);
+  const in1 = turf.booleanPointInPolygon(p1, waterFeat);
+  const in2 = turf.booleanPointInPolygon(p2, waterFeat);
+  return in1 !== in2;
 }
 
 function _renderSettlementLayer(svg, layer, vb) {
@@ -940,12 +1022,17 @@ function _renderSettlementLayer(svg, layer, vb) {
       tx.setAttribute('x', cx + r * 1.4);
       tx.setAttribute('y', cy + r * 0.4);
       tx.setAttribute('font-size', labelSize);
-      tx.setAttribute('fill', '#d8dae5');
-      tx.setAttribute('stroke', '#0f1117');
-      tx.setAttribute('stroke-width', labelSize * 0.25);
+      tx.setAttribute('fill', style.labelColor || '#e6e8ef');
+      const haloMult = Number(style.labelHaloWidth);
+      const haloW = Number.isFinite(haloMult) ? haloMult : 0.25;
+      tx.setAttribute('stroke', style.labelHalo || '#0f1117');
+      tx.setAttribute('stroke-width', labelSize * haloW);
       tx.setAttribute('paint-order', 'stroke fill');
       tx.setAttribute('pointer-events', 'none');
-      tx.setAttribute('font-family', 'DM Sans, sans-serif');
+      const fam = style.labelFont || 'Hammersmith One';
+      // Quote multi-word font names; always provide a fallback stack.
+      const famQuoted = /\s/.test(fam) ? `"${fam}"` : fam;
+      tx.setAttribute('font-family', `${famQuoted}, "DM Sans", sans-serif`);
       tx.textContent = s.name;
       g.appendChild(tx);
     }

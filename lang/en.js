@@ -594,6 +594,10 @@ registerLanguage('en', 'English', {
     "settlement_filter_hint": "Leave all unticked to include every place type.",
     "settlement_radius": "Marker size",
     "settlement_labels": "Show labels",
-    "settlement_label_size": "Label size"
+    "settlement_label_size": "Label size",
+    "settlement_label_font": "Label font",
+    "settlement_label_color": "Label colour",
+    "settlement_label_halo": "Label halo",
+    "settlement_label_halo_width": "Halo width"
   }
 });

@@ -1,3 +1,55 @@
+## 0.12.4 — Atlas polish round 6: label styling, coast-aware outlines, sticky viewport
+
+Four fixes from the v0.12.3 testing round:
+
+### Hammersmith One + customizable settlement labels
+
+Added Hammersmith One to the Google Fonts link in `appymanager.html`. The
+settlement layer's label sub-panel now exposes:
+
+- **Font** (Hammersmith One / DM Sans / Fraunces / JetBrains Mono — picker
+  defaults to Hammersmith One)
+- **Colour** (via the custom hex/palette picker)
+- **Halo colour** (the stroke painted under the text for legibility over
+  busy backgrounds)
+- **Halo width** (multiplier of font-size, 0–1, live readout)
+- **Size** (existing 8–22 px slider)
+
+All sub-controls live under a single `[data-pb-label-style]` block that
+shows/hides as one unit when the labels toggle flips, so the editor stays
+compact when labels are off. Defaults baked into `_defaultLayerForKind`
+so freshly added settlements layers carry sensible values.
+
+### Coast-aware boundary outlines
+
+Boundary-outline layers were tracing the entire boundary polygon
+including segments along the coast — which read as redundant noise
+because the coastline is its own visual feature. Now: when the project
+has a water cache, `_renderOutlineLayer` walks each ring as segments and
+drops any segment whose midpoint sits between water (one perpendicular
+probe lands in water) and land (the other probe lands on land). The
+resulting open path is drawn with `stroke-linecap: round` so the broken
+ends read cleanly. Coastal segments are skipped; inter-boundary edges
+are preserved.
+
+Implementation: `_isCoastalSegment(a, b, waterFeat)` offsets the segment
+midpoint perpendicularly by ~5e-5° (≈ 5 m at equator) on each side and
+tests both probes against the water cache via
+`turf.booleanPointInPolygon`. The offset is small enough not to leap
+narrow channels and large enough to escape coordinate-snap noise (snap
+grid is 1e-8°). Only applied to `boundary_outline` — fill layers keep
+their existing single-path render so the fill stays bounded.
+
+### Preserve pan/zoom on simplification edits
+
+Sliding the simplification slider used to snap the preview back to the
+auto-fit viewBox, throwing away any pan/zoom the user had set up. Now
+`_refreshPageBuilderPreview` captures the live viewBox before destroying
+the old SVG and restores it on the new SVG — but only if the new auto-
+fit viewBox matches the old one (i.e., the page extent hasn't changed).
+Extent edits route through `renderPageBuilder()` (full re-render),
+which still resets to auto-fit, so explicit extent changes still snap.
+
 ## 0.12.3 — Atlas polish round 5: preview fill, categorical colours, settlements, log slider, self-intersection
 
 Five fixes from the v0.12.2 testing round:

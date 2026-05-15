@@ -5578,6 +5578,19 @@ function _renderPbSettlementsEditor(layer) {
   const radius = style.radius != null ? Number(style.radius) : 4;
   const labels = !!style.labels;
   const labelSize = style.labelSize != null ? Number(style.labelSize) : 11;
+  const labelFont = style.labelFont || 'Hammersmith One';
+  const labelColor = style.labelColor || '#e6e8ef';
+  const labelHalo  = style.labelHalo  || '#0f1117';
+  const labelHaloWidth = style.labelHaloWidth != null ? Number(style.labelHaloWidth) : 0.25;
+  const fontChoices = [
+    'Hammersmith One',
+    'DM Sans',
+    'Fraunces',
+    'JetBrains Mono',
+  ];
+  const fontOptions = fontChoices.map(f =>
+    `<option value="${esc(f)}"${f === labelFont ? ' selected' : ''}>${esc(f)}</option>`
+  ).join('');
   return `
     <div class="pb-row">
       <span>${t('page_builder.settlement_filter')}</span>
@@ -5595,12 +5608,34 @@ function _renderPbSettlementsEditor(layer) {
       <input type="checkbox" ${labels ? 'checked' : ''}
         onchange="onPageBuilderEditSettlementStyle('${esc(layer.id)}', 'labels', this.checked)">
     </label>
-    <label class="pb-row" style="${labels ? '' : 'display:none'}" data-pb-label-size-row>
-      <span>${t('page_builder.settlement_label_size')}</span>
-      <input type="range" min="8" max="22" step="1" value="${labelSize}"
-        oninput="onPageBuilderEditSettlementStyle('${esc(layer.id)}', 'labelSize', this.value, this)">
-      <span class="mono" data-pb-label-size-readout>${labelSize}px</span>
-    </label>
+    <div class="pb-label-style" data-pb-label-style style="${labels ? '' : 'display:none'}">
+      <label class="pb-row">
+        <span>${t('page_builder.settlement_label_size')}</span>
+        <input type="range" min="8" max="22" step="1" value="${labelSize}"
+          oninput="onPageBuilderEditSettlementStyle('${esc(layer.id)}', 'labelSize', this.value, this)">
+        <span class="mono" data-pb-label-size-readout>${labelSize}px</span>
+      </label>
+      <label class="pb-row">
+        <span>${t('page_builder.settlement_label_font')}</span>
+        <select onchange="onPageBuilderEditSettlementStyle('${esc(layer.id)}', 'labelFont', this.value)">
+          ${fontOptions}
+        </select>
+      </label>
+      <label class="pb-row">
+        <span>${t('page_builder.settlement_label_color')}</span>
+        ${colorPickerHTML(labelColor, (c) => onPageBuilderEditSettlementStyle(layer.id, 'labelColor', c))}
+      </label>
+      <label class="pb-row">
+        <span>${t('page_builder.settlement_label_halo')}</span>
+        ${colorPickerHTML(labelHalo, (c) => onPageBuilderEditSettlementStyle(layer.id, 'labelHalo', c))}
+      </label>
+      <label class="pb-row">
+        <span>${t('page_builder.settlement_label_halo_width')}</span>
+        <input type="range" min="0" max="1" step="0.05" value="${labelHaloWidth}"
+          oninput="onPageBuilderEditSettlementStyle('${esc(layer.id)}', 'labelHaloWidth', this.value, this)">
+        <span class="mono" data-pb-halo-width-readout>${labelHaloWidth.toFixed(2)}</span>
+      </label>
+    </div>
   `;
 }
 
@@ -5834,23 +5869,26 @@ function onPageBuilderEditSettlementStyle(layerId, field, value, inputEl) {
   const layer = (page.layers || []).find(l => l.id === layerId);
   if (!layer) return;
   layer.style = layer.style || {};
-  if (field === 'radius' || field === 'labelSize') {
+  if (field === 'radius' || field === 'labelSize' || field === 'labelHaloWidth') {
     value = Number(value);
     layer.style[field] = value;
     // Live readout next to the slider (avoid re-rendering the panel,
     // which would steal focus from the range thumb during drag).
     if (inputEl && inputEl.parentElement) {
-      const sel = field === 'radius' ? '[data-pb-radius-readout]' : '[data-pb-label-size-readout]';
-      const out = inputEl.parentElement.querySelector(sel);
-      if (out) out.textContent = value + 'px';
+      const readoutSel =
+        field === 'radius'         ? '[data-pb-radius-readout]'
+      : field === 'labelSize'      ? '[data-pb-label-size-readout]'
+      :                              '[data-pb-halo-width-readout]';
+      const out = inputEl.parentElement.querySelector(readoutSel);
+      if (out) out.textContent = (field === 'labelHaloWidth') ? value.toFixed(2) : (value + 'px');
     }
   } else if (field === 'labels') {
     layer.style.labels = !!value;
-    // Show/hide the label-size row without a full panel re-render.
+    // Show/hide the whole label-style block without a full panel re-render.
     if (inputEl) {
       const sidebar = inputEl.closest('.page-builder-sidebar');
-      const row = sidebar ? sidebar.querySelector('[data-pb-label-size-row]') : null;
-      if (row) row.style.display = layer.style.labels ? '' : 'none';
+      const block = sidebar ? sidebar.querySelector('[data-pb-label-style]') : null;
+      if (block) block.style.display = layer.style.labels ? '' : 'none';
     }
   } else {
     layer.style[field] = value;
@@ -5893,6 +5931,27 @@ function _refreshPageBuilderPreview() {
     const page = _currentPbPage();
     const container = document.getElementById('page-builder-preview');
     if (!page || !container) return;
-    if (typeof renderAtlasPage === 'function') renderAtlasPage(page, container);
+    if (typeof renderAtlasPage !== 'function') return;
+
+    // Capture the live viewBox so we can preserve the user's pan/zoom
+    // across non-extent edits (simplification, layer toggles, fill
+    // colours). Compare the new auto-fit viewBox to the old one — if
+    // they match, the user's manual framing is still meaningful and we
+    // restore it; if the extent actually changed (which shouldn't reach
+    // this code path but we guard anyway), fall through to auto-fit.
+    const oldSvg = container.querySelector('.atlas-page-svg');
+    let preserve = null;
+    if (oldSvg && oldSvg.__appyInitialVB) {
+      const attr = oldSvg.getAttribute('viewBox');
+      if (attr) preserve = { attr, init: oldSvg.__appyInitialVB };
+    }
+    const svg = renderAtlasPage(page, container);
+    if (svg && preserve && svg.__appyInitialVB) {
+      const a = svg.__appyInitialVB, b = preserve.init;
+      const eq = (x, y) => Math.abs(x - y) < 1e-9 * (1 + Math.abs(x) + Math.abs(y));
+      if (eq(a.x, b.x) && eq(a.y, b.y) && eq(a.w, b.w) && eq(a.h, b.h)) {
+        svg.setAttribute('viewBox', preserve.attr);
+      }
+    }
   }, 180);
 }
