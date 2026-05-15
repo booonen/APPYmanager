@@ -945,14 +945,23 @@ function _renderOutlineLayer(svg, layer, features) {
 }
 
 // Returns a turf Feature wrapping the project's water cache geometry, or
-// null if no cache is present. Used by outline rendering to drop coast
-// segments (those with water on exactly one side).
+// null if no cache is present. `data.waterCache.waterGeometry` is built
+// by `turf.multiPolygon(...)` which returns a Feature (not a raw
+// geometry), so we accept either shape and re-wrap as needed.
 function _waterCacheAsFeature() {
   const cache = (typeof data !== 'undefined') ? data.waterCache : null;
-  const geom = cache && cache.waterGeometry;
-  if (!geom || (geom.type !== 'Polygon' && geom.type !== 'MultiPolygon')) return null;
+  const g = cache && cache.waterGeometry;
+  if (!g) return null;
   if (typeof turf === 'undefined' || !turf.point || !turf.booleanPointInPolygon) return null;
-  return { type: 'Feature', geometry: geom, properties: {} };
+  if (g.type === 'Feature') {
+    const inner = g.geometry;
+    if (!inner || (inner.type !== 'Polygon' && inner.type !== 'MultiPolygon')) return null;
+    return g;
+  }
+  if (g.type === 'Polygon' || g.type === 'MultiPolygon') {
+    return { type: 'Feature', geometry: g, properties: {} };
+  }
+  return null;
 }
 
 // Builds a path-d that walks each ring as open M-L runs, breaking the
@@ -1076,12 +1085,16 @@ function _renderSettlementLayer(svg, layer, vb) {
   svg.appendChild(g);
 }
 
-// SVG stroke widths are in viewBox units — but everything here is in
-// degrees. We want px-like widths, so scale by ~0.0005 (works out to
-// ~0.5–1 px on a typical country bbox). non-scaling-stroke keeps them
-// constant under zoom.
+// Stroke widths are authored in CSS-like pixels (1, 0.6, 2…). With
+// `vector-effect: non-scaling-stroke` applied via CSS to every child of
+// `.atlas-page-svg`, the value is interpreted in canvas-pixel units
+// regardless of the viewBox transform, so widths stay constant under
+// zoom. The earlier 0.0005 user-unit multiplier was a workaround for
+// browsers that ignored the inline `vector-effect` attribute — the CSS
+// rule on the parent applies consistently across all the engines we
+// care about, so we can drop the divisor.
 function _strokeWidthSVG(widthPx) {
-  return ((Number(widthPx) || 1)) * 0.0005;
+  return Number(widthPx) || 1;
 }
 
 function _formatPropertyValueForTooltip(schema, v) {

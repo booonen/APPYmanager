@@ -1,3 +1,28 @@
+## 0.12.7 — Two real fixes: water-cache feature shape + stroke zoom
+
+### Coast filter actually activates now
+
+`_waterCacheAsFeature` was checking `geom.type` against `'Polygon'` /
+`'MultiPolygon'` — but `data.waterCache.waterGeometry` is built by
+`turf.multiPolygon(...)`, which returns a **Feature** (with
+`type: 'Feature'`), not a raw geometry. So the check rejected every
+real water cache and the function returned null on every call, which
+meant the v0.12.4–6 coast-skip code never ran at all. Now accepts both
+Feature and raw geometry shapes.
+
+### Stroke width is finally constant under zoom
+
+Strokes were widening as the user zoomed in because `vector-effect:
+non-scaling-stroke` set as an inline attribute on dynamically-created
+SVG nodes was being ignored by the browser. `_strokeWidthSVG` was
+compensating with a `× 0.0005` user-unit divisor that worked at
+auto-fit zoom but scaled with viewBox afterwards. Dropped the divisor
+(now returns the raw pixel value) and added a CSS rule
+`.atlas-page-svg path, circle, text { vector-effect: non-scaling-stroke }`
+so the property applies consistently across all engines. Stroke widths
+authored as 0.4, 0.6, 1, 2 now read as those pixel values at every
+zoom level.
+
 ## 0.12.6 — Fill-layer strokes also coast-filtered
 
 v0.12.4/5 only routed `boundary_outline` paths through the coast-skip
