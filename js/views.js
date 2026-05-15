@@ -5317,8 +5317,8 @@ function _renderPageBuilderMetadata(page) {
         <span>${t('page_builder.simplification')}</span>
         <input type="range" min="0" max="100" step="1"
           value="${Number(page.simplification) || 0}"
-          oninput="onPageBuilderEditMeta('simplification', this.value)">
-        <span class="mono">${Number(page.simplification) || 0}%</span>
+          oninput="onPageBuilderEditMeta('simplification', this.value, this)">
+        <span class="mono" data-pb-simplification-readout>${Number(page.simplification) || 0}%</span>
       </label>
     </div>
   `;
@@ -5574,12 +5574,33 @@ function _renderPbSettlementsEditor(layer) {
       ${esc(pt)}
     </label>
   `).join('');
+  const style  = layer.style || {};
+  const radius = style.radius != null ? Number(style.radius) : 4;
+  const labels = !!style.labels;
+  const labelSize = style.labelSize != null ? Number(style.labelSize) : 11;
   return `
     <div class="pb-row">
       <span>${t('page_builder.settlement_filter')}</span>
       <div class="pb-checks">${checks}</div>
       <div class="text-dim" style="font-size:11px;margin-top:4px">${t('page_builder.settlement_filter_hint')}</div>
     </div>
+    <label class="pb-row">
+      <span>${t('page_builder.settlement_radius')}</span>
+      <input type="range" min="1" max="20" step="0.5" value="${radius}"
+        oninput="onPageBuilderEditSettlementStyle('${esc(layer.id)}', 'radius', this.value, this)">
+      <span class="mono" data-pb-radius-readout>${radius}px</span>
+    </label>
+    <label class="pb-row">
+      <span>${t('page_builder.settlement_labels')}</span>
+      <input type="checkbox" ${labels ? 'checked' : ''}
+        onchange="onPageBuilderEditSettlementStyle('${esc(layer.id)}', 'labels', this.checked)">
+    </label>
+    <label class="pb-row" style="${labels ? '' : 'display:none'}" data-pb-label-size-row>
+      <span>${t('page_builder.settlement_label_size')}</span>
+      <input type="range" min="8" max="22" step="1" value="${labelSize}"
+        oninput="onPageBuilderEditSettlementStyle('${esc(layer.id)}', 'labelSize', this.value, this)">
+      <span class="mono" data-pb-label-size-readout>${labelSize}px</span>
+    </label>
   `;
 }
 
@@ -5605,10 +5626,18 @@ function _currentPbPage() {
   return (data.dataAtlas?.pages || []).find(p => p.id === _pageBuilderState.editingId) || null;
 }
 
-function onPageBuilderEditMeta(field, value) {
+function onPageBuilderEditMeta(field, value, inputEl) {
   const page = _currentPbPage();
   if (!page) return;
-  if (field === 'simplification') value = Math.max(0, Math.min(100, Number(value) || 0));
+  if (field === 'simplification') {
+    value = Math.max(0, Math.min(100, Number(value) || 0));
+    // Live-update the inline readout without re-rendering the whole panel
+    // (which would steal focus from the range thumb during drag).
+    if (inputEl && inputEl.parentElement) {
+      const out = inputEl.parentElement.querySelector('[data-pb-simplification-readout]');
+      if (out) out.textContent = value + '%';
+    }
+  }
   page[field] = value;
   save();
   _refreshPageBuilderPreview();
@@ -5795,6 +5824,37 @@ function onPageBuilderTogglePlaceType(layerId, pt, checked) {
   const set = new Set(layer.filter.placeTypes || []);
   if (checked) set.add(pt); else set.delete(pt);
   layer.filter.placeTypes = Array.from(set);
+  save();
+  _refreshPageBuilderPreview();
+}
+
+function onPageBuilderEditSettlementStyle(layerId, field, value, inputEl) {
+  const page = _currentPbPage();
+  if (!page) return;
+  const layer = (page.layers || []).find(l => l.id === layerId);
+  if (!layer) return;
+  layer.style = layer.style || {};
+  if (field === 'radius' || field === 'labelSize') {
+    value = Number(value);
+    layer.style[field] = value;
+    // Live readout next to the slider (avoid re-rendering the panel,
+    // which would steal focus from the range thumb during drag).
+    if (inputEl && inputEl.parentElement) {
+      const sel = field === 'radius' ? '[data-pb-radius-readout]' : '[data-pb-label-size-readout]';
+      const out = inputEl.parentElement.querySelector(sel);
+      if (out) out.textContent = value + 'px';
+    }
+  } else if (field === 'labels') {
+    layer.style.labels = !!value;
+    // Show/hide the label-size row without a full panel re-render.
+    if (inputEl) {
+      const sidebar = inputEl.closest('.page-builder-sidebar');
+      const row = sidebar ? sidebar.querySelector('[data-pb-label-size-row]') : null;
+      if (row) row.style.display = layer.style.labels ? '' : 'none';
+    }
+  } else {
+    layer.style[field] = value;
+  }
   save();
   _refreshPageBuilderPreview();
 }

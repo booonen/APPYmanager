@@ -1,3 +1,63 @@
+## 0.12.3 — Atlas polish round 5: preview fill, categorical colours, settlements, log slider, self-intersection
+
+Five fixes from the v0.12.2 testing round:
+
+### Page Builder preview now actually fills the pane
+
+The grid had `grid-template-columns: 380px 1fr` but no `grid-template-rows`,
+so the preview row collapsed to its content height (which was the wrap's
+intrinsic 0 because `height: 100%` had nothing to resolve against). Set
+`grid-template-rows: 1fr` on both `.page-builder-layout` and
+`.atlas-layout`, gave both grid children `min-width/min-height: 0` so
+they don't refuse to shrink, and positioned `.atlas-page-wrap` and
+`.atlas-page-svg` absolutely against their `position: relative` parent.
+The SVG now fills the cell at every viewport size.
+
+### Categorical boundary fills resolve correctly
+
+`_resolveLayerValue` routed all boundary lookups through
+`resolveEffectiveForBoundary`, which only handles numeric and percentage
+schemas — categorical schemas fell off the end and returned `null`, so
+every boundary rendered with the missing-data grey regardless of the
+user-set category. Special-cased categorical to call
+`getBoundaryPropertyValue` directly. (Plot side was already fine since
+it used `getPlotPropertyValue` unconditionally.) Per-category colours
+defined in the Properties tab or the inline Page Builder editor now
+actually appear on the map.
+
+### Settlements: configurable size + optional labels
+
+`_renderSettlementLayer` used a fixed `0.0005 × radius` factor in
+viewBox units, which on a typical country-scale page meant ~0.3 px
+dots. Replaced with `userRadius × diag / 800` so the slider value reads
+as approximately pixels at the standard 800-px preview width — and
+scales sensibly for both city- and country-scale extents. Added a
+1–20 pixel slider, a "show labels" toggle, and a 8–22 px label-size
+slider to the settlement layer editor. Labels render via SVG `<text>`
+with paint-order stroke+fill for legibility over busy backgrounds.
+
+### Logarithmic simplification slider + live readout
+
+The slider's 0–100% range was linear-mapped to threshold side-length,
+so the lower half did almost nothing visible and the top half cliffed
+into over-simplified. Mapped to `diag × 5e-5 × 100^(pct/100)` — each
+step is a multiplicative bump in underlying side-length, matching how
+the algorithm's effect is actually perceived. The inline `%` readout
+now updates live during drag (it was stuck on the value baked into the
+last full panel render).
+
+### Visvalingam self-intersection veto
+
+Removing a vertex creates a new straight segment between its
+neighbours. In narrow island-bottlenecks or pinched peninsulas this
+new segment could cross another part of the ring, producing the
+overlapping-areas artifact noted on multi-island shapes. Added a
+windowed (±40 alive neighbours) segment-intersection check before each
+removal; on intersection the candidate's effective area is set to
+infinity and the algorithm moves on to the next smallest. Worst-case
+cost is O(n·40) per ring, fine for typical OGF polygon sizes; gets
+mapshaper-like topological self-respect without TopoJSON arcs.
+
 ## 0.12.2 — Atlas polish: pan, layout, real simplification, custom picker
 
 Five fixes from the v0.12.1 testing round:

@@ -221,6 +221,11 @@ function _resolveLayerValue(entity, kind, schemaId) {
     return getPlotPropertyValue(entity, schemaId);
   }
   // boundary
+  // Categorical: no rollup (resolveEffectiveForBoundary only handles numeric/
+  // percentage and returns null otherwise). Read the user-set value directly.
+  if (schema.kind === 'categorical') {
+    return getBoundaryPropertyValue ? getBoundaryPropertyValue(entity, schemaId) : null;
+  }
   if (typeof resolveEffectiveForBoundary === 'function') {
     return resolveEffectiveForBoundary(entity, schema);
   }
@@ -386,17 +391,20 @@ function _autoExtentForPage(page) {
 
 // Visvalingam-Whyatt threshold from the simplification slider (0–100).
 // Threshold has units of degrees² (effective-area is a triangle area
-// in lat/lng degrees²). Scaling: at 100% the threshold is
-//   (bbox-diagonal × 0.5%)² ≈ a triangle ~0.5% of the page on a side.
-// Tunable — leave the diag × 0.005 scale exposed in code if we need
-// to crank it later.
+// in lat/lng degrees²). The slider is mapped logarithmically: each step
+// is a multiplicative bump in the underlying side-length, because the
+// algorithm's perceived effect is non-linear — the lower half barely
+// touches the geometry while the top end is drastic. Concretely:
+//   side(pct) = diag × 5e-5 × 100^(pct/100)
+// so pct=0 → 0 (off), pct=50 → diag×5e-4, pct=100 → diag×5e-3 (≈0.5%
+// of bbox on a side, same as the old linear top-end).
 function _simplificationThreshold(extent, simplificationPercent) {
   const pct = Math.max(0, Math.min(100, Number(simplificationPercent) || 0));
   if (pct <= 0) return 0;
   const dLat = (extent.maxLat - extent.minLat) || 0;
   const dLng = (extent.maxLng - extent.minLng) || 0;
   const diag = Math.sqrt(dLat * dLat + dLng * dLng);
-  const side = diag * (pct / 100) * 0.005;
+  const side = diag * 5e-5 * Math.pow(100, pct / 100);
   return side * side;
 }
 
@@ -489,6 +497,22 @@ function _simplifyFeaturesTopologyAware(features, threshold) {
   }
 }
 
+// Strict segment-intersection test (proper crossing, no shared endpoints).
+// Points are [lat, lng]; we treat lng as x, lat as y.
+function _segmentsCross(a, b, c, d) {
+  // Reject shared endpoints — after coord snapping these compare bit-equal.
+  if ((a[0] === c[0] && a[1] === c[1]) || (a[0] === d[0] && a[1] === d[1]) ||
+      (b[0] === c[0] && b[1] === c[1]) || (b[0] === d[0] && b[1] === d[1])) return false;
+  const ax = a[1], ay = a[0], bx = b[1], by = b[0];
+  const cx = c[1], cy = c[0], dx = d[1], dy = d[0];
+  const d1 = (dx - cx) * (ay - cy) - (dy - cy) * (ax - cx);
+  const d2 = (dx - cx) * (by - cy) - (dy - cy) * (bx - cx);
+  const d3 = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+  const d4 = (bx - ax) * (dy - ay) - (by - ay) * (dx - ax);
+  return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
+         ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0));
+}
+
 // Returns a simplified open ring (no duplicate closing vertex).
 function _visvalingamRing(ring, threshold, junctions) {
   if (!ring || ring.length < 4) return ring || [];
@@ -515,6 +539,41 @@ function _visvalingamRing(ring, threshold, junctions) {
   const eas = new Array(n);
   for (let i = 0; i < n; i++) eas[i] = ea(i);
 
+  // Would removing vertex `idx` cause the new segment (ring[prev[idx]] →
+  // ring[nxt[idx]]) to cross some other alive segment of the ring?
+  // Walks a window of ±W alive neighbours away from the removal point —
+  // local self-intersections (the common mapshaper-style failure mode in
+  // narrow island-bottlenecks) all show up within a few dozen hops, and
+  // a bounded window keeps total cost at O(n·W) instead of O(n²).
+  const W = 40;
+  function wouldSelfIntersect(idx) {
+    const p = prev[idx], x = nxt[idx];
+    const newA = ring[p], newB = ring[x];
+    // Forward window: segments after x, stopping before p.
+    let i = x;
+    for (let k = 0; k < W; k++) {
+      const j = nxt[i];
+      if (i === p || j === p || i === x && k > 0) break;
+      if (i !== x) {
+        if (_segmentsCross(newA, newB, ring[i], ring[j])) return true;
+      }
+      if (j === x) break;
+      i = j;
+    }
+    // Backward window: segments before p, stopping after x.
+    i = p;
+    for (let k = 0; k < W; k++) {
+      const j = prev[i];
+      if (i === x || j === x || i === p && k > 0) break;
+      if (i !== p) {
+        if (_segmentsCross(newA, newB, ring[j], ring[i])) return true;
+      }
+      if (j === p) break;
+      i = j;
+    }
+    return false;
+  }
+
   // Simple O(n²) loop — fine for typical OGF polygon counts. Swap
   // to a real heap if we hit a big-country bottleneck.
   let aliveCount = n;
@@ -524,6 +583,15 @@ function _visvalingamRing(ring, threshold, junctions) {
       if (alive[i] && eas[i] < minEA) { minEA = eas[i]; minIdx = i; }
     }
     if (minIdx < 0 || minEA >= threshold) break;
+    // Veto removals that would fold the ring back across itself. Mark
+    // the vertex un-removable for this pass and continue with the next
+    // candidate. (Don't kill it permanently — its EA might be small only
+    // because of the *current* prev/next; once neighbours change it may
+    // no longer be the smallest candidate anyway.)
+    if (wouldSelfIntersect(minIdx)) {
+      eas[minIdx] = Infinity;
+      continue;
+    }
     alive[minIdx] = false;
     aliveCount--;
     const p = prev[minIdx], x = nxt[minIdx];
@@ -665,7 +733,7 @@ function renderAtlasPage(page, container, opts) {
     if (layer.kind === 'boundary_fill') _renderPolygonLayer(svg, layer, feats, 'boundary', ctx);
     else if (layer.kind === 'plot_fill') _renderPolygonLayer(svg, layer, feats, 'plot', ctx);
     else if (layer.kind === 'boundary_outline') _renderOutlineLayer(svg, layer, feats);
-    else if (layer.kind === 'settlements') _renderSettlementLayer(svg, layer);
+    else if (layer.kind === 'settlements') _renderSettlementLayer(svg, layer, vb);
   }
   wrap.appendChild(svg);
 
@@ -837,21 +905,27 @@ function _renderOutlineLayer(svg, layer, features) {
   svg.appendChild(g);
 }
 
-function _renderSettlementLayer(svg, layer) {
+function _renderSettlementLayer(svg, layer, vb) {
   const markers = _layerSettlementMarkers(layer);
   const style = layer.style || {};
   const g = document.createElementNS(SVG_NS, 'g');
   g.setAttribute('class', 'atlas-layer atlas-layer-settlements');
+  // Radius is in viewBox units (degrees-ish). Scale by viewBox diagonal so
+  // the dot reads at a roughly stable pixel size across both small-city and
+  // country-scale pages. `radius` from the layer style is a "user pixels"
+  // value (slider 1–20); we then convert to viewBox units. 800px is the
+  // typical rendered SVG width — this gives a 1:1-ish px feel.
+  const diag = vb ? Math.hypot(vb.w, vb.h) : 1;
+  const userR = Number(style.radius) > 0 ? Number(style.radius) : 4;
+  const r = userR * diag / 800;
+  const showLabels = !!style.labels;
+  const labelSize = (Number(style.labelSize) > 0 ? Number(style.labelSize) : 11) * diag / 800;
   for (const s of markers) {
     const [cx, cy] = _projectLatLng(s.lat, s.lng);
     const c = document.createElementNS(SVG_NS, 'circle');
     c.setAttribute('cx', cx);
     c.setAttribute('cy', cy);
-    // Radius is in viewBox units; we want the dot to read at a stable
-    // pixel size regardless of zoom. Use vector-effect on stroke and
-    // compute a small radius via a fraction of the diagonal — keeps
-    // settlements visible across both tiny and country-scale pages.
-    c.setAttribute('r', (style.radius || 4) * 0.0005); // ~stable pixel feel
+    c.setAttribute('r', r);
     const fillColor = style.fill ||
       (typeof colorForPlaceType === 'function' ? colorForPlaceType(s.place) : '#7f8c8d');
     c.setAttribute('fill', fillColor);
@@ -861,6 +935,20 @@ function _renderSettlementLayer(svg, layer) {
     c.setAttribute('data-entity-name', s.name || '(unnamed)');
     if (s.place) c.setAttribute('data-entity-value', s.place);
     g.appendChild(c);
+    if (showLabels && s.name) {
+      const tx = document.createElementNS(SVG_NS, 'text');
+      tx.setAttribute('x', cx + r * 1.4);
+      tx.setAttribute('y', cy + r * 0.4);
+      tx.setAttribute('font-size', labelSize);
+      tx.setAttribute('fill', '#d8dae5');
+      tx.setAttribute('stroke', '#0f1117');
+      tx.setAttribute('stroke-width', labelSize * 0.25);
+      tx.setAttribute('paint-order', 'stroke fill');
+      tx.setAttribute('pointer-events', 'none');
+      tx.setAttribute('font-family', 'DM Sans, sans-serif');
+      tx.textContent = s.name;
+      g.appendChild(tx);
+    }
   }
   svg.appendChild(g);
 }

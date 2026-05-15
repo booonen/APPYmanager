@@ -591,6 +591,9 @@ registerLanguage('en', 'English', {
     "stroke_width": "Stroke width (px)",
     "stroke_opacity": "Stroke opacity",
     "settlement_filter": "Place types",
-    "settlement_filter_hint": "Leave all unticked to include every place type."
+    "settlement_filter_hint": "Leave all unticked to include every place type.",
+    "settlement_radius": "Marker size",
+    "settlement_labels": "Show labels",
+    "settlement_label_size": "Label size"
   }
 });
